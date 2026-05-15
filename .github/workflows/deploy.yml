@@ -1,0 +1,35 @@
+name: Deploy
+
+on:
+  push:
+    branches: [dev, staging, main]
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, keenafrica-vm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: env
+        run: |
+          case "${{ github.ref_name }}" in
+            main)    echo "name=prod"    >> $GITHUB_OUTPUT ;;
+            staging) echo "name=staging" >> $GITHUB_OUTPUT ;;
+            dev)     echo "name=dev"     >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Sync site content
+        run: rsync -a --delete ./public/ /home/keen/keenafrica/site-content-${{ steps.env.outputs.name }}/
+
+      - name: Sync Traefik routing config (only on main)
+        if: github.ref_name == 'main'
+        run: |
+          rsync -a ./traefik/ /home/keen/keenafrica/traefik/
+          docker kill --signal=HUP traefik || true   # tell Traefik to reload
+
+      - name: Terraform apply
+        working-directory: /home/keen/keenafrica/terraform
+        run: |
+          terraform workspace select ${{ steps.env.outputs.name }}
+          terraform apply -auto-approve -var-file=envs/${{ steps.env.outputs.name }}.tfvars
