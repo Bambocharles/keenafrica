@@ -1,0 +1,28 @@
+http:
+  routers:
+    prod:
+      rule: "Host(`keenafrica.com`)"
+      service: prod
+      entryPoints: [web]
+    staging:
+      rule: "Host(`staging.keenafrica.com`)"
+      service: staging
+      entryPoints: [web]
+    dev:
+      rule: "Host(`dev.keenafrica.com`)"
+      service: dev
+      entryPoints: [web]
+
+  services:
+    prod:
+      loadBalancer:
+        servers:
+          - url: "http://site-prod:80"
+    staging:
+      loadBalancer:
+        servers:
+          - url: "http://site-staging:80"
+    dev:
+      loadBalancer:
+        servers:
+          - url: "http://site-dev:80"
