@@ -19,17 +19,21 @@ jobs:
             dev)     echo "name=dev"     >> $GITHUB_OUTPUT ;;
           esac
 
-      - name: Sync site content
-        run: rsync -a --delete ./public/ /home/keen/keenafrica/site-content-${{ steps.env.outputs.name }}/
+      - name: Login to GHCR
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u bambocharles --password-stdin
 
-      - name: Sync Traefik routing config (only on main)
-        if: github.ref_name == 'main'
+      - name: Build and push image
+        id: image
         run: |
-          rsync -a ./traefik/ /home/keen/keenafrica/traefik/
-          docker kill --signal=HUP traefik || true   # tell Traefik to reload
+          IMAGE=ghcr.io/bambocharles/keenafrica:${{ github.sha }}
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Terraform apply
-        working-directory: /home/keen/keenafrica/terraform
+      - name: Roll out new image
+        env:
+          KUBECONFIG: /home/keen/.kube/config
         run: |
-          terraform workspace select ${{ steps.env.outputs.name }}
-          terraform apply -auto-approve -var-file=envs/${{ steps.env.outputs.name }}.tfvars
+          NS=keen-${{ steps.env.outputs.name }}
+          kubectl set image -n $NS deployment/site nginx=${{ steps.image.outputs.image }}
+          kubectl rollout status -n $NS deployment/site --timeout=120s
