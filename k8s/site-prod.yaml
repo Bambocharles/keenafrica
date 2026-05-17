@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: site
+  namespace: keen-prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: site, env: prod }
+  template:
+    metadata:
+      labels: { app: site, env: prod }
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: site, env: prod }
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: nginx
+          image: ghcr.io/bambocharles/keenafrica:test
+          ports: [{ containerPort: 80 }]
+      imagePullSecrets:
+        - name: ghcr-pull
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: site
+  namespace: keen-prod
+spec:
+  selector: { app: site, env: prod }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: site
+  namespace: keen-prod
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: keenafrica.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: site
+                port: { number: 80 }
