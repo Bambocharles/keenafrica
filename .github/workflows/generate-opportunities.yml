@@ -1,0 +1,49 @@
+name: Generate opportunities post
+
+on:
+  schedule:
+    # Every 3 days at 06:00 UTC (07:00 Nigeria time)
+    - cron: "0 6 */3 * *"
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate post via Anthropic API (web search)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/generate_opportunities.py
+
+      - name: Build blog HTML
+        run: |
+          pip install markdown pyyaml
+          python scripts/build_blog.py
+
+      - name: Open pull request for review
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: opportunities/${{ github.run_id }}
+          commit-message: "blog: opportunities edition (auto-generated)"
+          title: "New opportunities post — review before publish"
+          body: |
+            Auto-generated opportunities post (Anthropic API + web search).
+
+            **Review checklist before merging:**
+            - [ ] Spot-check 2–3 application URLs actually work and are official
+            - [ ] Deadlines look plausible (not already passed)
+            - [ ] No opportunity charges an application fee
+            - [ ] Tone reads Keen Africa (builders, not beneficiaries)
+
+            Merging publishes to keenafrica.com.
+          labels: opportunities, auto-generated
