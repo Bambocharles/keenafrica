@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "site/blog/posts/**.md"
+      - "public/blog/posts/**.md"
       - "scripts/build_blog.py"
 
 permissions:
@@ -29,6 +29,6 @@ jobs:
         run: |
           git config user.name "keenafrica-bot"
           git config user.email "actions@github.com"
-          git add site/blog/*.html
+          git add public/blog/*.html public/blog/posts/ public/blog/cache/
           git diff --cached --quiet || git commit -m "blog: rebuild HTML from markdown [skip ci]"
           git push

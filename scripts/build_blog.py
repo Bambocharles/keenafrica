@@ -16,8 +16,9 @@ import markdown
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-POSTS_DIR = REPO_ROOT / "site" / "blog" / "posts"
-OUT_DIR = REPO_ROOT / "site" / "blog"
+POSTS_DIR = REPO_ROOT / "public" / "blog" / "posts"
+CACHE_DIR = REPO_ROOT / "public" / "blog" / "cache"
+OUT_DIR = REPO_ROOT / "public" / "blog"
 
 MD = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"])
 

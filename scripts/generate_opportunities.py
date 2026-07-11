@@ -24,8 +24,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-POSTS_DIR = REPO_ROOT / "site" / "blog" / "posts"
-CACHE_DIR = REPO_ROOT / "site" / "blog" / "cache"
+POSTS_DIR = REPO_ROOT / "public" / "blog" / "posts"
+CACHE_DIR = REPO_ROOT / "public" / "blog" / "cache"
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = os.environ.get("MODEL", "claude-sonnet-4-6")
