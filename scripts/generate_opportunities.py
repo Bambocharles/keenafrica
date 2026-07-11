@@ -57,7 +57,7 @@ STRICT RULES:
 - Every opportunity MUST include all fields listed in the output format below.
 - If you cannot find an official URL or a deadline, EXCLUDE the opportunity.
 - Exclude anything that charges an application fee.
-- Aim for 3–5 solid opportunities per category. Quality over quantity.
+- Aim for 2–4 solid opportunities per category. Quality over quantity.
 
 OUTPUT FORMAT — respond with ONLY a valid JSON object, no prose, no code fences:
 
@@ -77,7 +77,8 @@ OUTPUT FORMAT — respond with ONLY a valid JSON object, no prose, no code fence
   ]
 }}
 
-The opportunities array should contain 15-25 items total across all 5 categories.
+The opportunities array should contain 10-18 items total across all 5 categories.
+Keep each body_md to 2-3 focused paragraphs.
 Category values must be exactly one of: scholarships, grants, conferences, competitions, certifications.
 Deadlines and apply_url are mandatory — exclude any opportunity missing either.
 """
@@ -90,7 +91,7 @@ def call_anthropic() -> dict:
 
     body = {
         "model": MODEL,
-        "max_tokens": 8000,
+        "max_tokens": 16000,
         "messages": [{"role": "user", "content": RESEARCH_PROMPT}],
         "tools": [
             {
@@ -117,17 +118,60 @@ def call_anthropic() -> dict:
 def extract_json(data: dict) -> dict:
     parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
     raw = "\n".join(p for p in parts if p).strip()
-    # Strip accidental code fences
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
+
+    # Attempt 1: parse as-is
     try:
         return json.loads(raw)
-    except json.JSONDecodeError as e:
-        # Try to find JSON object within the response
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 2: find a JSON object in surrounding prose
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
             return json.loads(m.group(0))
-        sys.exit(f"ERROR: could not parse JSON from response: {e}\nRaw: {raw[:500]}")
+        except json.JSONDecodeError:
+            raw = m.group(0)
+
+    # Attempt 3: salvage truncated JSON — cut back to the last complete
+    # opportunity object and close the array + object.
+    print("WARNING: JSON appears truncated; attempting salvage…")
+    # Find the last complete object inside the opportunities array: it ends
+    # with '}' followed (possibly after whitespace) by ',' or ']'
+    last_complete = -1
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(raw):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 2:          # closed an opportunity object
+                last_complete = i
+    if last_complete == -1:
+        sys.exit("ERROR: could not salvage any complete opportunity from the response.")
+    salvaged = raw[: last_complete + 1] + "]}"
+    try:
+        result = json.loads(salvaged)
+        print(f"Salvaged {len(result.get('opportunities', []))} complete opportunities "
+              f"from truncated response.")
+        return result
+    except json.JSONDecodeError as e:
+        sys.exit(f"ERROR: salvage failed: {e}")
 
 
 def slugify(text: str) -> str:
