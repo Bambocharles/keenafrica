@@ -23,7 +23,9 @@ jobs:
       - name: Generate post via Anthropic API (web search)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scripts/generate_opportunities.py
+        run: |
+          pip install anthropic
+          python scripts/generate_opportunities.py
 
       - name: Build blog HTML
         run: |
@@ -40,7 +42,7 @@ jobs:
             Auto-generated opportunities post (Anthropic API + web search).
 
             **Review checklist before merging:**
-            - [ ] Spot-check 2–3 application URLs actually work and are official
+            - [ ] Spot-check 2-3 application URLs actually work and are official
             - [ ] Deadlines look plausible (not already passed)
             - [ ] No opportunity charges an application fee
             - [ ] Tone reads Keen Africa (builders, not beneficiaries)

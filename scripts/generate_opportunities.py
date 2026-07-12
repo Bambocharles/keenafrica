@@ -2,10 +2,11 @@
 """
 Keen Africa — Opportunities blog generator.
 
-Runs every 3 days (via GitHub Actions cron). Uses the Anthropic API with the
-native web search tool to research CURRENT opportunities for ambitious young
-Africans (mainly Nigerians), then writes one markdown file per opportunity
-plus a manifest JSON. The build script turns these into individual HTML pages.
+Runs every 3 days (via GitHub Actions cron). Uses the Anthropic API (streaming,
+via the official SDK) with the native web search tool to research CURRENT
+opportunities for ambitious young Africans (mainly Nigerians), then writes one
+markdown file per opportunity plus a manifest JSON. The build script turns
+these into individual HTML pages.
 
 Env vars:
   ANTHROPIC_API_KEY  (required)
@@ -17,15 +18,15 @@ import json
 import os
 import re
 import sys
-import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
+
+import anthropic
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POSTS_DIR = REPO_ROOT / "public" / "blog" / "posts"
 CACHE_DIR = REPO_ROOT / "public" / "blog" / "cache"
 
-API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = os.environ.get("MODEL", "claude-sonnet-4-6")
 MAX_SEARCHES = int(os.environ.get("MAX_SEARCHES", "20"))
 
@@ -57,7 +58,7 @@ STRICT RULES:
 - Every opportunity MUST include all fields listed in the output format below.
 - If you cannot find an official URL or a deadline, EXCLUDE the opportunity.
 - Exclude anything that charges an application fee.
-- Aim for 2–4 solid opportunities per category. Quality over quantity.
+- Aim for 2-4 solid opportunities per category. Quality over quantity.
 
 OUTPUT FORMAT — respond with ONLY a valid JSON object, no prose, no code fences:
 
@@ -72,7 +73,7 @@ OUTPUT FORMAT — respond with ONLY a valid JSON object, no prose, no code fence
       "deadline": "Exact date e.g. 31 August 2026, or 'Rolling' if no fixed deadline",
       "eligibility": "One line describing who qualifies",
       "apply_url": "https://official-organization-url.org/apply",
-      "body_md": "3-5 paragraphs of markdown. Cover: what the opportunity offers in detail, who the organizer is, what the application involves, why this one is worth the effort. Be specific and concrete."
+      "body_md": "2-3 focused paragraphs of markdown. Cover: what the opportunity offers in detail, who the organizer is, what the application involves, why this one is worth the effort. Be specific and concrete."
     }}
   ]
 }}
@@ -85,34 +86,44 @@ Deadlines and apply_url are mandatory — exclude any opportunity missing either
 
 
 def call_anthropic() -> dict:
+    """Call the API with streaming so long generations don't get disconnected."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         sys.exit("ERROR: ANTHROPIC_API_KEY is not set.")
 
-    body = {
-        "model": MODEL,
-        "max_tokens": 16000,
-        "messages": [{"role": "user", "content": RESEARCH_PROMPT}],
-        "tools": [
+    client = anthropic.Anthropic(api_key=api_key, max_retries=3)
+
+    with client.messages.stream(
+        model=MODEL,
+        max_tokens=16000,
+        messages=[{"role": "user", "content": RESEARCH_PROMPT}],
+        tools=[
             {
                 "type": "web_search_20250305",
                 "name": "web_search",
                 "max_uses": MAX_SEARCHES,
             }
         ],
-    }
-    req = urllib.request.Request(
-        API_URL,
-        data=json.dumps(body).encode(),
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
+    ) as stream:
+        final = stream.get_final_message()
+
+    # Convert SDK objects to the dict shape the rest of the script expects
+    server_tool_use = getattr(final.usage, "server_tool_use", None)
+    return {
+        "content": [
+            {"type": b.type, "text": getattr(b, "text", "")}
+            for b in final.content
+        ],
+        "usage": {
+            "input_tokens": final.usage.input_tokens,
+            "output_tokens": final.usage.output_tokens,
+            "server_tool_use": {
+                "web_search_requests": getattr(
+                    server_tool_use, "web_search_requests", "?"
+                )
+            },
         },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        return json.loads(resp.read())
+    }
 
 
 def extract_json(data: dict) -> dict:
@@ -138,8 +149,6 @@ def extract_json(data: dict) -> dict:
     # Attempt 3: salvage truncated JSON — cut back to the last complete
     # opportunity object and close the array + object.
     print("WARNING: JSON appears truncated; attempting salvage…")
-    # Find the last complete object inside the opportunities array: it ends
-    # with '}' followed (possibly after whitespace) by ',' or ']'
     last_complete = -1
     depth = 0
     in_string = False
