@@ -5,19 +5,11 @@ on:
     branches: [dev, staging, main]
 
 jobs:
-  deploy:
+  deploy-dev:
+    if: github.ref_name == 'dev'
     runs-on: [self-hosted, keenafrica-vm]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Determine environment
-        id: env
-        run: |
-          case "${{ github.ref_name }}" in
-            main)    echo "name=prod"    >> $GITHUB_OUTPUT ;;
-            staging) echo "name=staging" >> $GITHUB_OUTPUT ;;
-            dev)     echo "name=dev"     >> $GITHUB_OUTPUT ;;
-          esac
 
       - name: Login to GHCR
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u bambocharles --password-stdin
@@ -30,13 +22,77 @@ jobs:
           docker push $IMAGE
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Roll out new image
+      - name: Roll out to dev
         env:
           KUBECONFIG: /home/keen/.kube/config
         run: |
-          NS=keen-${{ steps.env.outputs.name }}
-          kubectl set image -n $NS deployment/site nginx=${{ steps.image.outputs.image }}
-          kubectl rollout status -n $NS deployment/site --timeout=120s
+          kubectl set image -n keen-dev deployment/site nginx=${{ steps.image.outputs.image }}
+          kubectl rollout status -n keen-dev deployment/site --timeout=120s
+
+      - name: Prune old local images
+        if: always()
+        run: |
+          docker images "ghcr.io/bambocharles/keenafrica" --format "{{.Tag}}" \
+            | grep -v "^${{ github.sha }}$" \
+            | xargs -r -I{} docker rmi "ghcr.io/bambocharles/keenafrica:{}"
+          docker image prune -f
+
+  # Runs on pushes to `staging` directly, and as the first stage of every
+  # `main` push — every commit that reaches prod is staged here first,
+  # using the exact same image that gets promoted (no rebuild in between).
+  deploy-staging:
+    if: github.ref_name == 'staging' || github.ref_name == 'main'
+    runs-on: [self-hosted, keenafrica-vm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u bambocharles --password-stdin
+
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE=ghcr.io/bambocharles/keenafrica:${{ github.sha }}
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Roll out to staging
+        env:
+          KUBECONFIG: /home/keen/.kube/config
+        run: |
+          kubectl set image -n keen-staging deployment/site nginx=${{ steps.image.outputs.image }}
+          kubectl rollout status -n keen-staging deployment/site --timeout=120s
+
+      - name: Prune old local images
+        if: always()
+        run: |
+          docker images "ghcr.io/bambocharles/keenafrica" --format "{{.Tag}}" \
+            | grep -v "^${{ github.sha }}$" \
+            | xargs -r -I{} docker rmi "ghcr.io/bambocharles/keenafrica:{}"
+          docker image prune -f
+
+  # Only reachable from `main`, only after staging succeeds, and gated by
+  # the `production` GitHub environment's required reviewers — the run
+  # pauses here until someone approves it in the Actions tab.
+  deploy-prod:
+    if: github.ref_name == 'main'
+    needs: deploy-staging
+    runs-on: [self-hosted, keenafrica-vm]
+    environment: production
+    steps:
+      - name: Login to GHCR
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u bambocharles --password-stdin
+
+      - name: Pull the image staging just validated
+        run: docker pull ghcr.io/bambocharles/keenafrica:${{ github.sha }}
+
+      - name: Roll out to prod
+        env:
+          KUBECONFIG: /home/keen/.kube/config
+        run: |
+          kubectl set image -n keen-prod deployment/site nginx=ghcr.io/bambocharles/keenafrica:${{ github.sha }}
+          kubectl rollout status -n keen-prod deployment/site --timeout=120s
 
       - name: Prune old local images
         if: always()
