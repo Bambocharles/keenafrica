@@ -161,7 +161,7 @@ h1{{font-family:var(--font-display);font-weight:400;
   </div>
 </main>
 <footer>
-  © {year} Keen Africa · From Akure, with conviction ·
+  © {year} Keen Africa · Built with conviction ·
   <a href="../../index.html">keenafrica.com</a>
 </footer>
 </body>
@@ -231,7 +231,7 @@ h1 em{{font-style:italic;font-weight:300;color:var(--terracotta);}}
   {category_sections}
 </main>
 <footer>
-  © {year} Keen Africa · From Akure, with conviction ·
+  © {year} Keen Africa · Built with conviction ·
   <a href="../index.html">keenafrica.com</a>
 </footer>
 </body>

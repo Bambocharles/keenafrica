@@ -37,3 +37,11 @@ jobs:
           NS=keen-${{ steps.env.outputs.name }}
           kubectl set image -n $NS deployment/site nginx=${{ steps.image.outputs.image }}
           kubectl rollout status -n $NS deployment/site --timeout=120s
+
+      - name: Prune old local images
+        if: always()
+        run: |
+          docker images "ghcr.io/bambocharles/keenafrica" --format "{{.Tag}}" \
+            | grep -v "^${{ github.sha }}$" \
+            | xargs -r -I{} docker rmi "ghcr.io/bambocharles/keenafrica:{}"
+          docker image prune -f

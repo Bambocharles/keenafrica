@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Keen Africa — Bright minds, building Africa's future</title>
-<meta name="description" content="Keen Africa develops Nigeria's brightest young minds — with world-standard training, an offline-first UTME practice platform, and tools that help educators teach at a global level. From Akure to all of Africa.">
+<meta name="description" content="Keen Africa develops Africa's brightest young minds — with world-standard training, an offline-first UTME practice platform, and tools that help educators teach at a global level.">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -126,7 +126,39 @@
     transition: transform 0.2s, background 0.2s;
   }
   .nav-cta:hover { background: var(--terracotta); transform: translateY(-1px); }
-  @media (max-width: 900px) { .nav-links { display: none; } }
+  .nav-toggle {
+    display: none;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    color: var(--green-deep);
+    flex-shrink: 0;
+  }
+  .nav-toggle svg { width: 24px; height: 24px; }
+  .mobile-menu {
+    display: none;
+    flex-direction: column;
+    max-width: var(--max);
+    margin: 0 auto;
+    padding: 0 var(--pad) 20px;
+  }
+  .mobile-menu.open { display: flex; }
+  .mobile-menu-links { list-style: none; }
+  .mobile-menu-links a {
+    display: block;
+    padding: 14px 0;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    border-top: 1px solid var(--line);
+  }
+  .mobile-menu-links a:hover { color: var(--green-deep); }
+  .mobile-menu-cta { margin-top: 16px; justify-content: center; width: 100%; }
+  @media (max-width: 900px) {
+    .nav-links, .nav-cta { display: none; }
+    .nav-toggle { display: flex; }
+  }
 
   /* ---------- Hero ---------- */
   .hero {
@@ -220,19 +252,6 @@
     padding: 16px;
     transform: rotate(-8deg);
     box-shadow: var(--shadow);
-  }
-  .hero-tag {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    background: rgba(31, 26, 20, 0.7);
-    color: var(--cream);
-    padding: 8px 14px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    backdrop-filter: blur(8px);
   }
   @media (max-width: 860px) {
     .hero { grid-template-columns: 1fr; }
@@ -657,23 +676,37 @@
     <a href="#involve" class="nav-cta">Back a bright mind
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
     </a>
+    <button type="button" class="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+  </div>
+  <div class="mobile-menu" id="mobile-menu">
+    <ul class="mobile-menu-links">
+      <li><a href="#mission">Our conviction</a></li>
+      <li><a href="#platform">The platform</a></li>
+      <li><a href="#programs">Programs</a></li>
+      <li><a href="blog/index.html">Opportunities</a></li>
+      <li><a href="learn/index.html">Learning Lab</a></li>
+      <li><a href="#involve">Get involved</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+    <a href="#involve" class="btn btn-primary mobile-menu-cta">Back a bright mind →</a>
   </div>
 </header>
 
 <!-- ========== HERO ========== -->
 <section class="hero">
   <div class="hero-text">
-    <span class="eyebrow">Akure · Nigeria · Africa</span>
+    <span class="eyebrow">Africa</span>
     <h1>Africa's brightest minds don't need pity. <em>They need tools.</em></h1>
-    <p class="hero-lead">Keen Africa trains and equips exceptional young Nigerians to build — technology, industry, and independent thinking. We're developing the engineers, makers, and problem-solvers of a self-reliant Nigeria, starting in Akure.</p>
+    <p class="hero-lead">Keen Africa trains and equips exceptional young Africans to build — technology, industry, and independent thinking. We're developing the engineers, makers, and problem-solvers of a self-reliant Africa.</p>
     <div class="hero-ctas">
       <a href="#platform" class="btn btn-primary">See what we're building <span class="arrow">→</span></a>
       <a href="#mission" class="btn btn-outline">Our conviction</a>
     </div>
   </div>
   <div class="hero-visual">
-    <img class="hero-img" src="https://images.unsplash.com/photo-1581726690015-c9861fa5057f?w=900&q=80" alt="Young Nigerian students working intently at computers" loading="eager">
-    <span class="hero-tag">Akure, Ondo State</span>
+    <img class="hero-img" src="https://images.unsplash.com/photo-1581726690015-c9861fa5057f?w=900&q=80" alt="Young African students working intently at computers" loading="eager">
     <div class="hero-stamp">Built by<br><strong style="font-weight: 600;">the next</strong><br>generation</div>
   </div>
 </section>
@@ -685,14 +718,14 @@
     <span>Locally rooted</span>
     <span>Engineers &amp; makers</span>
     <span>Independent thinking</span>
-    <span>Built in Nigeria</span>
-    <span>Akure to Africa</span>
+    <span>Built in Africa</span>
+    <span>Pan-African</span>
     <span>World standard</span>
     <span>Locally rooted</span>
     <span>Engineers &amp; makers</span>
     <span>Independent thinking</span>
-    <span>Built in Nigeria</span>
-    <span>Akure to Africa</span>
+    <span>Built in Africa</span>
+    <span>Pan-African</span>
   </div>
 </div>
 
@@ -708,9 +741,9 @@
       <span class="section-label">Our conviction</span>
       <h2>Talent is everywhere here. <em>Opportunity isn't — yet.</em></h2>
       <p>Within one generation, nations like China and South Korea went from being written off to building their own technology, factories, and future. Nothing about that transformation was foreign aid. It was talent, trained hard and aimed at building.</p>
-      <p>Nigeria has the talent — in absurd abundance. Walk through any school in Akure and you'll meet kids who can out-think their circumstances. What they lack isn't ability or hunger to learn. It's world-standard training, serious tools, and adults who treat them as future builders rather than future dependents.</p>
+      <p>Africa has the talent — in absurd abundance. Walk through any school on the continent and you'll meet kids who can out-think their circumstances. What they lack isn't ability or hunger to learn. It's world-standard training, serious tools, and adults who treat them as future builders rather than future dependents.</p>
       <blockquote class="pull-quote">"We don't rescue children. We train engineers, makers, and independent thinkers — and get out of their way."</blockquote>
-      <p>That's the work: rigorous, long-term investment in the sharpest young minds we can find — starting in Akure, scaling to every state, and in time, across Africa. Not charity for the helpless. Infrastructure for the capable.</p>
+      <p>That's the work: rigorous, long-term investment in the sharpest young minds we can find — wherever they are, scaling across the continent. Not charity for the helpless. Infrastructure for the capable.</p>
     </div>
   </div>
 </section>
@@ -720,7 +753,7 @@
   <div class="container">
     <div class="reveal">
       <span class="section-label">The platform</span>
-      <h2>Serious tools for serious minds — <em>built for Nigerian reality.</em></h2>
+      <h2>Serious tools for serious minds — <em>built for African reality.</em></h2>
       <p class="platform-intro">Software built here, for how students and teachers here actually live: unreliable internet, low-end phones, tight budgets — and sky-high ambition. Two products, one system.</p>
     </div>
 
@@ -735,17 +768,17 @@
           <li>AI analyzes your results and builds a plan targeted at <em>your</em> weak topics</li>
           <li>Worked explanations for every question — learn the why, not just the answer</li>
         </ul>
-        <span class="product-status"><span class="dot"></span>In development — launching first in Akure</span>
+        <span class="product-status"><span class="dot"></span>In development — launching soon</span>
       </article>
 
       <article class="product reveal">
         <span class="product-kicker">For educators</span>
         <h3>Educator Content Studio</h3>
-        <p>Upload your lesson notes and get the mentorship most teachers never receive: a clear-eyed comparison against world-standard curricula — Cambridge, IB, and the Nigerian syllabi.</p>
+        <p>Upload your lesson notes and get the mentorship most teachers never receive: a clear-eyed comparison against world-standard curricula — Cambridge, IB, and local syllabi.</p>
         <ul>
           <li>See what's already strong in your material — and build on it</li>
-          <li>Spot gaps and outdated content against WAEC, JAMB, and global frameworks</li>
-          <li>Get concrete upgrades: better examples, activities, and assessments — rooted in Nigerian contexts</li>
+          <li>Spot gaps and outdated content against national exam boards and global frameworks</li>
+          <li>Get concrete upgrades: better examples, activities, and assessments — rooted in African contexts</li>
           <li>Free-resource recommendations that respect real school budgets</li>
         </ul>
         <span class="product-status"><span class="dot"></span>In development — join the first cohort</span>
@@ -798,7 +831,7 @@
       <span class="section-label">On the ground</span>
       <h2>Programs that train <em>builders</em>, not beneficiaries.</h2>
     </div>
-    <p>Three pillars in Akure, reaching young people at the moments when their thinking — and their standards — are being formed.</p>
+    <p>Three pillars reaching young people at the moments when their thinking — and their standards — are being formed.</p>
   </div>
   <div class="program-grid">
     <article class="program reveal">
@@ -819,7 +852,7 @@
       <div class="program-body">
         <span class="program-num">— 02</span>
         <h3>Tech &amp; Build Labs</h3>
-        <p>Hands-on engineering: code, circuits, design, fabrication. Students ship real projects with their own hands — proof, to themselves first, that Nigerians build things, not just import them.</p>
+        <p>Hands-on engineering: code, circuits, design, fabrication. Students ship real projects with their own hands — proof, to themselves first, that Africans build things, not just import them.</p>
         <a href="#involve" class="program-link">Learn more →</a>
       </div>
     </article>
@@ -865,7 +898,7 @@
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
         </div>
         <h3>Back a bright mind</h3>
-        <p>Fund tools, labs, question banks, and training. Every contribution goes into capability — equipment, content, facilitators — and we publish what we spend. Think of it as seed investment in Nigeria's builders.</p>
+        <p>Fund tools, labs, question banks, and training. Every contribution goes into capability — equipment, content, facilitators — and we publish what we spend. Think of it as seed investment in Africa's builders.</p>
         <a href="#contact" class="card-cta">Invest in the work →</a>
       </div>
 
@@ -902,7 +935,7 @@
 <!-- ========== QUOTE ========== -->
 <section class="container" style="padding-top: clamp(64px, 8vw, 100px); padding-bottom: clamp(64px, 8vw, 100px);">
   <div class="quote-section reveal">
-    <blockquote>The question was never whether Nigeria has the minds. It's whether we build the machine that turns brilliant kids into the engineers of their own country.</blockquote>
+    <blockquote>The question was never whether Africa has the minds. It's whether we build the machine that turns brilliant kids into the engineers of their own continent.</blockquote>
     <div class="quote-attr">— our founding belief</div>
   </div>
 </section>
@@ -917,16 +950,12 @@
         <p>Investors, mentors, educators, partners — and students who want early access to the practice app. Write to us; we read everything and we respond.</p>
 
         <div class="contact-detail">
-          <div class="label">Based in</div>
-          <div class="value">Akure, Ondo State, Nigeria</div>
+          <div class="label">Reach</div>
+          <div class="value">Pan-African</div>
         </div>
         <div class="contact-detail">
           <div class="label">Email</div>
           <div class="value">hello@keenafrica.com</div>
-        </div>
-        <div class="contact-detail">
-          <div class="label">Phone</div>
-          <div class="value">+234 — to be added</div>
         </div>
       </div>
 
@@ -966,7 +995,7 @@
 <!-- ========== FOOTER ========== -->
 <footer>
   <div class="foot-inner">
-    <div>© 2026 Keen Africa. Built in Akure, with conviction.</div>
+    <div>© 2026 Keen Africa. Built with conviction.</div>
     <div class="foot-links">
       <a href="#mission">Our conviction</a>
       <a href="#platform">The platform</a>
@@ -987,6 +1016,18 @@
     });
   }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  const navToggle = document.querySelector('.nav-toggle');
+  const mobileMenu = document.querySelector('.mobile-menu');
+  navToggle.addEventListener('click', () => {
+    const isOpen = mobileMenu.classList.toggle('open');
+    navToggle.setAttribute('aria-expanded', isOpen);
+    navToggle.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu');
+  });
+  mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
+    mobileMenu.classList.remove('open');
+    navToggle.setAttribute('aria-expanded', 'false');
+  }));
 </script>
 
 </body>
