@@ -50,8 +50,8 @@ MD = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"])
 SHARED_CSS = """
 :root {
   --cream:#FAF6EC; --paper:#FFFCF4; --ink:#1F1A14; --ink-soft:#4A3F33;
-  --ink-muted:#7A6D5E; --green:#157F6A; --green-deep:#0F5B4C;
-  --terracotta:#B86A43; --terracotta-soft:#E8BFA0; --gold:#D8A43A;
+  --ink-muted:#7A6D5E; --green:#1F3D2A; --green-deep:#15291C;
+  --terracotta:#B85C38; --terracotta-soft:#E8B89E; --gold:#D9A852;
   --line:rgba(31,26,20,0.12); --shadow:0 1px 0 rgba(31,26,20,0.04),0 8px 24px rgba(31,26,20,0.06);
   --font-display:"Fraunces","Times New Roman",serif;
   --font-body:"Manrope",system-ui,-apple-system,sans-serif;
@@ -160,7 +160,7 @@ h1{{font-family:var(--font-display);font-weight:400;
   </div>
 </main>
 <footer>
-  © {year} Keen Africa · Ideas. Innovation. Impact. ·
+  © {year} Keen Africa · Built with conviction ·
   <a href="../../index.html">keenafrica.com</a>
 </footer>
 </body>
@@ -230,7 +230,7 @@ h1 em{{font-style:italic;font-weight:300;color:var(--terracotta);}}
   {category_sections}
 </main>
 <footer>
-  © {year} Keen Africa · Ideas. Innovation. Impact. ·
+  © {year} Keen Africa · Built with conviction ·
   <a href="../index.html">keenafrica.com</a>
 </footer>
 </body>

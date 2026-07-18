@@ -12,10 +12,10 @@ const T = {
   ink: "#1F1A14",
   inkSoft: "#4A3F33",
   inkMuted: "#7A6D5E",
-  green: "#157F6A",
-  greenDeep: "#0F5B4C",
-  terracotta: "#B86A43",
-  gold: "#D8A43A",
+  green: "#1F3D2A",
+  greenDeep: "#15291C",
+  terracotta: "#B85C38",
+  gold: "#D9A852",
   line: "rgba(31,26,20,0.12)",
   display: '"Fraunces", "Times New Roman", serif',
   body: '"Manrope", system-ui, sans-serif',
@@ -268,7 +268,7 @@ function Hub() {
           fontFamily: T.body,
         }}
       >
-        © {new Date().getFullYear()} Keen Africa · Ideas. Innovation. Impact.
+        © {new Date().getFullYear()} Keen Africa · Built in Akure, with conviction
       </footer>
     </div>
   );
