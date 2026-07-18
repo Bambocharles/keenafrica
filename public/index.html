@@ -615,6 +615,11 @@
     transition: transform 0.2s, background 0.2s;
   }
   .submit:hover { transform: translateY(-2px); background: var(--cream); }
+  .submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+  .form-status { font-size: 14px; min-height: 20px; margin: 0; }
+  .form-status.ok { color: var(--gold); }
+  .form-status.err { color: #e0876a; }
+  .hp-field { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
   @media (max-width: 860px) { .contact-grid { grid-template-columns: 1fr; } }
 
   /* ---------- Footer ---------- */
@@ -955,22 +960,22 @@
         </div>
         <div class="contact-detail">
           <div class="label">Email</div>
-          <div class="value">hello@keenafrica.com</div>
+          <div class="value">contact@keenafrica.com</div>
         </div>
       </div>
 
-      <form class="reveal" onsubmit="event.preventDefault(); alert('Thank you — your message has been received.'); this.reset();">
+      <form class="reveal" id="contact-form" novalidate>
         <div class="field">
           <label for="name">Your name</label>
-          <input id="name" type="text" placeholder="Full name" required>
+          <input id="name" name="name" type="text" placeholder="Full name" required>
         </div>
         <div class="field">
           <label for="email">Email</label>
-          <input id="email" type="email" placeholder="you@example.com" required>
+          <input id="email" name="email" type="email" placeholder="you@example.com" required>
         </div>
         <div class="field">
           <label for="reason">I'm reaching out to…</label>
-          <select id="reason" required>
+          <select id="reason" name="reason" required>
             <option value="">Choose one</option>
             <option>Back a bright mind (donate / sponsor)</option>
             <option>Teach or mentor</option>
@@ -984,9 +989,14 @@
         </div>
         <div class="field">
           <label for="message">Message</label>
-          <textarea id="message" placeholder="Tell us what you're thinking." required></textarea>
+          <textarea id="message" name="message" placeholder="Tell us what you're thinking." required></textarea>
+        </div>
+        <div class="field hp-field" aria-hidden="true">
+          <label for="kf-hp">Leave this field blank</label>
+          <input id="kf-hp" name="kf_hp" type="text" tabindex="-1" autocomplete="off">
         </div>
         <button type="submit" class="submit">Send message →</button>
+        <p class="form-status" id="contact-status" role="status" aria-live="polite"></p>
       </form>
     </div>
   </div>
@@ -1028,6 +1038,39 @@
     mobileMenu.classList.remove('open');
     navToggle.setAttribute('aria-expanded', 'false');
   }));
+
+  const contactForm = document.getElementById('contact-form');
+  const contactStatus = document.getElementById('contact-status');
+  contactForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitBtn = contactForm.querySelector('.submit');
+    const data = Object.fromEntries(new FormData(contactForm).entries());
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Sending…';
+    contactStatus.textContent = '';
+    contactStatus.className = 'form-status';
+
+    try {
+      const res = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.error || 'Failed to send');
+
+      contactStatus.textContent = 'Thank you — your message has been received. We read everything and we respond.';
+      contactStatus.className = 'form-status ok';
+      contactForm.reset();
+    } catch (err) {
+      contactStatus.textContent = 'Something went wrong — please email us directly at contact@keenafrica.com.';
+      contactStatus.className = 'form-status err';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Send message →';
+    }
+  });
 </script>
 
 </body>

@@ -29,3 +29,9 @@ variable "subdomain" {
   description = "Subdomain (empty for prod)"
   type        = string
 }
+
+variable "resend_api_key" {
+  description = "Resend API key used by the contact/feedback Worker to send email"
+  type        = string
+  sensitive   = true
+}

@@ -278,6 +278,249 @@ function Hub() {
   );
 }
 
+function FeedbackWidget({ appId, appTitle }) {
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState("idle"); // idle | sending | done | error
+  const [topic, setTopic] = useState("app");
+  const [rating, setRating] = useState(0);
+  const [message, setMessage] = useState("");
+  const [email, setEmail] = useState("");
+  const [hp, setHp] = useState("");
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!message.trim()) return;
+    setStatus("sending");
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          topic,
+          appId,
+          appTitle,
+          rating: rating || undefined,
+          message,
+          email: email || undefined,
+          kf_hp: hp || undefined,
+        }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.error || "Failed to send");
+      setStatus("done");
+      setMessage("");
+      setRating(0);
+      setEmail("");
+    } catch {
+      setStatus("error");
+    }
+  }
+
+  const fieldLabel = {
+    display: "block",
+    fontSize: 12,
+    fontWeight: 600,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    color: T.inkMuted,
+    marginBottom: 4,
+  };
+  const fieldInput = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "9px 11px",
+    borderRadius: 6,
+    border: `1px solid ${T.line}`,
+    fontFamily: T.body,
+    fontSize: 14,
+    color: T.ink,
+    background: T.cream,
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label={open ? "Close feedback form" : "Leave feedback"}
+        style={{
+          position: "fixed",
+          right: 20,
+          bottom: 20,
+          zIndex: 60,
+          background: T.terracotta,
+          color: T.cream,
+          border: "none",
+          borderRadius: 999,
+          padding: "13px 22px",
+          fontFamily: T.body,
+          fontWeight: 600,
+          fontSize: 14,
+          cursor: "pointer",
+          boxShadow: "0 6px 20px rgba(0,0,0,0.22)",
+        }}
+      >
+        {open ? "Close" : "Feedback"}
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "fixed",
+            right: 20,
+            bottom: 78,
+            zIndex: 60,
+            width: 320,
+            maxWidth: "calc(100vw - 40px)",
+            maxHeight: "calc(100vh - 120px)",
+            overflowY: "auto",
+            background: T.paper,
+            border: `1px solid ${T.line}`,
+            borderRadius: 12,
+            padding: 20,
+            boxShadow: "0 16px 44px rgba(0,0,0,0.28)",
+            fontFamily: T.body,
+          }}
+        >
+          {status === "done" ? (
+            <div>
+              <p style={{ margin: 0, fontFamily: T.display, fontSize: 19, color: T.greenDeep }}>
+                Thank you.
+              </p>
+              <p style={{ marginTop: 8, fontSize: 14, color: T.inkSoft, lineHeight: 1.5 }}>
+                Your feedback has been sent — we read everything.
+              </p>
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  setStatus("idle");
+                }}
+                style={{
+                  marginTop: 14,
+                  background: "none",
+                  border: `1px solid ${T.line}`,
+                  borderRadius: 6,
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: T.inkSoft,
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={submit}>
+              <p style={{ margin: "0 0 14px", fontFamily: T.display, fontSize: 19, color: T.greenDeep }}>
+                Got a moment?
+              </p>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={fieldLabel} htmlFor="fb-topic">What's this about?</label>
+                <select
+                  id="fb-topic"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  style={fieldInput}
+                >
+                  <option value="app">This app{appTitle ? ` — ${appTitle}` : ""}</option>
+                  <option value="blog">The blog</option>
+                </select>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={fieldLabel}>Rating (optional)</label>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setRating(n === rating ? 0 : n)}
+                      aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        fontSize: 22,
+                        lineHeight: 1,
+                        padding: 0,
+                        color: n <= rating ? T.gold : T.line,
+                      }}
+                    >
+                      ★
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={fieldLabel} htmlFor="fb-message">Your feedback</label>
+                <textarea
+                  id="fb-message"
+                  required
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="What worked, what didn't, what would you change?"
+                  style={{ ...fieldInput, minHeight: 78, resize: "vertical" }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={fieldLabel} htmlFor="fb-email">Email (optional, if you'd like a reply)</label>
+                <input
+                  id="fb-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={fieldInput}
+                />
+              </div>
+
+              <div style={{ position: "absolute", left: -9999, width: 1, height: 1, opacity: 0 }} aria-hidden="true">
+                <label htmlFor="kf-hp">Leave this field blank</label>
+                <input
+                  id="kf-hp"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={hp}
+                  onChange={(e) => setHp(e.target.value)}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={status === "sending"}
+                style={{
+                  width: "100%",
+                  background: T.terracotta,
+                  color: T.cream,
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "11px 0",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: status === "sending" ? "not-allowed" : "pointer",
+                  opacity: status === "sending" ? 0.6 : 1,
+                }}
+              >
+                {status === "sending" ? "Sending…" : "Send feedback"}
+              </button>
+
+              {status === "error" && (
+                <p style={{ marginTop: 10, fontSize: 12.5, color: T.terracotta, lineHeight: 1.5 }}>
+                  Something went wrong — email us directly at learn@keenafrica.com.
+                </p>
+              )}
+            </form>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function App() {
   const route = useHashRoute();
   const active = APPS.find((a) => a.id === route);
@@ -287,6 +530,7 @@ function App() {
     <div style={{ minHeight: "100vh", background: T.cream }}>
       <TopBar inApp />
       <Active />
+      <FeedbackWidget appId={active.id} appTitle={active.title} />
     </div>
   );
 }
