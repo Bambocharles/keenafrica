@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,30..100&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="/favicon.png">
 
 <style>
   /* ---------- Tokens ---------- */
@@ -19,13 +20,13 @@
     --ink: #1F1A14;
     --ink-soft: #4A3F33;
     --ink-muted: #7A6D5E;
-    --green: #1F3D2A;
-    --green-deep: #15291C;
+    --green: #157F6A;
+    --green-deep: #0F5B4C;
     --green-soft: #D4DCC9;
-    --terracotta: #B85C38;
-    --terracotta-soft: #E8B89E;
-    --gold: #D9A852;
-    --gold-soft: #F0DCAE;
+    --terracotta: #B86A43;
+    --terracotta-soft: #E8BFA0;
+    --gold: #D8A43A;
+    --gold-soft: #EFDBB0;
     --line: rgba(31, 26, 20, 0.12);
     --shadow: 0 1px 0 rgba(31, 26, 20, 0.04), 0 8px 24px rgba(31, 26, 20, 0.06);
 
@@ -94,15 +95,9 @@
   }
   .logo-mark {
     width: 32px; height: 32px;
-    background: var(--green);
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    color: var(--gold);
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: 18px;
-    font-weight: 600;
+    border-radius: 9px;
+    display: block;
+    object-fit: contain;
   }
   .nav-links {
     display: flex;
@@ -664,7 +659,7 @@
 <header class="nav">
   <div class="nav-inner">
     <a href="#" class="logo">
-      <span class="logo-mark">K</span>
+      <img class="logo-mark" src="/logo-icon.png" alt="Keen Africa">
       <span>Keen Africa</span>
     </a>
     <nav>
@@ -1005,7 +1000,7 @@
 <!-- ========== FOOTER ========== -->
 <footer>
   <div class="foot-inner">
-    <div>© 2026 Keen Africa. Built with conviction.</div>
+    <div>© 2026 Keen Africa. Ideas. Innovation. Impact.</div>
     <div class="foot-links">
       <a href="#mission">Our conviction</a>
       <a href="#platform">The platform</a>

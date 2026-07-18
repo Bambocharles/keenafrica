@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import DutchVocabGame from "./apps/DutchVocabGame.jsx";
 import KNMExam from "./apps/KNMExam.jsx";
 import SchrijvenDrill from "./apps/SchrijvenDrill.jsx";
+import logoIcon from "./assets/logo-icon.png";
 
 // ---------- Keen Africa design tokens ----------
 const T = {
@@ -11,10 +12,10 @@ const T = {
   ink: "#1F1A14",
   inkSoft: "#4A3F33",
   inkMuted: "#7A6D5E",
-  green: "#1F3D2A",
-  greenDeep: "#15291C",
-  terracotta: "#B85C38",
-  gold: "#D9A852",
+  green: "#157F6A",
+  greenDeep: "#0F5B4C",
+  terracotta: "#B86A43",
+  gold: "#D8A43A",
   line: "rgba(31,26,20,0.12)",
   display: '"Fraunces", "Times New Roman", serif',
   body: '"Manrope", system-ui, sans-serif',
@@ -93,22 +94,17 @@ function TopBar({ inApp }) {
             fontSize: 20,
           }}
         >
-          <span
+          <img
+            src={logoIcon}
+            alt=""
             style={{
               width: 30,
               height: 30,
-              background: T.green,
-              borderRadius: "50%",
-              display: "grid",
-              placeItems: "center",
-              color: T.gold,
-              fontStyle: "italic",
-              fontWeight: 600,
-              fontSize: 16,
+              borderRadius: 8,
+              display: "block",
+              objectFit: "contain",
             }}
-          >
-            K
-          </span>
+          />
           Keen Africa
         </a>
         {inApp ? (
@@ -272,7 +268,7 @@ function Hub() {
           fontFamily: T.body,
         }}
       >
-        © {new Date().getFullYear()} Keen Africa · Built in Akure, with conviction
+        © {new Date().getFullYear()} Keen Africa · Ideas. Innovation. Impact.
       </footer>
     </div>
   );

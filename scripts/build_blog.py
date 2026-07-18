@@ -50,8 +50,8 @@ MD = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"])
 SHARED_CSS = """
 :root {
   --cream:#FAF6EC; --paper:#FFFCF4; --ink:#1F1A14; --ink-soft:#4A3F33;
-  --ink-muted:#7A6D5E; --green:#1F3D2A; --green-deep:#15291C;
-  --terracotta:#B85C38; --terracotta-soft:#E8B89E; --gold:#D9A852;
+  --ink-muted:#7A6D5E; --green:#157F6A; --green-deep:#0F5B4C;
+  --terracotta:#B86A43; --terracotta-soft:#E8BFA0; --gold:#D8A43A;
   --line:rgba(31,26,20,0.12); --shadow:0 1px 0 rgba(31,26,20,0.04),0 8px 24px rgba(31,26,20,0.06);
   --font-display:"Fraunces","Times New Roman",serif;
   --font-body:"Manrope",system-ui,-apple-system,sans-serif;
@@ -67,9 +67,7 @@ a{color:inherit;text-decoration:none;}
   display:flex;align-items:center;justify-content:space-between;gap:24px;}
 .logo{display:flex;align-items:center;gap:10px;font-family:var(--font-display);
   font-weight:500;font-size:20px;color:var(--green-deep);}
-.logo-mark{width:30px;height:30px;background:var(--green);border-radius:50%;
-  display:grid;place-items:center;color:var(--gold);font-family:var(--font-display);
-  font-style:italic;font-weight:600;font-size:16px;}
+.logo-mark{width:30px;height:30px;border-radius:8px;display:block;object-fit:contain;}
 .back-link{font-size:14px;font-weight:600;color:var(--ink-soft);
   display:inline-flex;align-items:center;gap:6px;}
 .back-link:hover{color:var(--green-deep);}
@@ -78,7 +76,8 @@ footer{border-top:1px solid var(--line);padding:32px 24px;
 footer a{color:var(--green-deep);}
 """
 
-FONTS = """<link rel="preconnect" href="https://fonts.googleapis.com">
+FONTS = """<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,30..100&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">"""
 
@@ -130,7 +129,7 @@ h1{{font-family:var(--font-display);font-weight:400;
 <header class="nav">
   <div class="nav-inner">
     <a class="logo" href="../../index.html">
-      <span class="logo-mark">K</span>Keen Africa
+      <img class="logo-mark" src="/logo-icon.png" alt="">Keen Africa
     </a>
     <a class="back-link" href="index.html">← All opportunities</a>
   </div>
@@ -161,7 +160,7 @@ h1{{font-family:var(--font-display);font-weight:400;
   </div>
 </main>
 <footer>
-  © {year} Keen Africa · Built with conviction ·
+  © {year} Keen Africa · Ideas. Innovation. Impact. ·
   <a href="../../index.html">keenafrica.com</a>
 </footer>
 </body>
@@ -216,7 +215,7 @@ h1 em{{font-style:italic;font-weight:300;color:var(--terracotta);}}
 <header class="nav">
   <div class="nav-inner">
     <a class="logo" href="../index.html">
-      <span class="logo-mark">K</span>Keen Africa
+      <img class="logo-mark" src="/logo-icon.png" alt="">Keen Africa
     </a>
     <a class="back-link" href="../index.html">← Home</a>
   </div>
@@ -231,7 +230,7 @@ h1 em{{font-style:italic;font-weight:300;color:var(--terracotta);}}
   {category_sections}
 </main>
 <footer>
-  © {year} Keen Africa · Built with conviction ·
+  © {year} Keen Africa · Ideas. Innovation. Impact. ·
   <a href="../index.html">keenafrica.com</a>
 </footer>
 </body>
