@@ -52,6 +52,11 @@ metadata:
   namespace: keen-prod
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
+    # Without this, Traefik doesn't reliably prioritize the exact-host
+    # Ingresses (site in keen-prod for the bare domain, site in keen-staging
+    # for staging.keenafrica.com) over this wildcard - confirmed as a live
+    # regression that broke staging.keenafrica.com until this was added.
+    traefik.ingress.kubernetes.io/router.priority: "1"
 spec:
   rules:
     - host: "*.keenafrica.com"
