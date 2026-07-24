@@ -11,6 +11,12 @@ import { withRls } from "@/lib/rls";
 // /api/* for the same reason.
 export const { handlers, auth, signIn, signOut } = NextAuth({
   basePath: "/auth",
+  // Every project subdomain is a different Host header (that's the whole
+  // point of the wildcard routing) — Auth.js's default same-origin Host
+  // check would reject all of them. Safe here because nothing about auth
+  // decisions depends on the Host header itself; tenant identity comes from
+  // the URL path after middleware's rewrite, not from trusting the host.
+  trustHost: true,
   session: { strategy: "jwt" },
   pages: { signIn: "/admin/login" },
   providers: [
