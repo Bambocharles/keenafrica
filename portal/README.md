@@ -17,6 +17,12 @@ npm run dev
 Add `/etc/hosts` entries pointing `admin.dev.keenafrica.com` and any test
 project slug at `127.0.0.1` to exercise the subdomain routing locally.
 
+## Deploying
+
+Pushes to `dev` touching this directory trigger `deploy-portal.yml`
+automatically. It can also be re-run manually (e.g. after fixing a secret
+without any code change) via Actions → Deploy Portal → Run workflow.
+
 ## Architecture notes
 
 - Auth.js routes are mounted at `/auth`, not the default `/api/auth` — a

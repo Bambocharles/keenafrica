@@ -4,6 +4,7 @@ on:
   push:
     branches: [dev]
     paths: ["portal/**"]
+  workflow_dispatch: {}
 
 jobs:
   deploy-portal-dev:
