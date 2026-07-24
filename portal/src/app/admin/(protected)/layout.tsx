@@ -9,7 +9,7 @@ export default async function ProtectedAdminLayout({
 }) {
   const session = await auth();
   if (!session?.user?.isSuperAdmin) {
-    redirect("/admin/login");
+    redirect("/login");
   }
 
   return (
@@ -27,7 +27,7 @@ export default async function ProtectedAdminLayout({
         <form
           action={async () => {
             "use server";
-            await signOut({ redirectTo: "/admin/login" });
+            await signOut({ redirectTo: "/login" });
           }}
         >
           <button type="submit">Log out</button>

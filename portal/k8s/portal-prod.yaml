@@ -28,11 +28,12 @@ spec:
           env:
             - name: ROOT_DOMAIN
               value: "keenafrica.com"
-            # See portal-dev.yaml for why this is needed - Kubernetes sets
-            # HOSTNAME to the pod name, which breaks Next.js standalone's
-            # server binding otherwise.
-            - name: HOSTNAME
-              value: "0.0.0.0"
+            # Do NOT set HOSTNAME here - see portal/server-entrypoint.js.
+            # Kubernetes injects it as the pod name regardless of this
+            # manifest; the entrypoint wrapper deletes it after server.js
+            # reads it for binding, so it doesn't leak into Auth.js's
+            # redirect URL construction (confirmed this collision breaks
+            # post-login redirects otherwise).
       imagePullSecrets:
         - name: ghcr-pull
 ---

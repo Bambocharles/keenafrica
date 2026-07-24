@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { AuthError } from "next-auth";
 import { auth, signIn } from "@/lib/auth";
 
 export default async function LoginPage({
@@ -8,7 +9,10 @@ export default async function LoginPage({
 }) {
   const session = await auth();
   if (session?.user?.isSuperAdmin) {
-    redirect("/admin/dashboard");
+    // Relative to this subdomain - middleware prepends "/admin" on the
+    // fresh request this redirect triggers. An absolute "/admin/..." path
+    // here would get double-prefixed into a route that doesn't exist.
+    redirect("/dashboard");
   }
   const { error } = await searchParams;
 
@@ -20,12 +24,18 @@ export default async function LoginPage({
       await signIn("credentials", {
         email,
         password,
-        redirectTo: "/admin/dashboard",
+        redirectTo: "/dashboard",
       });
     } catch (err) {
-      // next-auth throws a redirect internally on success; only a real
-      // auth failure reaches here.
-      redirect("/admin/login?error=1");
+      // signIn() throws Next.js's internal redirect signal on SUCCESS too -
+      // catching indiscriminately here silently turned every successful
+      // login into a reported failure. Only AuthError is a real auth
+      // failure; anything else (including that signal) must be re-thrown
+      // so Next.js can actually perform the redirect.
+      if (err instanceof AuthError) {
+        redirect("/login?error=1");
+      }
+      throw err;
     }
   }
 

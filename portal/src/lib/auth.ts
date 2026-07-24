@@ -18,7 +18,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   // the URL path after middleware's rewrite, not from trusting the host.
   trustHost: true,
   session: { strategy: "jwt" },
-  pages: { signIn: "/admin/login" },
+  // Relative to the admin subdomain - middleware prepends "/admin" on the
+  // fresh request any Auth.js-triggered redirect here causes.
+  pages: { signIn: "/login" },
   providers: [
     Credentials({
       credentials: {

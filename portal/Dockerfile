@@ -26,10 +26,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node
-# Kubernetes overrides this with the pod name regardless (see portal-dev.yaml
-# for the real fix) - set here too so a plain `docker run` outside k8s still
-# binds to all interfaces instead of whatever the container runtime sets
-# HOSTNAME to.
-ENV HOSTNAME="0.0.0.0"
+# See server-entrypoint.js - do NOT set ENV HOSTNAME here. Kubernetes always
+# injects HOSTNAME=<pod-name>, which breaks both server.js's bind address
+# and (observed directly) Auth.js's redirect URL construction; the wrapper
+# deletes it after server.js has read it for binding, so it doesn't leak
+# into anything else at runtime.
+COPY server-entrypoint.js ./
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["node", "server-entrypoint.js"]
