@@ -20,6 +20,13 @@ spec:
           env:
             - name: ROOT_DOMAIN
               value: "dev.keenafrica.com"
+            # Kubernetes sets HOSTNAME to the pod name for every container;
+            # Next.js's standalone server binds to whatever HOSTNAME resolves
+            # to instead of all interfaces, so without this override it only
+            # listens on the pod's own IP - unreachable via localhost
+            # (breaks port-forward, exec-based health checks, liveness probes).
+            - name: HOSTNAME
+              value: "0.0.0.0"
       imagePullSecrets:
         - name: ghcr-pull
 ---

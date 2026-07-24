@@ -26,5 +26,10 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 ENV PRISMA_QUERY_ENGINE_LIBRARY=/app/node_modules/.prisma/client/libquery_engine-linux-musl-openssl-3.0.x.so.node
+# Kubernetes overrides this with the pod name regardless (see portal-dev.yaml
+# for the real fix) - set here too so a plain `docker run` outside k8s still
+# binds to all interfaces instead of whatever the container runtime sets
+# HOSTNAME to.
+ENV HOSTNAME="0.0.0.0"
 EXPOSE 3000
 CMD ["node", "server.js"]
