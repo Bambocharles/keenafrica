@@ -5,7 +5,3 @@ metadata: { name: keen-prod }
 apiVersion: v1
 kind: Namespace
 metadata: { name: keen-staging }
----
-apiVersion: v1
-kind: Namespace
-metadata: { name: keen-dev }
