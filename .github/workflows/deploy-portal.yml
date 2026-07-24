@@ -26,6 +26,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_DEV }}
         run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
           cd portal
           npm ci
           npx prisma migrate deploy
