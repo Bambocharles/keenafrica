@@ -2,15 +2,23 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: portal
-  namespace: keen-dev
+  namespace: keen-prod
 spec:
-  replicas: 1 # Phase 1: prove correctness, not resilience
+  replicas: 2
   selector:
-    matchLabels: { app: portal, env: dev }
+    matchLabels: { app: portal, env: prod }
   template:
     metadata:
-      labels: { app: portal, env: dev }
+      labels: { app: portal, env: prod }
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: portal, env: prod }
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: portal
           image: ghcr.io/bambocharles/keenafrica-portal:test
@@ -19,12 +27,10 @@ spec:
             - secretRef: { name: portal-secrets }
           env:
             - name: ROOT_DOMAIN
-              value: "dev.keenafrica.com"
-            # Kubernetes sets HOSTNAME to the pod name for every container;
-            # Next.js's standalone server binds to whatever HOSTNAME resolves
-            # to instead of all interfaces, so without this override it only
-            # listens on the pod's own IP - unreachable via localhost
-            # (breaks port-forward, exec-based health checks, liveness probes).
+              value: "keenafrica.com"
+            # See portal-dev.yaml for why this is needed - Kubernetes sets
+            # HOSTNAME to the pod name, which breaks Next.js standalone's
+            # server binding otherwise.
             - name: HOSTNAME
               value: "0.0.0.0"
       imagePullSecrets:
@@ -34,21 +40,21 @@ apiVersion: v1
 kind: Service
 metadata:
   name: portal
-  namespace: keen-dev
+  namespace: keen-prod
 spec:
-  selector: { app: portal, env: dev }
+  selector: { app: portal, env: prod }
   ports: [{ port: 3000, targetPort: 3000 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: portal
-  namespace: keen-dev
+  namespace: keen-prod
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
 spec:
   rules:
-    - host: "*.dev.keenafrica.com"
+    - host: "*.keenafrica.com"
       http:
         paths:
           - path: /

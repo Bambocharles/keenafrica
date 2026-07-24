@@ -17,7 +17,7 @@ export default async function DashboardPage() {
     })
   );
 
-  const rootDomain = process.env.ROOT_DOMAIN ?? "dev.keenafrica.com";
+  const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
 
   return (
     <div style={{ display: "grid", gap: "3rem", maxWidth: 720 }}>

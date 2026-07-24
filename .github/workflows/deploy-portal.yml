@@ -1,14 +1,20 @@
 name: Deploy Portal
 
+# Deploys straight to production - there is no separate dev/staging portal
+# environment. The dev.keenafrica.com static site's dev environment (and
+# this workflow's former dev job) were retired together to free resources
+# on keenafrica-infra; Phase 1 verification already proved the mechanism
+# works end-to-end before this cutover.
 on:
   push:
-    branches: [dev]
+    branches: [main]
     paths: ["portal/**"]
   workflow_dispatch: {}
 
 jobs:
-  deploy-portal-dev:
+  deploy-portal-prod:
     runs-on: [self-hosted, keenafrica-vm]
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +31,7 @@ jobs:
 
       - name: Run migrations
         env:
-          DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_DEV }}
+          DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_PROD }}
         run: |
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
@@ -33,12 +39,12 @@ jobs:
           npm ci
           npx prisma migrate deploy
 
-      - name: Roll out to dev
+      - name: Roll out to prod
         env:
           KUBECONFIG: /home/keen/.kube/config
         run: |
-          kubectl set image -n keen-dev deployment/portal portal=${{ steps.image.outputs.image }}
-          kubectl rollout status -n keen-dev deployment/portal --timeout=120s
+          kubectl set image -n keen-prod deployment/portal portal=${{ steps.image.outputs.image }}
+          kubectl rollout status -n keen-prod deployment/portal --timeout=120s
 
       - name: Prune old local images
         if: always()
