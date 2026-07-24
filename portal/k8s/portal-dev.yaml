@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal
+  namespace: keen-dev
+spec:
+  replicas: 1 # Phase 1: prove correctness, not resilience
+  selector:
+    matchLabels: { app: portal, env: dev }
+  template:
+    metadata:
+      labels: { app: portal, env: dev }
+    spec:
+      containers:
+        - name: portal
+          image: ghcr.io/bambocharles/keenafrica-portal:test
+          ports: [{ containerPort: 3000 }]
+          envFrom:
+            - secretRef: { name: portal-secrets }
+          env:
+            - name: ROOT_DOMAIN
+              value: "dev.keenafrica.com"
+      imagePullSecrets:
+        - name: ghcr-pull
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portal
+  namespace: keen-dev
+spec:
+  selector: { app: portal, env: dev }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: portal
+  namespace: keen-dev
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: "*.dev.keenafrica.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: portal
+                port: { number: 3000 }

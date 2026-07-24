@@ -1,0 +1,46 @@
+name: Deploy Portal
+
+on:
+  push:
+    branches: [dev]
+    paths: ["portal/**"]
+
+jobs:
+  deploy-portal-dev:
+    runs-on: [self-hosted, keenafrica-vm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u bambocharles --password-stdin
+
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE=ghcr.io/bambocharles/keenafrica-portal:${{ github.sha }}
+          docker build -t $IMAGE portal/
+          docker push $IMAGE
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_DEV }}
+        run: |
+          cd portal
+          npm ci
+          npx prisma migrate deploy
+
+      - name: Roll out to dev
+        env:
+          KUBECONFIG: /home/keen/.kube/config
+        run: |
+          kubectl set image -n keen-dev deployment/portal portal=${{ steps.image.outputs.image }}
+          kubectl rollout status -n keen-dev deployment/portal --timeout=120s
+
+      - name: Prune old local images
+        if: always()
+        run: |
+          docker images "ghcr.io/bambocharles/keenafrica-portal" --format "{{.Tag}}" \
+            | grep -v "^${{ github.sha }}$" \
+            | xargs -r -I{} docker rmi "ghcr.io/bambocharles/keenafrica-portal:{}"
+          docker image prune -f
