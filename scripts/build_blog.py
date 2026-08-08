@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Keen Africa — blog builder.
+Keen Africa: blog builder.
 
 Reads markdown files from public/blog/posts/ and JSON manifests from
 public/blog/cache/ and produces:
@@ -88,7 +88,7 @@ DETAIL_TMPL = """\
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title} — Keen Africa Opportunities</title>
+<title>{title} | Keen Africa Opportunities</title>
 <meta name="description" content="{summary}">
 {fonts}
 <style>
@@ -154,9 +154,9 @@ h1{{font-family:var(--font-display);font-weight:400;
     {body_html}
   </div>
   <div class="disclaimer">
-    Deadlines and details can change — always confirm on the official page before applying.
+    Deadlines and details can change; always confirm on the official page before applying.
     Keen Africa never charges for information about opportunities, and neither should anyone else.<br>
-    Spotted an error? <a href="https://github.com/{github_repo}/edit/main/public/blog/posts/{slug}.md">Edit this post on GitHub</a> — your change opens a pull request we review and merge.
+    Spotted an error? <a href="https://github.com/{github_repo}/edit/main/public/blog/posts/{slug}.md">Edit this post on GitHub</a>. Your change opens a pull request we review and merge.
   </div>
 </main>
 <footer>
@@ -174,7 +174,7 @@ INDEX_TMPL = """\
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Opportunities — Keen Africa</title>
+<title>Opportunities | Keen Africa</title>
 <meta name="description" content="Scholarships, grants, competitions, conferences, and free certifications for ambitious young Africans. Researched and verified every few days.">
 {fonts}
 <style>
@@ -224,7 +224,7 @@ h1 em{{font-style:italic;font-weight:300;color:var(--terracotta);}}
   <div class="kicker">Updated every few days</div>
   <h1>Opportunities for <em>builders.</em></h1>
   <p class="lead">Scholarships to study abroad, grants for founders, innovation competitions,
-  funded conferences, and free cloud certifications — researched against official sources and
+  funded conferences, and free cloud certifications, researched against official sources and
   published for ambitious young Africans. No fees. No gatekeeping.</p>
   {edition_meta}
   {category_sections}
@@ -352,7 +352,7 @@ def main() -> None:
 
     posts = [parse_post(p) for p in sorted(POSTS_DIR.glob("*.md"))]
     if not posts:
-        print("No posts found — building empty index.")
+        print("No posts found, building empty index.")
         build_index([])
         return
 

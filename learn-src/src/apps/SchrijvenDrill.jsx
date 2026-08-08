@@ -24,7 +24,7 @@ const RULES = {
     mnemonic: "🧠 Bijzin-woord = stoplicht → werkwoord moet WACHTEN tot het einde!"
   },
   v2: {
-    tag: "V2 — WERKWOORD OP PLEK 2",
+    tag: "V2: WERKWOORD OP PLEK 2",
     color: "#2D82B7",
     rule: "In een hoofdzin staat het vervoegde werkwoord ALTIJD op positie 2",
     example: "Morgen ga ik werken ✓   |   Morgen ik ga werken ✗",
@@ -33,7 +33,7 @@ const RULES = {
   het_de: {
     tag: "HET / DE",
     color: "#00A676",
-    rule: "Elk zelfstandig naamwoord is 'de' of 'het' — je moet het leren per woord",
+    rule: "Elk zelfstandig naamwoord is 'de' of 'het'; je moet het leren per woord",
     example: "het feest, het adres, het weer  |  de kat, de dag, de supermarkt",
     mnemonic: "🧠 Twijfel? → het kind, het huis, het feest zijn veel voorkomende het-woorden"
   },
@@ -73,7 +73,7 @@ const RULES = {
     mnemonic: "🧠 HIJ doet iets | ZIJN bezit iets"
   },
   het_it: {
-    tag: "HET — niet 'IT'",
+    tag: "HET: niet 'IT'",
     color: "#BC6C25",
     rule: "'It' bestaat NIET in het Nederlands → gebruik altijd HET",
     example: "Ik vind het leuk ✓   |   Ik vind it leuk ✗",
@@ -105,7 +105,7 @@ const RULES = {
     color: "#3A86FF",
     rule: "Sommige werkwoorden hebben een VAST voorzetsel: luisteren NAAR, wachten OP, zorgen VOOR",
     example: "Ik luister naar muziek ✓   |   Ik luister muziek ✗",
-    mnemonic: "🧠 Luisteren = NAAR, wachten = OP, zorgen = VOOR — altijd!"
+    mnemonic: "🧠 Luisteren = NAAR, wachten = OP, zorgen = VOOR, altijd!"
   }
 };
 
@@ -653,7 +653,7 @@ function CategorySelect({ onStart }) {
             color: "#fff",
             marginBottom: 4
           }}>🇳🇱 Schrijven Drill</h1>
-          <p style={{ color: "#888", fontSize: 14 }}>48 uur tot het examen — laten we oefenen!</p>
+          <p style={{ color: "#888", fontSize: 14 }}>48 uur tot het examen. Laten we oefenen!</p>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

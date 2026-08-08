@@ -40,7 +40,7 @@ export default async function DashboardPage() {
         <ul>
           {projects.map((p) => (
             <li key={p.id}>
-              <strong>{p.name}</strong> ({p.sponsor.name}) —{" "}
+              <strong>{p.name}</strong> ({p.sponsor.name}):{" "}
               <a href={`https://${p.slug}.${rootDomain}`}>
                 {p.slug}.{rootDomain}
               </a>{" "}

@@ -49,7 +49,7 @@ export async function createProject(formData: FormData) {
     );
   }
   if (RESERVED_SLUGS.has(slugInput)) {
-    throw new Error(`"${slugInput}" is a reserved slug — choose another`);
+    throw new Error(`"${slugInput}" is a reserved slug, choose another`);
   }
 
   await withRls({ userId: user.id, isSuperAdmin: true }, (tx) =>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Keen Africa — Opportunities blog generator.
+Keen Africa: Opportunities blog generator.
 
 Runs every 3 days (via GitHub Actions cron). Uses the Anthropic API (streaming,
 via the official SDK) with the native web search tool to research CURRENT
@@ -43,14 +43,14 @@ CATEGORIES = [
 
 RESEARCH_PROMPT = f"""Today is {STAMP}. You are researching for Keen Africa, an NGO in Akure,
 Nigeria that develops ambitious young Nigerian minds. Research and compile CURRENTLY OPEN
-opportunities for young, ambitious Africans — primarily Nigerians. Use web search thoroughly.
+opportunities for young, ambitious Africans, primarily Nigerians. Use web search thoroughly.
 
 Find opportunities in these categories:
-1. scholarships — fully/partially funded, to study abroad or at top institutions, open to Nigerians
-2. grants — for young entrepreneurs, startups, and innovators in Africa
-3. conferences — innovation/tech/leadership events (especially funded or free attendance)
-4. competitions — hackathons, business plan competitions, innovation prizes
-5. certifications — free courses and certification vouchers (Microsoft Azure, AWS, Google Cloud,
+1. scholarships: fully/partially funded, to study abroad or at top institutions, open to Nigerians
+2. grants: for young entrepreneurs, startups, and innovators in Africa
+3. conferences: innovation/tech/leadership events (especially funded or free attendance)
+4. competitions: hackathons, business plan competitions, innovation prizes
+5. certifications: free courses and certification vouchers (Microsoft Azure, AWS, Google Cloud,
    Cisco, ALX, and similar programs)
 
 STRICT RULES:
@@ -59,17 +59,18 @@ STRICT RULES:
 - If you cannot find an official URL or a deadline, EXCLUDE the opportunity.
 - Exclude anything that charges an application fee.
 - Aim for 2-4 solid opportunities per category. Quality over quantity.
+- Do not use em dashes (—) anywhere in your output. Use commas, colons, semicolons, or periods instead.
 
-OUTPUT FORMAT — respond with ONLY a valid JSON object, no prose, no code fences:
+OUTPUT FORMAT: respond with ONLY a valid JSON object, no prose, no code fences:
 
 {{
   "edition_title": "A compelling title for this edition mentioning month/year",
-  "edition_intro": "2-3 sentence intro addressed to ambitious young Nigerians. Confident tone — these readers are builders, not charity cases.",
+  "edition_intro": "2-3 sentence intro addressed to ambitious young Nigerians. Confident tone: these readers are builders, not charity cases.",
   "opportunities": [
     {{
       "category": "scholarships",
       "title": "Name of the opportunity",
-      "summary": "One sentence — what it offers and why it matters.",
+      "summary": "One sentence: what it offers and why it matters.",
       "deadline": "Exact date e.g. 31 August 2026, or 'Rolling' if no fixed deadline",
       "eligibility": "One line describing who qualifies",
       "apply_url": "https://official-organization-url.org/apply",
@@ -81,7 +82,7 @@ OUTPUT FORMAT — respond with ONLY a valid JSON object, no prose, no code fence
 The opportunities array should contain 10-18 items total across all 5 categories.
 Keep each body_md to 2-3 focused paragraphs.
 Category values must be exactly one of: scholarships, grants, conferences, competitions, certifications.
-Deadlines and apply_url are mandatory — exclude any opportunity missing either.
+Deadlines and apply_url are mandatory: exclude any opportunity missing either.
 """
 
 
@@ -146,7 +147,7 @@ def extract_json(data: dict) -> dict:
         except json.JSONDecodeError:
             raw = m.group(0)
 
-    # Attempt 3: salvage truncated JSON — cut back to the last complete
+    # Attempt 3: salvage truncated JSON, cut back to the last complete
     # opportunity object and close the array + object.
     print("WARNING: JSON appears truncated; attempting salvage…")
     last_complete = -1
@@ -214,7 +215,7 @@ def main() -> None:
     # Duplicate-run guard: skip if this edition already has posts
     existing = list(POSTS_DIR.glob(f"{STAMP}-*.md"))
     if existing:
-        print(f"Posts for {STAMP} already exist ({len(existing)} files) — skipping API call.")
+        print(f"Posts for {STAMP} already exist ({len(existing)} files), skipping API call.")
         return
 
     print(f"Researching opportunities with {MODEL} (max {MAX_SEARCHES} searches)…")
@@ -237,7 +238,7 @@ def main() -> None:
     # Write manifest for the build script
     manifest = {
         "edition_date": STAMP,
-        "edition_title": parsed.get("edition_title", f"Opportunities — {TODAY.strftime('%B %Y')}"),
+        "edition_title": parsed.get("edition_title", f"Opportunities: {TODAY.strftime('%B %Y')}"),
         "edition_intro": parsed.get("edition_intro", ""),
         "posts": [],
     }
@@ -245,7 +246,7 @@ def main() -> None:
     for opp in opps:
         cat = opp.get("category", "").lower()
         if cat not in CATEGORIES:
-            print(f"  skipping '{opp.get('title')}' — unknown category '{cat}'")
+            print(f"  skipping '{opp.get('title')}', unknown category '{cat}'")
             continue
         path = write_opportunity(opp, STAMP)
         manifest["posts"].append({

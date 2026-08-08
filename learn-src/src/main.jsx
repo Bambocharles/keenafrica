@@ -35,7 +35,7 @@ const APPS = [
     title: "KNM Practice Exam",
     kicker: "Civic knowledge · Inburgering",
     blurb:
-      "Full practice runs for the KNM exam (Kennis van de Nederlandse Maatschappij) — timed questions in real exam format.",
+      "Full practice runs for the KNM exam (Kennis van de Nederlandse Maatschappij), timed questions in real exam format.",
     component: KNMExam,
   },
   {
@@ -187,10 +187,10 @@ function Hub() {
           }}
         >
           Serious preparation tools built by Keen Africa. Everything runs entirely in
-          your browser — once a page loads, no internet is needed to keep practicing.
+          your browser: once a page loads, no internet is needed to keep practicing.
         </p>
         <p style={{ fontSize: 14.5, color: T.inkMuted, maxWidth: 640, marginBottom: 48 }}>
-          First up: Dutch exam preparation — for the thousands of ambitious Africans
+          First up: Dutch exam preparation, for the thousands of ambitious Africans
           studying, working, and settling in the Netherlands. The UTME/JAMB practice
           app is in development and lands here next.
         </p>
@@ -383,7 +383,7 @@ function FeedbackWidget({ appId, appTitle }) {
                 Thank you.
               </p>
               <p style={{ marginTop: 8, fontSize: 14, color: T.inkSoft, lineHeight: 1.5 }}>
-                Your feedback has been sent — we read everything.
+                Your feedback has been sent. We read everything.
               </p>
               <button
                 onClick={() => {
@@ -419,7 +419,7 @@ function FeedbackWidget({ appId, appTitle }) {
                   onChange={(e) => setTopic(e.target.value)}
                   style={fieldInput}
                 >
-                  <option value="app">This app{appTitle ? ` — ${appTitle}` : ""}</option>
+                  <option value="app">This app{appTitle ? `: ${appTitle}` : ""}</option>
                   <option value="blog">The blog</option>
                 </select>
               </div>
@@ -506,7 +506,7 @@ function FeedbackWidget({ appId, appTitle }) {
 
               {status === "error" && (
                 <p style={{ marginTop: 10, fontSize: 12.5, color: T.terracotta, lineHeight: 1.5 }}>
-                  Something went wrong — email us directly at learn@keenafrica.com.
+                  Something went wrong: email us directly at learn@keenafrica.com.
                 </p>
               )}
             </form>

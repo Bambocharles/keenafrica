@@ -1,9 +1,9 @@
 ---
-title: "Wema Bank Hackaholics 7.0 — ₦200 Million Prize Pool for African Innovators"
+title: "Wema Bank Hackaholics 7.0: ₦200 Million Prize Pool for African Innovators"
 category: "competitions"
 summary: "Wema Bank's flagship annual innovation programme is back with its biggest edition yet: three competition tracks (Hackathon, Ideathon, Startup Pitch), a ₦200 million cumulative prize pool, and mentorship from Nigeria's top fintech and banking professionals."
-deadline: "Rolling — check official site for stage deadlines"
-eligibility: "African innovators, startups, developers, designers, engineers, students, and social impact organizations — no programming degree required"
+deadline: "Rolling, check official site for stage deadlines"
+eligibility: "African innovators, startups, developers, designers, engineers, students, and social impact organizations, no programming degree required"
 apply_url: "https://hackaholics.wemabank.com/"
 edition_date: 2026-07-22
 generated: 2026-07-22T08:08:56.034116+00:00
