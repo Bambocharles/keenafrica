@@ -99,11 +99,8 @@ resource "cloudflare_ruleset" "security_headers" {
 # every learner downloads the same file once before the app runs
 # entirely client-side.
 #
-# Setup required before `terraform apply` will work for this resource:
-#   The cloudflare_api_token needs "Zone > Cache Rules > Edit" added
-#   (same token used for DNS/Tunnel/Workers above; as of this writing it
-#   doesn't have Cache Rules scope, so apply fails with Authentication
-#   error (10000)).
+# Uses starts_with() rather than a regex `matches` expression: this zone
+# is below the plan tier (Business+) that regex operators require.
 resource "cloudflare_ruleset" "cache_learn_assets" {
   zone_id     = var.cloudflare_zone_id
   name        = "Cache Learn app static assets"
@@ -113,7 +110,7 @@ resource "cloudflare_ruleset" "cache_learn_assets" {
 
   rules {
     action      = "set_cache_settings"
-    expression  = "(http.request.uri.path matches \"^/learn/assets/.*$\")"
+    expression  = "(starts_with(http.request.uri.path, \"/learn/assets/\"))"
     description = "Cache /learn/assets/* at the edge for 30 days"
 
     action_parameters {
