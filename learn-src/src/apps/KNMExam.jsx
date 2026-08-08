@@ -873,10 +873,10 @@ export default function KNMExam() {
 
             {wrong.length > 0 && (
               <div style={styles.wrongList}>
-                <h3 style={styles.wrongTitle}>❌ Foute antwoorden — leer hiervan</h3>
+                <h3 style={styles.wrongTitle}>❌ Foute antwoorden: leer hiervan</h3>
                 {wrong.map((w, i) => (
                   <div key={i} style={styles.wrongItem}>
-                    <div style={styles.wrongQ}><strong>{w.theme}</strong> — {w.question}</div>
+                    <div style={styles.wrongQ}><strong>{w.theme}</strong>: {w.question}</div>
                     <div style={styles.wrongCorrect}>✓ Juist antwoord: {w.options[w.answer]}</div>
                     <div style={{ ...styles.explanationText, marginTop: "6px", fontSize: "12px" }}>{w.explanation}</div>
                   </div>
