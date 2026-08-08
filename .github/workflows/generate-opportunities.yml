@@ -20,11 +20,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate post via Anthropic API (web search)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Generate post via Claude Code CLI (web search)
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          pip install anthropic
+          npm install -g @anthropic-ai/claude-code
           python scripts/generate_opportunities.py
 
       - name: Build blog HTML
@@ -37,9 +41,9 @@ jobs:
         with:
           branch: opportunities/${{ github.run_id }}
           commit-message: "blog: opportunities edition (auto-generated)"
-          title: "New opportunities post — review before publish"
+          title: "New opportunities post: review before publish"
           body: |
-            Auto-generated opportunities post (Anthropic API + web search).
+            Auto-generated opportunities post (Claude Code CLI + web search).
 
             **Review checklist before merging:**
             - [ ] Spot-check 2-3 application URLs actually work and are official

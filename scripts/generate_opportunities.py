@@ -2,32 +2,32 @@
 """
 Keen Africa: Opportunities blog generator.
 
-Runs every 3 days (via GitHub Actions cron). Uses the Anthropic API (streaming,
-via the official SDK) with the native web search tool to research CURRENT
-opportunities for ambitious young Africans (mainly Nigerians), then writes one
-markdown file per opportunity plus a manifest JSON. The build script turns
-these into individual HTML pages.
+Runs every 3 days (via GitHub Actions cron). Uses the Claude Code CLI,
+authenticated with a subscription-linked OAuth token (not a billed API key),
+with web search to research CURRENT opportunities for ambitious young
+Africans (mainly Nigerians), then writes one markdown file per opportunity
+plus a manifest JSON. The build script turns these into individual HTML
+pages.
 
 Env vars:
-  ANTHROPIC_API_KEY  (required)
-  MODEL              (optional, default claude-sonnet-4-6)
-  MAX_SEARCHES       (optional, default 20)
+  CLAUDE_CODE_OAUTH_TOKEN  (required; from `claude setup-token`)
+  MODEL                    (optional, default sonnet)
+  MAX_SEARCHES             (optional, default 20)
 """
 
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
-
-import anthropic
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POSTS_DIR = REPO_ROOT / "public" / "blog" / "posts"
 CACHE_DIR = REPO_ROOT / "public" / "blog" / "cache"
 
-MODEL = os.environ.get("MODEL", "claude-sonnet-4-6")
+MODEL = os.environ.get("MODEL", "sonnet")
 MAX_SEARCHES = int(os.environ.get("MAX_SEARCHES", "20"))
 
 TODAY = date.today()
@@ -43,7 +43,8 @@ CATEGORIES = [
 
 RESEARCH_PROMPT = f"""Today is {STAMP}. You are researching for Keen Africa, an NGO in Akure,
 Nigeria that develops ambitious young Nigerian minds. Research and compile CURRENTLY OPEN
-opportunities for young, ambitious Africans, primarily Nigerians. Use web search thoroughly.
+opportunities for young, ambitious Africans, primarily Nigerians. Use web search thoroughly,
+up to {MAX_SEARCHES} searches.
 
 Find opportunities in these categories:
 1. scholarships: fully/partially funded, to study abroad or at top institutions, open to Nigerians
@@ -86,41 +87,47 @@ Deadlines and apply_url are mandatory: exclude any opportunity missing either.
 """
 
 
-def call_anthropic() -> dict:
-    """Call the API with streaming so long generations don't get disconnected."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        sys.exit("ERROR: ANTHROPIC_API_KEY is not set.")
+def call_claude_code() -> dict:
+    """Run the research prompt through the Claude Code CLI, headless.
 
-    client = anthropic.Anthropic(api_key=api_key, max_retries=3)
+    Authenticated via CLAUDE_CODE_OAUTH_TOKEN (a subscription-linked token
+    from `claude setup-token`), so this draws from the Claude subscription's
+    included usage rather than metered Anthropic API credits.
+    """
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        sys.exit("ERROR: CLAUDE_CODE_OAUTH_TOKEN is not set.")
 
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=16000,
-        messages=[{"role": "user", "content": RESEARCH_PROMPT}],
-        tools=[
-            {
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": MAX_SEARCHES,
-            }
+    proc = subprocess.run(
+        [
+            "claude", "-p", RESEARCH_PROMPT,
+            "--output-format", "json",
+            "--model", MODEL,
+            "--allowedTools", "WebSearch",
         ],
-    ) as stream:
-        final = stream.get_final_message()
+        capture_output=True,
+        text=True,
+        timeout=1200,
+    )
+    if proc.returncode != 0:
+        sys.exit(f"ERROR: claude CLI exited {proc.returncode}: {proc.stderr[-2000:]}")
 
-    # Convert SDK objects to the dict shape the rest of the script expects
-    server_tool_use = getattr(final.usage, "server_tool_use", None)
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        sys.exit(f"ERROR: could not parse claude CLI output: {e}\n{proc.stdout[-2000:]}")
+
+    if envelope.get("is_error"):
+        sys.exit(f"ERROR: claude CLI reported an error: {envelope.get('result')}")
+
+    usage = envelope.get("usage", {})
     return {
-        "content": [
-            {"type": b.type, "text": getattr(b, "text", "")}
-            for b in final.content
-        ],
+        "content": [{"type": "text", "text": envelope.get("result", "")}],
         "usage": {
-            "input_tokens": final.usage.input_tokens,
-            "output_tokens": final.usage.output_tokens,
+            "input_tokens": usage.get("input_tokens", "?"),
+            "output_tokens": usage.get("output_tokens", "?"),
             "server_tool_use": {
-                "web_search_requests": getattr(
-                    server_tool_use, "web_search_requests", "?"
+                "web_search_requests": usage.get("server_tool_use", {}).get(
+                    "web_search_requests", "?"
                 )
             },
         },
@@ -219,7 +226,7 @@ def main() -> None:
         return
 
     print(f"Researching opportunities with {MODEL} (max {MAX_SEARCHES} searches)…")
-    data = call_anthropic()
+    data = call_claude_code()
 
     # Cache raw response
     cache_path = CACHE_DIR / f"{STAMP}-raw.json"
