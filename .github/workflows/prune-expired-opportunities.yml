@@ -1,0 +1,48 @@
+name: Prune expired opportunities
+
+on:
+  schedule:
+    # Daily at 05:00 UTC (06:00 Nigeria time), ahead of the opportunities generator
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Remove posts past their deadline
+        id: prune
+        run: |
+          pip install markdown pyyaml
+          python scripts/prune_expired.py | tee /tmp/prune.log
+          if grep -q "^Removed " /tmp/prune.log; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open pull request for review
+        if: steps.prune.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: prune/${{ github.run_id }}
+          commit-message: "blog: remove expired opportunities (auto-pruned)"
+          title: "Remove expired opportunities"
+          body: |
+            Auto-removed opportunity posts whose deadline has passed (with a
+            3-day grace period). Purely mechanical: date comparison only, no
+            content judgment involved. See the workflow run log for the
+            exact list removed.
+
+            Safe to merge on sight.
+          labels: opportunities, auto-generated
