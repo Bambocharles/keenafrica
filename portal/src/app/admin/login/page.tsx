@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AuthError } from "next-auth";
 import { auth, signIn } from "@/lib/auth";
+import styles from "./login.module.css";
 
 export default async function LoginPage({
   searchParams,
@@ -40,20 +41,46 @@ export default async function LoginPage({
   }
 
   return (
-    <main style={{ maxWidth: 360, margin: "4rem auto", padding: "0 1rem" }}>
-      <h1>Keen Africa Admin</h1>
-      {error && <p style={{ color: "crimson" }}>Invalid email or password.</p>}
-      <form action={login} style={{ display: "grid", gap: "0.75rem" }}>
-        <label>
-          Email
-          <input name="email" type="email" required style={{ width: "100%" }} />
-        </label>
-        <label>
-          Password
-          <input name="password" type="password" required style={{ width: "100%" }} />
-        </label>
-        <button type="submit">Log in</button>
-      </form>
-    </main>
+    <div className={styles.page}>
+      <div className={styles.card}>
+        <div className={styles.mark}>K</div>
+        <h1 className={styles.title}>Keen Africa Admin</h1>
+        <p className={styles.subtitle}>Sign in to manage sponsors and projects</p>
+
+        {error && (
+          <div className={styles.error} role="alert">
+            Invalid email or password. Check both and try again.
+          </div>
+        )}
+
+        <form action={login}>
+          <div className={styles.field}>
+            <label htmlFor="email">Email</label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              autoComplete="email"
+              required
+              className={styles.input}
+            />
+          </div>
+          <div className={styles.field}>
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              className={styles.input}
+            />
+          </div>
+          <button type="submit" className={styles.submit}>
+            Log in
+          </button>
+        </form>
+      </div>
+    </div>
   );
 }
