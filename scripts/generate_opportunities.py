@@ -23,6 +23,8 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POSTS_DIR = REPO_ROOT / "public" / "blog" / "posts"
 CACHE_DIR = REPO_ROOT / "public" / "blog" / "cache"
@@ -195,6 +197,31 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60]
 
 
+def normalize_url(url: str) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+def load_existing_apply_urls() -> set[str]:
+    """apply_url values already published, across all past editions.
+
+    The research prompt re-discovers opportunities fresh each run and the
+    LLM often rewords the title slightly, which would otherwise produce a
+    new slug (and a duplicate post) for an opportunity already live.
+    Dedup on apply_url instead, since that's stable across reruns.
+    """
+    urls = set()
+    for path in POSTS_DIR.glob("*.md"):
+        raw = path.read_text()
+        m = re.match(r"^---\n(.*?)\n---\n", raw, re.S)
+        if not m:
+            continue
+        meta = yaml.safe_load(m.group(1)) or {}
+        url = normalize_url(str(meta.get("apply_url", "")))
+        if url:
+            urls.add(url)
+    return urls
+
+
 def write_opportunity(opp: dict, edition_date: str) -> Path:
     slug = f"{edition_date}-{slugify(opp['title'])}"
     path = POSTS_DIR / f"{slug}.md"
@@ -250,11 +277,19 @@ def main() -> None:
         "posts": [],
     }
 
+    seen_urls = load_existing_apply_urls()
+
     for opp in opps:
         cat = opp.get("category", "").lower()
         if cat not in CATEGORIES:
             print(f"  skipping '{opp.get('title')}', unknown category '{cat}'")
             continue
+        url = normalize_url(opp.get("apply_url", ""))
+        if url and url in seen_urls:
+            print(f"  skipping '{opp.get('title')}', already published (apply_url duplicate)")
+            continue
+        if url:
+            seen_urls.add(url)
         path = write_opportunity(opp, STAMP)
         manifest["posts"].append({
             "slug": path.stem,
