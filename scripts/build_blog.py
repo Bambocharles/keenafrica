@@ -257,6 +257,47 @@ def parse_post(path: Path) -> dict:
     }
 
 
+def normalize_url(url: str) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+def dedupe_posts(posts: list) -> list:
+    """Hard backstop: never publish two posts with the same apply_url.
+
+    generate_opportunities.py tries to prevent this at research time, but
+    that relies on the model correctly recognizing a repeat (see the
+    Chevening/IFC incident, where it cited a different page on the same
+    org's site for an opportunity already live). This is the last line of
+    defense: whatever reaches the build, dedupe by apply_url here, keep the
+    earliest edition, and delete the losers' source files so the fix
+    sticks instead of re-warning on every future build.
+    """
+    by_url: dict = {}
+    for post in posts:
+        url = normalize_url(post["apply_url"])
+        if not url or url == "#":
+            by_url.setdefault(post["slug"], []).append(post)  # never merge missing URLs
+            continue
+        by_url.setdefault(url, []).append(post)
+
+    kept = []
+    for group in by_url.values():
+        if len(group) == 1:
+            kept.append(group[0])
+            continue
+        group.sort(key=lambda p: (p["edition_date"], p["slug"]))
+        winner, losers = group[0], group[1:]
+        kept.append(winner)
+        print(f"  DUPLICATE apply_url, keeping '{winner['slug']}':")
+        for loser in losers:
+            print(f"    removing '{loser['slug']}' ({loser['title']!r})")
+            (POSTS_DIR / f"{loser['slug']}.md").unlink(missing_ok=True)
+            (OUT_DIR / f"{loser['slug']}.html").unlink(missing_ok=True)
+
+    kept.sort(key=lambda p: p["slug"])
+    return kept
+
+
 def build_detail(post: dict) -> None:
     cat = post["category"]
     page = DETAIL_TMPL.format(
@@ -355,6 +396,8 @@ def main() -> None:
         print("No posts found, building empty index.")
         build_index([])
         return
+
+    posts = dedupe_posts(posts)
 
     print(f"Building {len(posts)} opportunity pages…")
     for post in posts:
