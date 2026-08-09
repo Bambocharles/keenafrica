@@ -43,7 +43,21 @@ CATEGORIES = [
     "certifications",
 ]
 
-RESEARCH_PROMPT = f"""Today is {STAMP}. You are researching for Keen Africa, an NGO in Akure,
+
+def build_research_prompt(existing: list[tuple[str, str]]) -> str:
+    already_published = ""
+    if existing:
+        lines = "\n".join(f"- {title} ({url})" for title, url in existing)
+        already_published = f"""
+ALREADY PUBLISHED, DO NOT REPEAT: the opportunities below are already live on the site from
+past editions. Do not include any of them again, even if you find them via a different page on
+the organization's site or a slightly different URL. Same organization + same program + same
+intake/cohort counts as the same opportunity, regardless of exact wording or URL:
+{lines}
+
+"""
+
+    return f"""Today is {STAMP}. You are researching for Keen Africa, an NGO in Akure,
 Nigeria that develops ambitious young Nigerian minds. Research and compile CURRENTLY OPEN
 opportunities for young, ambitious Africans, primarily Nigerians. Use web search thoroughly,
 up to {MAX_SEARCHES} searches.
@@ -55,7 +69,7 @@ Find opportunities in these categories:
 4. competitions: hackathons, business plan competitions, innovation prizes
 5. certifications: free courses and certification vouchers (Microsoft Azure, AWS, Google Cloud,
    Cisco, ALX, and similar programs)
-
+{already_published}
 STRICT RULES:
 - Only include opportunities that are OPEN NOW or opening within the next 60 days.
 - Every opportunity MUST include all fields listed in the output format below.
@@ -89,7 +103,7 @@ Deadlines and apply_url are mandatory: exclude any opportunity missing either.
 """
 
 
-def call_claude_code() -> dict:
+def call_claude_code(prompt: str) -> dict:
     """Run the research prompt through the Claude Code CLI, headless.
 
     Authenticated via CLAUDE_CODE_OAUTH_TOKEN (a subscription-linked token
@@ -101,7 +115,7 @@ def call_claude_code() -> dict:
 
     proc = subprocess.run(
         [
-            "claude", "-p", RESEARCH_PROMPT,
+            "claude", "-p", prompt,
             "--output-format", "json",
             "--model", MODEL,
             "--allowedTools", "WebSearch",
@@ -201,25 +215,29 @@ def normalize_url(url: str) -> str:
     return (url or "").strip().rstrip("/").lower()
 
 
-def load_existing_apply_urls() -> set[str]:
-    """apply_url values already published, across all past editions.
+def load_existing_opportunities() -> list[tuple[str, str]]:
+    """(title, apply_url) pairs already published, across all past editions.
 
-    The research prompt re-discovers opportunities fresh each run and the
-    LLM often rewords the title slightly, which would otherwise produce a
-    new slug (and a duplicate post) for an opportunity already live.
-    Dedup on apply_url instead, since that's stable across reruns.
+    The research prompt re-discovers opportunities fresh each run, and often
+    finds a different page on the same org's site (or reworded title) for an
+    opportunity already live, which would otherwise produce a duplicate post.
+    The full list is fed back into the prompt so the model can recognize
+    "same organization + same program" duplicates that a URL/title string
+    match would miss; main() also does a cheap exact apply_url match as a
+    backstop against the model repeating one anyway.
     """
-    urls = set()
-    for path in POSTS_DIR.glob("*.md"):
+    existing = []
+    for path in sorted(POSTS_DIR.glob("*.md")):
         raw = path.read_text()
         m = re.match(r"^---\n(.*?)\n---\n", raw, re.S)
         if not m:
             continue
         meta = yaml.safe_load(m.group(1)) or {}
-        url = normalize_url(str(meta.get("apply_url", "")))
-        if url:
-            urls.add(url)
-    return urls
+        title = str(meta.get("title", "")).strip()
+        url = str(meta.get("apply_url", "")).strip()
+        if title and url:
+            existing.append((title, url))
+    return existing
 
 
 def write_opportunity(opp: dict, edition_date: str) -> Path:
@@ -247,13 +265,17 @@ def main() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     # Duplicate-run guard: skip if this edition already has posts
-    existing = list(POSTS_DIR.glob(f"{STAMP}-*.md"))
-    if existing:
-        print(f"Posts for {STAMP} already exist ({len(existing)} files), skipping API call.")
+    existing_today = list(POSTS_DIR.glob(f"{STAMP}-*.md"))
+    if existing_today:
+        print(f"Posts for {STAMP} already exist ({len(existing_today)} files), skipping API call.")
         return
 
-    print(f"Researching opportunities with {MODEL} (max {MAX_SEARCHES} searches)…")
-    data = call_claude_code()
+    existing_opportunities = load_existing_opportunities()
+    prompt = build_research_prompt(existing_opportunities)
+
+    print(f"Researching opportunities with {MODEL} (max {MAX_SEARCHES} searches), "
+          f"excluding {len(existing_opportunities)} already-published…")
+    data = call_claude_code(prompt)
 
     # Cache raw response
     cache_path = CACHE_DIR / f"{STAMP}-raw.json"
@@ -277,7 +299,7 @@ def main() -> None:
         "posts": [],
     }
 
-    seen_urls = load_existing_apply_urls()
+    seen_urls = {normalize_url(url) for _, url in existing_opportunities}
 
     for opp in opps:
         cat = opp.get("category", "").lower()
