@@ -27,7 +27,7 @@ HTML_DIR = REPO_ROOT / "public" / "blog"
 # Grace period: keep a post for a few days after its deadline in case
 # "closing date" traffic still needs the page, or the deadline text was
 # slightly conservative.
-GRACE_DAYS = 3
+GRACE_DAYS = 0
 
 
 def parse_deadline(raw: str) -> date | None:
