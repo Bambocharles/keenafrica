@@ -3,6 +3,11 @@ import { createRoot } from "react-dom/client";
 import DutchVocabGame from "./apps/DutchVocabGame.jsx";
 import KNMExam from "./apps/KNMExam.jsx";
 import SchrijvenDrill from "./apps/SchrijvenDrill.jsx";
+import CloudFundamentalsCheck from "./apps/CloudFundamentalsCheck.jsx";
+import AZ900Exam from "./apps/AZ900Exam.jsx";
+import AWSCloudPractitionerExam from "./apps/AWSCloudPractitionerExam.jsx";
+import GCPDigitalLeaderExam from "./apps/GCPDigitalLeaderExam.jsx";
+import CiscoCCSTExam from "./apps/CiscoCCSTExam.jsx";
 import logoIcon from "./assets/logo-icon.png";
 
 // ---------- Keen Africa design tokens ----------
@@ -45,6 +50,46 @@ const APPS = [
     blurb:
       "Structured drills for the Dutch writing exam: prompts, model answers, and repetition until it sticks.",
     component: SchrijvenDrill,
+  },
+  {
+    id: "cloud-fundamentals",
+    title: "Cloud Fundamentals Check",
+    kicker: "Certification readiness · All clouds",
+    blurb:
+      "A provider-agnostic warm-up covering concepts every cloud certification shares, plus direct AWS, Azure, and Google Cloud comparisons.",
+    component: CloudFundamentalsCheck,
+  },
+  {
+    id: "az900",
+    title: "AZ-900: Azure Fundamentals",
+    kicker: "Certification readiness · Azure",
+    blurb:
+      "Full practice runs for Microsoft's AZ-900 exam, weighted across cloud concepts, Azure architecture, and management and governance.",
+    component: AZ900Exam,
+  },
+  {
+    id: "aws-ccp",
+    title: "AWS Certified Cloud Practitioner",
+    kicker: "Certification readiness · AWS",
+    blurb:
+      "Full practice runs for AWS's CLF-C02 exam, weighted across cloud concepts, security, technology and services, and billing.",
+    component: AWSCloudPractitionerExam,
+  },
+  {
+    id: "gcp-cdl",
+    title: "Google Cloud Digital Leader",
+    kicker: "Certification readiness · Google Cloud",
+    blurb:
+      "Full practice runs for Google Cloud's Digital Leader exam, weighted across data, infrastructure, security, and operations.",
+    component: GCPDigitalLeaderExam,
+  },
+  {
+    id: "ccst-net",
+    title: "Cisco CCST Networking",
+    kicker: "Certification readiness · Networking",
+    blurb:
+      "Full practice runs for Cisco's CCST Networking exam: standards, addressing, infrastructure, diagnosis, and security.",
+    component: CiscoCCSTExam,
   },
 ];
 
@@ -190,9 +235,13 @@ function Hub() {
           your browser: once a page loads, no internet is needed to keep practicing.
         </p>
         <p style={{ fontSize: 14.5, color: T.inkMuted, maxWidth: 640, marginBottom: 48 }}>
-          First up: Dutch exam preparation, for the thousands of ambitious Africans
-          studying, working, and settling in the Netherlands. The UTME/JAMB practice
-          app is in development and lands here next.
+          Dutch exam preparation for the thousands of ambitious Africans studying,
+          working, and settling in the Netherlands, plus readiness checks for the free
+          cloud certifications (Azure, AWS, Google Cloud, Cisco) we cover in{" "}
+          <a href="../blog/index.html" style={{ color: T.terracotta, fontWeight: 600 }}>
+            Opportunities
+          </a>
+          . The UTME/JAMB practice app is in development and lands here next.
         </p>
 
         <div

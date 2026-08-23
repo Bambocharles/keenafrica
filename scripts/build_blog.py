@@ -44,6 +44,25 @@ CATEGORY_ICONS = {
     "certifications": "📜",
 }
 
+# Certification posts get a CTA into the Learning Lab's matching practice exam.
+# Checked in order; the first keyword match wins, so more specific providers
+# (azure/aws/google cloud/cisco) are listed before the generic fallback.
+READINESS_CHECKS = [
+    (("azure", "microsoft"), "az900", "Test your Azure Fundamentals (AZ-900) readiness"),
+    (("aws", "amazon web services"), "aws-ccp", "Test your AWS Cloud Practitioner readiness"),
+    (("google cloud",), "gcp-cdl", "Test your Google Cloud readiness"),
+    (("cisco",), "ccst-net", "Test your Cisco networking readiness"),
+]
+READINESS_CHECK_FALLBACK = ("cloud-fundamentals", "Test your cloud & tech fundamentals readiness")
+
+
+def readiness_check_for(post: dict) -> tuple[str, str]:
+    haystack = f"{post['title']} {post['summary']}".lower()
+    for keywords, route, label in READINESS_CHECKS:
+        if any(k in haystack for k in keywords):
+            return route, label
+    return READINESS_CHECK_FALLBACK
+
 MD = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"])
 
 # ── Shared styles ─────────────────────────────────────────────────────────────
@@ -123,6 +142,18 @@ h1{{font-family:var(--font-display);font-weight:400;
   border-left:3px solid var(--gold);border-radius:6px;
   font-size:13px;color:var(--ink-muted);line-height:1.6;}}
 .disclaimer a{{color:var(--green-deep);text-decoration:underline;}}
+.readiness-cta{{margin-bottom:40px;padding:24px 26px;
+  background:var(--green-deep);border-radius:10px;
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;}}
+.readiness-cta-text{{color:var(--cream);}}
+.readiness-cta-kicker{{font-size:11px;font-weight:700;letter-spacing:0.12em;
+  text-transform:uppercase;color:var(--gold);margin-bottom:4px;}}
+.readiness-cta-title{{font-family:var(--font-display);font-size:19px;font-weight:500;}}
+.readiness-cta-btn{{display:inline-flex;align-items:center;gap:8px;flex-shrink:0;
+  padding:12px 24px;background:var(--gold);color:var(--green-deep);
+  border-radius:999px;font-weight:700;font-size:14px;white-space:nowrap;
+  transition:transform 0.2s;}}
+.readiness-cta-btn:hover{{transform:translateY(-2px);}}
 </style>
 </head>
 <body>
@@ -153,6 +184,7 @@ h1{{font-family:var(--font-display);font-weight:400;
   <div class="body-content">
     {body_html}
   </div>
+  {readiness_cta}
   <div class="disclaimer">
     Deadlines and details can change; always confirm on the official page before applying.
     Keen Africa never charges for information about opportunities, and neither should anyone else.<br>
@@ -300,6 +332,20 @@ def dedupe_posts(posts: list) -> list:
 
 def build_detail(post: dict) -> None:
     cat = post["category"]
+
+    readiness_cta = ""
+    if cat == "certifications":
+        route, label = readiness_check_for(post)
+        readiness_cta = f"""\
+  <div class="readiness-cta">
+    <div class="readiness-cta-text">
+      <div class="readiness-cta-kicker">The Learning Lab</div>
+      <div class="readiness-cta-title">{html.escape(label)}</div>
+    </div>
+    <a class="readiness-cta-btn" href="../learn/index.html#/{route}">Practice free →</a>
+  </div>
+"""
+
     page = DETAIL_TMPL.format(
         title=html.escape(post["title"]),
         summary=html.escape(post["summary"]),
@@ -309,6 +355,7 @@ def build_detail(post: dict) -> None:
         eligibility=html.escape(post["eligibility"]),
         apply_url=post["apply_url"],
         body_html=post["body_html"],
+        readiness_cta=readiness_cta,
         slug=post["slug"],
         github_repo=GITHUB_REPO,
         year=date.today().year,
