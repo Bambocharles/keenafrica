@@ -1,0 +1,55 @@
+name: Prepare social post
+
+on:
+  schedule:
+    # Tuesday and Friday, 09:00 UTC (10:00 Nigeria time) — 2 posts/week.
+    - cron: "0 9 * * 2,5"
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          pip install markdown pyyaml
+          npm install --prefix scripts/social
+
+      - name: Pick next opportunity + render card
+        run: python scripts/prepare_social_post.py
+
+      - name: Open pull request for review
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: social-post/${{ github.run_id }}
+          commit-message: "social: queue next Instagram/Facebook post"
+          title: "New Instagram/Facebook post — review before publish"
+          body: |
+            Auto-generated social card + caption, queued in `social/queue/`.
+
+            **Review checklist before merging:**
+            - [ ] Card image looks right (title readable, no odd wrapping)
+            - [ ] Caption reads well and the deadline isn't already too close
+            - [ ] Link in the caption is correct
+
+            Merging publishes to production (staging first, then your usual
+            prod approval) — once the image is live on keenafrica.com, it
+            posts automatically to Instagram and Facebook.
+
+            To skip this opportunity instead of posting it, close this PR
+            without merging (it'll be reconsidered on the next scheduled run).
+          labels: social, auto-generated
