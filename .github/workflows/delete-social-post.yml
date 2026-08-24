@@ -1,0 +1,40 @@
+name: Delete social post
+
+# Remove a published Facebook post and/or Instagram media item, e.g. to
+# clean up a test post or retract a mistake. Leave either input blank
+# to only delete on one platform.
+#
+# gh workflow run "Delete social post" -f facebook_post_id=... -f instagram_media_id=...
+
+on:
+  workflow_dispatch:
+    inputs:
+      facebook_post_id:
+        description: "Facebook post id to delete (leave blank to skip)"
+        required: false
+      instagram_media_id:
+        description: "Instagram media id to delete (leave blank to skip)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Delete post(s)
+        env:
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          FACEBOOK_POST_ID: ${{ inputs.facebook_post_id }}
+          INSTAGRAM_MEDIA_ID: ${{ inputs.instagram_media_id }}
+        run: python scripts/delete_social_post.py
