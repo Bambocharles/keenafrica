@@ -31,7 +31,9 @@ def env(name: str) -> str:
 
 def delete(node_id: str, token: str) -> None:
     resp = requests.delete(f"{GRAPH_API}/{node_id}", data={"access_token": token}, timeout=30)
-    resp.raise_for_status()
+    if not resp.ok:
+        print(f"  FAILED: {resp.text}")
+        resp.raise_for_status()
     print(f"  {node_id}: {resp.json()}")
 
 
