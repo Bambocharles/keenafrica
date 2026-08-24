@@ -1,0 +1,33 @@
+name: Check social profiles
+
+# Read-only audit: prints the current Facebook Page and Instagram
+# Business account profile fields (name, bio, website, category) for
+# comparison against the brand/mission positioning.
+#
+# gh workflow run "Check social profiles"
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch profile fields
+        env:
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_IG_BUSINESS_ACCOUNT_ID: ${{ secrets.META_IG_BUSINESS_ACCOUNT_ID }}
+        run: python scripts/check_social_profiles.py
