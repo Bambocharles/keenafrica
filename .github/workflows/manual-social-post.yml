@@ -1,0 +1,45 @@
+name: Manual social post
+
+# One-off post to Facebook + Instagram, outside the opportunity queue.
+# Trigger from the Actions tab ("Run workflow") or:
+#   gh workflow run "Manual social post" -f image_url=... -f caption="..."
+#
+# The image must already be publicly reachable — Instagram's Graph API
+# fetches by URL rather than accepting a direct upload. Easiest path:
+# add the file under public/social/manual/, push to main, wait for it
+# to deploy, then run this with the resulting https://keenafrica.com/... URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: "Public URL of the image (e.g. https://keenafrica.com/social/manual/your-image.png)"
+        required: true
+      caption:
+        description: "Caption text, posted as-is to both Facebook and Instagram"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Post to Facebook + Instagram
+        env:
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_IG_BUSINESS_ACCOUNT_ID: ${{ secrets.META_IG_BUSINESS_ACCOUNT_ID }}
+          IMAGE_URL: ${{ inputs.image_url }}
+          CAPTION: ${{ inputs.caption }}
+        run: python scripts/publish_manual_post.py

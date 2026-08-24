@@ -13,6 +13,23 @@ Instagram via the Meta Graph API, then archives the entry to `social/posted/`.
 To skip a queued opportunity instead of posting it, just close its PR without
 merging — the next scheduled run will consider the next-newest opportunity.
 
+## Manual/one-off posts
+
+To post something outside the opportunity queue (an announcement, event photo,
+etc.), use `manual-social-post.yml` instead:
+
+1. Get the image publicly live on keenafrica.com. Easiest way: add the file
+   under `public/social/manual/`, commit, and push to main — once it deploys
+   (staging, then your usual prod approval), it's reachable at
+   `https://keenafrica.com/social/manual/<filename>`.
+2. Go to the Actions tab → **Manual social post** → **Run workflow**, and fill
+   in the image URL and caption. Or from the CLI:
+   ```
+   gh workflow run "Manual social post" -f image_url="https://keenafrica.com/social/manual/your-image.png" -f caption="Your caption here"
+   ```
+3. It posts to both Facebook and Instagram immediately — there's no review
+   step, so double-check the URL and caption before running it.
+
 ## One-time setup (all on your end — I can't do this part)
 
 You need three secrets in the GitHub repo (**Settings → Secrets and
