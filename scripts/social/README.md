@@ -30,6 +30,12 @@ etc.), use `manual-social-post.yml` instead:
 3. It posts to both Facebook and Instagram immediately — there's no review
    step, so double-check the URL and caption before running it.
 
+To retract a post: `delete-social-post.yml` can delete a Facebook post by id
+(`gh workflow run "Delete social post" -f facebook_post_id=...`). Instagram
+posts can't be deleted via the Graph API at all (a Meta platform limitation,
+confirmed by testing — not a permissions issue) — delete those manually in
+the Instagram app instead.
+
 ## One-time setup (all on your end — I can't do this part)
 
 You need three secrets in the GitHub repo (**Settings → Secrets and

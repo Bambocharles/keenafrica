@@ -4,7 +4,14 @@ name: Delete social post
 # clean up a test post or retract a mistake. Leave either input blank
 # to only delete on one platform.
 #
-# gh workflow run "Delete social post" -f facebook_post_id=... -f instagram_media_id=...
+# NOTE: Meta's Graph API does not support deleting published Instagram
+# posts (fails with error code 10, "Insufficient permissions", regardless
+# of granted scopes — this is a platform limitation, not fixable here).
+# The instagram_media_id input is kept for the day Meta adds support, but
+# for now delete Instagram posts manually: Instagram app -> the post ->
+# ... -> Delete.
+#
+# gh workflow run "Delete social post" -f facebook_post_id=...
 
 on:
   workflow_dispatch:
