@@ -44,10 +44,23 @@ CATEGORIES = [
 ]
 
 
+# Cap how many "already published" entries go into the prompt. This list
+# only grows (posts drop off it via prune_expired.py, but deadlines often run
+# 60+ days out, so it climbs faster than it drains). An unbounded list makes
+# the model burn more and more output tokens hunting for non-duplicate
+# opportunities each edition, until it overruns the response length and the
+# run fails outright (see the 2026-08-25 run: 43 exclusions, truncated,
+# unsalvageable). The exact-URL dedup backstop in main() still uses the full
+# list regardless of this cap, so capping the prompt only weakens the softer
+# "same org, different URL" duplicate check for older editions.
+MAX_EXCLUSIONS_IN_PROMPT = 25
+
+
 def build_research_prompt(existing: list[tuple[str, str]]) -> str:
     already_published = ""
     if existing:
-        lines = "\n".join(f"- {title} ({url})" for title, url in existing)
+        recent = existing[-MAX_EXCLUSIONS_IN_PROMPT:]
+        lines = "\n".join(f"- {title} ({url})" for title, url in recent)
         already_published = f"""
 ALREADY PUBLISHED, DO NOT REPEAT: the opportunities below are already live on the site from
 past editions. Do not include any of them again, even if you find them via a different page on
