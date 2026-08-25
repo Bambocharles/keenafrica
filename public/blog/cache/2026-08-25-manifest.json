@@ -1,0 +1,61 @@
+{
+  "edition_date": "2026-08-25",
+  "edition_title": "Keen Africa Opportunities Digest: September 2026 Edition",
+  "edition_intro": "This month brings a tight window worth moving fast on: Oxford and UK scholarships closing within days, a Nigeria-based leadership conference filling up in Enugu, and a national pitch competition open only to student founders already running a business. You already build things; these just give you the runway. Pick what fits your work and apply before the doors close.",
+  "posts": [
+    {
+      "slug": "2026-08-25-chevening-scholarships-2027-2028-uk-master-s",
+      "category": "scholarships",
+      "title": "Chevening Scholarships 2027/2028 (UK Master's)",
+      "summary": "Fully funds a one-year master's degree at any UK university, covering tuition, flights, and a monthly living stipend.",
+      "deadline": "6 October 2026",
+      "eligibility": "Nigerian citizens with an undergraduate degree and at least 2,800 hours (roughly two years) of work experience",
+      "apply_url": "https://www.chevening.org/scholarship/nigeria/"
+    },
+    {
+      "slug": "2026-08-25-africa-prize-for-engineering-innovation-2027",
+      "category": "grants",
+      "title": "Africa Prize for Engineering Innovation 2027",
+      "summary": "Awards up to \u00a350,000 plus a year of tailored business support to African innovators building scalable engineering solutions.",
+      "deadline": "8 September 2026",
+      "eligibility": "Lead applicant must be a citizen of a Sub-Saharan African country, applying individually or as a small team",
+      "apply_url": "https://africaprize.raeng.org.uk/"
+    },
+    {
+      "slug": "2026-08-25-young-african-leaders-conference-yalcon-2026",
+      "category": "conferences",
+      "title": "Young African Leaders Conference (YALCON) 2026",
+      "summary": "A free, one-day leadership and entrepreneurship conference in Enugu bringing 300+ young Africans together to pitch ideas and access post-conference mentorship.",
+      "deadline": "1 September 2026",
+      "eligibility": "Young Africans committed to leadership, entrepreneurship, or sustainable development; entry is free but registration is required",
+      "apply_url": "https://yalcon-2026.vercel.app/"
+    },
+    {
+      "slug": "2026-08-25-nans-innovate-2026",
+      "category": "competitions",
+      "title": "NANS Innovate 2026",
+      "summary": "A national pitch competition for Nigerian student entrepreneurs, with the top 20 winning transparent funding to grow their existing businesses.",
+      "deadline": "8 September 2026",
+      "eligibility": "Currently enrolled Nigerian tertiary students already running a business, from any of the 36 states or the FCT",
+      "apply_url": "https://grants.nanshq.org/apply"
+    },
+    {
+      "slug": "2026-08-25-cisco-networking-academy-skills-for-all",
+      "category": "certifications",
+      "title": "Cisco Networking Academy (Skills for All)",
+      "summary": "Free, self-paced courses in networking, cybersecurity, Python, and data science, with Cisco digital badges you can add to a CV immediately.",
+      "deadline": "Rolling",
+      "eligibility": "Open to anyone with a free Cisco Skills for All account; no prerequisites for foundation-level courses",
+      "apply_url": "https://skillsforall.com/"
+    },
+    {
+      "slug": "2026-08-25-freecodecamp-certifications",
+      "category": "certifications",
+      "title": "freeCodeCamp Certifications",
+      "summary": "Free, project-based certifications in web development, data analysis, machine learning, and more, each backed by a real portfolio of built projects.",
+      "deadline": "Rolling",
+      "eligibility": "Open to anyone with internet access; no prior coding experience or application required",
+      "apply_url": "https://www.freecodecamp.org/learn"
+    }
+  ]
+}
