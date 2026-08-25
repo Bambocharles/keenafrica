@@ -88,7 +88,7 @@ STRICT RULES:
 - Every opportunity MUST include all fields listed in the output format below.
 - If you cannot find an official URL or a deadline, EXCLUDE the opportunity.
 - Exclude anything that charges an application fee.
-- Aim for 2-4 solid opportunities per category. Quality over quantity.
+- Aim for 1-2 solid opportunities per category. Quality over quantity.
 - Do not use em dashes (—) anywhere in your output. Use commas, colons, semicolons, or periods instead.
 
 OUTPUT FORMAT: respond with ONLY a valid JSON object, no prose, no code fences:
@@ -104,13 +104,15 @@ OUTPUT FORMAT: respond with ONLY a valid JSON object, no prose, no code fences:
       "deadline": "Exact date e.g. 31 August 2026, or 'Rolling' if no fixed deadline",
       "eligibility": "One line describing who qualifies",
       "apply_url": "https://official-organization-url.org/apply",
-      "body_md": "2-3 focused paragraphs of markdown. Cover: what the opportunity offers in detail, who the organizer is, what the application involves, why this one is worth the effort. Be specific and concrete."
+      "body_md": "1-2 focused paragraphs of markdown, 3-5 sentences each. Cover: what the opportunity offers, who the organizer is, why this one is worth the effort. Be specific and concrete, but brief."
     }}
   ]
 }}
 
-The opportunities array should contain 10-18 items total across all 5 categories.
-Keep each body_md to 2-3 focused paragraphs.
+The opportunities array should contain 5-10 items total across all 5 categories.
+Keep each body_md to 1-2 focused paragraphs. This response must fit in a single reply,
+so once you have enough good opportunities, stop researching and write the JSON: do
+not keep searching for more once you have 5-10 solid, verified items.
 Category values must be exactly one of: scholarships, grants, conferences, competitions, certifications.
 Deadlines and apply_url are mandatory: exclude any opportunity missing either.
 """
