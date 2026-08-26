@@ -1,4 +1,6 @@
 import { withRls } from "@/lib/rls";
+import { PERMISSIONS, requirePermission, type AuthzActor } from "@/lib/authz";
+import { recordAuditEvent } from "@/lib/audit";
 
 /**
  * Canonical flag keys. Adding a flag means: add the key here, add a row for
@@ -61,4 +63,45 @@ export async function isFeatureEnabled(key: FeatureFlagKey): Promise<boolean> {
 /** Test/dev helper — clears the in-process cache between assertions. */
 export function _resetFeatureFlagCache() {
   cache.clear();
+}
+
+export interface FeatureFlagSummary {
+  key: string;
+  description: string;
+  enabled: boolean;
+  updatedAt: Date;
+}
+
+/**
+ * Admin console's feature-flags screen (Session 03). Public read, same as
+ * isFeatureEnabled() — flags are switches for functionality, not secrets.
+ */
+export async function listFeatureFlags(): Promise<FeatureFlagSummary[]> {
+  return withRls({}, (tx) => tx.featureFlag.findMany({ orderBy: { key: "asc" } }));
+}
+
+/**
+ * Requires flags.manage — see docs/FEATURE_FLAGS.md and the
+ * feature_flags_update RLS policy (20260826140000_admin_feature_flags_
+ * permission), which this mirrors at the application layer. Only ever
+ * toggles `enabled` on an existing row; adding/removing a flag key is a
+ * code change (FEATURE_FLAGS + the seed task), not a runtime action.
+ */
+export async function setFeatureFlag(key: FeatureFlagKey, enabled: boolean, actor: AuthzActor): Promise<void> {
+  requirePermission(actor, PERMISSIONS.FLAGS_MANAGE);
+
+  await withRls(
+    { userId: actor.id, isSuperAdmin: actor.isSuperAdmin, permissions: [...actor.permissions] },
+    (tx) => tx.featureFlag.update({ where: { key }, data: { enabled } })
+  );
+
+  cache.delete(key);
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "feature_flag.updated",
+    entityType: "FeatureFlag",
+    entityId: key,
+    metadata: { enabled },
+  });
 }

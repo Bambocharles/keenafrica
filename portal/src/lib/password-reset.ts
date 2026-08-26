@@ -32,8 +32,19 @@ export interface RequestPasswordResetResult {
  * both "no such account" and "account exists" so a caller can render an
  * identical "if that address exists, we've sent a link" message and avoid
  * leaking account existence to an unauthenticated caller.
+ *
+ * `triggeredByActorId` is set ONLY by an already-authorized caller acting on
+ * someone else's behalf (Session 03's admin-triggered "reset this user's
+ * password" action) — it has no bearing on authorization here (this
+ * function is intentionally callable pre-auth, e.g. a future public
+ * "forgot password" flow) but is recorded on the audit event so "an admin
+ * triggered this" is distinguishable from "the user requested their own
+ * reset."
  */
-export async function requestPasswordReset(email: string): Promise<RequestPasswordResetResult> {
+export async function requestPasswordReset(
+  email: string,
+  triggeredByActorId?: string
+): Promise<RequestPasswordResetResult> {
   const user = await withRls({ authLookup: true }, (tx) =>
     tx.user.findUnique({ where: { email }, select: { id: true, status: true } })
   );
@@ -51,10 +62,11 @@ export async function requestPasswordReset(email: string): Promise<RequestPasswo
   );
 
   await recordAuditEvent({
-    actorId: user.id,
+    actorId: triggeredByActorId ?? user.id,
     action: "password_reset.requested",
     entityType: "User",
     entityId: user.id,
+    metadata: triggeredByActorId ? { triggeredByAdmin: true } : undefined,
   });
 
   return { token: rawToken };

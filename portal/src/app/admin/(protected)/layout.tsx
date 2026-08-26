@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
+import { canAccessAdminConsole, hasPermission, PERMISSIONS } from "@/lib/authz";
+import { TopbarTitle } from "./TopbarTitle";
+import { NavLinks } from "./NavLinks";
 import styles from "./layout.module.css";
 
 function initials(name: string | null | undefined, email: string | null | undefined) {
@@ -16,7 +19,13 @@ export default async function ProtectedAdminLayout({
   children: ReactNode;
 }) {
   const session = await auth();
-  if (!session?.user?.isSuperAdmin) {
+  // Extended off the old isSuperAdmin-only gate (Session 03) onto Session
+  // 02's Role/Permission model — this is only the coarse "can see the
+  // console shell" check. Every page/action inside still enforces its own
+  // requirePermission()/requireOwnResourceOrPermission(), so a
+  // TROUBLESHOOTER (say) reaching this layout does not imply it can do
+  // anything beyond its actual, narrower permission set.
+  if (!session?.user || !canAccessAdminConsole(session.user)) {
     redirect("/login");
   }
   const user = session.user;
@@ -29,20 +38,10 @@ export default async function ProtectedAdminLayout({
           Keen Africa
         </a>
 
-        <nav className={styles.nav}>
-          <a href="/dashboard" className={`${styles.navLink} ${styles.navLinkActive}`}>
-            <span className={styles.navIcon}>&#9638;</span>
-            Dashboard
-          </a>
-          <a href="/dashboard#sponsors" className={styles.navLink}>
-            <span className={styles.navIcon}>&#9678;</span>
-            Sponsors
-          </a>
-          <a href="/dashboard#projects" className={styles.navLink}>
-            <span className={styles.navIcon}>&#9636;</span>
-            Projects
-          </a>
-        </nav>
+        <NavLinks
+          showUsers={hasPermission(user, PERMISSIONS.USERS_READ)}
+          showAudit={hasPermission(user, PERMISSIONS.AUDIT_READ)}
+        />
 
         <div className={styles.foot}>
           <div className={styles.footRow}>
@@ -67,7 +66,7 @@ export default async function ProtectedAdminLayout({
 
       <div className={styles.main}>
         <header className={styles.topbar}>
-          <h1 className={styles.topbarTitle}>Dashboard</h1>
+          <TopbarTitle />
           <div className={styles.avatar} title={user.email ?? undefined}>
             {initials(user.name, user.email)}
           </div>

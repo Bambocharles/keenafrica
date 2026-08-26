@@ -77,3 +77,10 @@ Actions → Deploy Portal → Run workflow.
   (re)populate roles/permissions/super-admin in production. See
   `docs/ENVIRONMENT.md`'s `SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD` row
   for the one-time secret setup.
+
+## Admin console (Session 03)
+
+- **Routes/permissions/audit actions/APIs** — `docs/ADMIN_CONSOLE.md`
+  (`src/app/admin/(protected)/{users,audit,flags}/**`,
+  `src/lib/admin-stats.ts`). Extends Session 02's Role/Permission model —
+  the `(protected)` layout guard is no longer `isSuperAdmin`-only.

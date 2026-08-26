@@ -87,6 +87,10 @@
   background: var(--warning-bg);
   color: var(--warning-ink);
 }
+.badge-suspended {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
 
 /* Card */
 .card {
@@ -293,6 +297,62 @@
   }
 }
 
+/* Role tag (small neutral pill, distinct from StatusBadge's tone system) */
+.roleTag {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--neutral-bg);
+  color: var(--neutral-ink);
+  margin: 0 4px 4px 0;
+}
+
+/* Filter bar (search/select controls above a table) */
+.filterBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+  padding: 14px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.filterBar .field {
+  min-width: 160px;
+}
+
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+.pagination a,
+.pagination span.disabled {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 12.5px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  text-decoration: none;
+  color: var(--ink);
+}
+.pagination span.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Inline error / message banner */
 .banner {
   padding: 11px 14px;
@@ -308,4 +368,9 @@
   background: var(--danger-bg);
   color: var(--danger-ink);
   border: 1px solid var(--danger-border);
+}
+.banner-success {
+  background: var(--success-bg);
+  color: var(--success-ink);
+  border: 1px solid var(--success-ink);
 }

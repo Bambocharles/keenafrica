@@ -153,6 +153,31 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
     expect(rows.length).toBeGreaterThan(0);
   });
 
+  it("feature_flags_update: toggling a flag fails without flags.manage, succeeds with it (Session 03)", async () => {
+    const setup = new PrismaClient();
+    const flag = await setup.featureFlag.findFirstOrThrow();
+    await setup.$disconnect();
+
+    // No relationship to the flag and no flags.manage — RLS silently
+    // filters the UPDATE's WHERE clause to zero matching rows.
+    await expect(
+      asContext({ userId: userA.id }, (tx) =>
+        tx.featureFlag.update({ where: { key: flag.key }, data: { enabled: !flag.enabled } })
+      )
+    ).rejects.toThrow(); // Prisma throws P2025 when RLS hides the target row
+
+    const updated = await asContext({ userId: userA.id, permissions: ["flags.manage"] }, (tx) =>
+      tx.featureFlag.update({ where: { key: flag.key }, data: { enabled: !flag.enabled } })
+    );
+    expect(updated.enabled).toBe(!flag.enabled);
+
+    // Restore original state — this suite must not leak changes to a
+    // table other suites/seed data depend on.
+    const restore = new PrismaClient();
+    await restore.featureFlag.update({ where: { key: flag.key }, data: { enabled: flag.enabled } });
+    await restore.$disconnect();
+  });
+
   it("audit_events: there is no UPDATE or DELETE policy — both fail even for super_admin", async () => {
     const [event] = await asContext({ userId: userA.id, permissions: ["audit.read"] }, (tx) =>
       tx.auditEvent.findMany({ where: { entityId: userA.id }, take: 1 })

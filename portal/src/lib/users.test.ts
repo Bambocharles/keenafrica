@@ -5,6 +5,8 @@ import { createSession, resolveSessionAuthz } from "@/lib/sessions";
 import {
   assignRole,
   createUser,
+  getUserById,
+  listUsers,
   reinstateUser,
   removeRole,
   suspendUser,
@@ -196,5 +198,85 @@ describe("assignRole / removeRole — authorization boundary + audit", () => {
 
     const roles = await prisma.userRole.findMany({ where: { userId: target.id } });
     expect(roles).toHaveLength(1);
+  });
+});
+
+describe("listUsers — authorization boundary + filtering (Session 03)", () => {
+  it("requires users.read", async () => {
+    const stranger = await user();
+    const strangerActor = await actorFromUser(stranger.id);
+
+    await expect(listUsers({}, strangerActor)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("a users.read holder can list users, and the role filter narrows results", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const teacher = await user({ roles: ["TEACHER"] });
+
+    const all = await listUsers({}, adminActor);
+    expect(all.users.map((u) => u.id)).toContain(teacher.id);
+    expect(all.users.map((u) => u.id)).toContain(admin.id);
+
+    const teachersOnly = await listUsers({ role: "TEACHER" }, adminActor);
+    expect(teachersOnly.users.map((u) => u.id)).toContain(teacher.id);
+    expect(teachersOnly.users.map((u) => u.id)).not.toContain(admin.id);
+  });
+
+  it("the status filter narrows to suspended accounts only", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const suspended = await user({ status: "suspended" });
+    const active = await user({ status: "active" });
+
+    const result = await listUsers({ status: "suspended" }, adminActor);
+    expect(result.users.map((u) => u.id)).toContain(suspended.id);
+    expect(result.users.map((u) => u.id)).not.toContain(active.id);
+  });
+
+  it("the search filter matches name or email (case-insensitive substring)", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const target = await user();
+    await prisma.user.update({ where: { id: target.id }, data: { name: "Zephyrine Uncommon Name" } });
+
+    const result = await listUsers({ search: "zephyrine" }, adminActor);
+    expect(result.users.map((u) => u.id)).toEqual([target.id]);
+  });
+
+  it("pagination reports total independent of page size and returns the requested page", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    for (let i = 0; i < 3; i++) await user({ roles: ["STUDENT"] });
+
+    const page1 = await listUsers({ role: "STUDENT", page: 1, pageSize: 2 }, adminActor);
+    expect(page1.users).toHaveLength(2);
+    expect(page1.total).toBeGreaterThanOrEqual(3);
+
+    const page2 = await listUsers({ role: "STUDENT", page: 2, pageSize: 2 }, adminActor);
+    expect(page2.users.length).toBeGreaterThan(0);
+    expect(new Set(page1.users.map((u) => u.id))).not.toEqual(new Set(page2.users.map((u) => u.id)));
+  });
+});
+
+describe("getUserById — authorization boundary", () => {
+  it("requires users.read", async () => {
+    const stranger = await user();
+    const target = await user();
+    const strangerActor = await actorFromUser(stranger.id);
+
+    await expect(getUserById(target.id, strangerActor)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("returns the user's roles for a users.read holder, and null for a nonexistent id", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const target = await user({ roles: ["TEACHER"] });
+
+    const found = await getUserById(target.id, adminActor);
+    expect(found?.roles).toEqual(["TEACHER"]);
+
+    const missing = await getUserById("00000000-0000-0000-0000-000000000000", adminActor);
+    expect(missing).toBeNull();
   });
 });

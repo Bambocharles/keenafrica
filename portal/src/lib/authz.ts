@@ -36,6 +36,10 @@ export const PERMISSIONS = {
   SESSIONS_READ: "sessions.read",
   SESSIONS_REVOKE: "sessions.revoke",
   AUDIT_READ: "audit.read",
+  // Added by Session 03 (Admin) — Session 01's feature_flags table shipped
+  // super-admin-only write with this key explicitly anticipated for the
+  // admin UI over it (see docs/FEATURE_FLAGS.md "Toggling a flag today").
+  FLAGS_MANAGE: "flags.manage",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
@@ -68,6 +72,29 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   SPONSOR_ADMIN: [],
   SPONSOR_USER: [],
 };
+
+/**
+ * Roles that may reach the admin console shell at all
+ * (`src/app/admin/(protected)/layout.tsx`). This is the coarse "can see the
+ * console" gate only — every page/action inside still enforces its own
+ * requirePermission()/requireOwnResourceOrPermission() check, per
+ * CLAUDE_BUILD_RULES.md §5 ("a user must not gain access merely because a
+ * UI route is hidden"). TROUBLESHOOTER is intentionally included here (it's
+ * a diagnostic console role) even though it holds far fewer permissions
+ * than ADMIN.
+ */
+export const ADMIN_CONSOLE_ROLES: readonly RoleName[] = ["SUPER_ADMIN", "ADMIN", "TROUBLESHOOTER"];
+
+/** The minimal shape a session needs for the admin-console entry check. */
+export interface AdminConsoleActor {
+  isSuperAdmin: boolean;
+  roles: readonly string[];
+}
+
+export function canAccessAdminConsole(actor: AdminConsoleActor | null | undefined): boolean {
+  if (!actor) return false;
+  return actor.isSuperAdmin || actor.roles.some((r) => (ADMIN_CONSOLE_ROLES as readonly string[]).includes(r));
+}
 
 /** The minimal shape any caller (session.user, a test fixture) needs. */
 export interface AuthzActor {

@@ -12,6 +12,9 @@ import { recordAuditEvent } from "@/lib/audit";
 import { revokeAllUserSessionsAsSystem } from "@/lib/sessions";
 import { emitDomainEvent } from "@/lib/events";
 
+const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 20;
+
 function actorRlsCtx(actor: AuthzActor) {
   return { userId: actor.id, isSuperAdmin: actor.isSuperAdmin, permissions: [...actor.permissions] };
 }
@@ -186,4 +189,132 @@ export async function removeRole(targetUserId: string, roleName: RoleName, actor
     metadata: { role: roleName },
   });
   emitDomainEvent("RoleChanged", { userId: targetUserId, actorId: actor.id });
+}
+
+export interface UserSummary {
+  id: string;
+  email: string;
+  name: string;
+  status: "active" | "suspended";
+  isSuperAdmin: boolean;
+  roles: string[];
+  createdAt: Date;
+  suspendedAt: Date | null;
+}
+
+export interface ListUsersFilter {
+  /** Filter to users holding this role. Omit for every role. */
+  role?: RoleName;
+  status?: "active" | "suspended";
+  /** Case-insensitive substring match against name or email. */
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ListUsersResult {
+  users: UserSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * Admin console's user directory (Session 03) — search/filter/pagination
+ * over the canonical User table, built on top of Session 02's Role/
+ * Permission model. Requires users.read; this is a read surface, so no
+ * ownership bypass (contrast with updateUserProfile/listSessions) — an
+ * unprivileged caller has no legitimate reason to enumerate every account.
+ */
+export async function listUsers(filter: ListUsersFilter, actor: AuthzActor): Promise<ListUsersResult> {
+  requirePermission(actor, PERMISSIONS.USERS_READ);
+
+  const page = Math.max(1, filter.page ?? 1);
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, filter.pageSize ?? DEFAULT_PAGE_SIZE));
+  const search = filter.search?.trim();
+
+  const where = {
+    ...(filter.status ? { status: filter.status } : {}),
+    ...(filter.role ? { userRoles: { some: { role: { name: filter.role } } } } : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" as const } },
+            { email: { contains: search, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+  };
+
+  const { rows, total } = await withRls(actorRlsCtx(actor), async (tx) => {
+    const [rows, total] = await Promise.all([
+      tx.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          isSuperAdmin: true,
+          createdAt: true,
+          suspendedAt: true,
+          userRoles: { select: { role: { select: { name: true } } } },
+        },
+      }),
+      tx.user.count({ where }),
+    ]);
+    return { rows, total };
+  });
+
+  return {
+    users: rows.map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      status: u.status,
+      isSuperAdmin: u.isSuperAdmin,
+      roles: u.userRoles.map((ur) => ur.role.name),
+      createdAt: u.createdAt,
+      suspendedAt: u.suspendedAt,
+    })),
+    total,
+    page,
+    pageSize,
+  };
+}
+
+/** Requires users.read. Returns null if the user doesn't exist. */
+export async function getUserById(targetUserId: string, actor: AuthzActor): Promise<UserSummary | null> {
+  requirePermission(actor, PERMISSIONS.USERS_READ);
+
+  const u = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.user.findUnique({
+      where: { id: targetUserId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        status: true,
+        isSuperAdmin: true,
+        createdAt: true,
+        suspendedAt: true,
+        userRoles: { select: { role: { select: { name: true } } } },
+      },
+    })
+  );
+  if (!u) return null;
+
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    status: u.status,
+    isSuperAdmin: u.isSuperAdmin,
+    roles: u.userRoles.map((ur) => ur.role.name),
+    createdAt: u.createdAt,
+    suspendedAt: u.suspendedAt,
+  };
 }

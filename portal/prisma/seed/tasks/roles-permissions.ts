@@ -26,6 +26,7 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.SESSIONS_READ]: "View another user's active sessions.",
   [PERMISSIONS.SESSIONS_REVOKE]: "Revoke another user's session(s).",
   [PERMISSIONS.AUDIT_READ]: "Read the security/audit event log.",
+  [PERMISSIONS.FLAGS_MANAGE]: "Toggle feature flags on/off.",
 };
 
 /**

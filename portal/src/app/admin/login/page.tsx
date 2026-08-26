@@ -1,21 +1,22 @@
 import { redirect } from "next/navigation";
 import { AuthError } from "next-auth";
 import { auth, signIn } from "@/lib/auth";
+import { canAccessAdminConsole } from "@/lib/authz";
 import styles from "./login.module.css";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; reset?: string }>;
 }) {
   const session = await auth();
-  if (session?.user?.isSuperAdmin) {
+  if (canAccessAdminConsole(session?.user)) {
     // Relative to this subdomain - middleware prepends "/admin" on the
     // fresh request this redirect triggers. An absolute "/admin/..." path
     // here would get double-prefixed into a route that doesn't exist.
     redirect("/dashboard");
   }
-  const { error } = await searchParams;
+  const { error, reset } = await searchParams;
 
   async function login(formData: FormData) {
     "use server";
@@ -50,6 +51,11 @@ export default async function LoginPage({
         {error && (
           <div className={styles.error} role="alert">
             Invalid email or password. Check both and try again.
+          </div>
+        )}
+        {reset === "1" && !error && (
+          <div className={styles.error} role="status" style={{ background: "rgba(63, 182, 143, 0.14)", borderColor: "rgba(63, 182, 143, 0.35)", color: "#5fce9e" }}>
+            Password updated. Sign in with your new password.
           </div>
         )}
 

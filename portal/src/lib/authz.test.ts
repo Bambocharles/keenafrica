@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AuthorizationError,
   PERMISSIONS,
+  canAccessAdminConsole,
   canActOnOwnResource,
   hasPermission,
   requireOwnResourceOrPermission,
@@ -71,5 +72,27 @@ describe("canActOnOwnResource / requireOwnResourceOrPermission", () => {
   it("allows a non-owner who holds the permission", () => {
     const a = actor({ id: "user-1", permissions: [PERMISSIONS.SESSIONS_REVOKE] });
     expect(canActOnOwnResource(a, "user-2", PERMISSIONS.SESSIONS_REVOKE)).toBe(true);
+  });
+});
+
+describe("canAccessAdminConsole — the admin-console-shell entry gate", () => {
+  it("is false for no session", () => {
+    expect(canAccessAdminConsole(null)).toBe(false);
+    expect(canAccessAdminConsole(undefined)).toBe(false);
+  });
+
+  it("is false for a role with no admin-console standing (e.g. TEACHER/STUDENT)", () => {
+    expect(canAccessAdminConsole({ isSuperAdmin: false, roles: ["TEACHER"] })).toBe(false);
+    expect(canAccessAdminConsole({ isSuperAdmin: false, roles: ["STUDENT", "SPONSOR_USER"] })).toBe(false);
+    expect(canAccessAdminConsole({ isSuperAdmin: false, roles: [] })).toBe(false);
+  });
+
+  it("is true for ADMIN or TROUBLESHOOTER even without isSuperAdmin", () => {
+    expect(canAccessAdminConsole({ isSuperAdmin: false, roles: ["ADMIN"] })).toBe(true);
+    expect(canAccessAdminConsole({ isSuperAdmin: false, roles: ["TROUBLESHOOTER"] })).toBe(true);
+  });
+
+  it("is true for isSuperAdmin regardless of role labels", () => {
+    expect(canAccessAdminConsole({ isSuperAdmin: true, roles: [] })).toBe(true);
   });
 });

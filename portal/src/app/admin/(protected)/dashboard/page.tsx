@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { withRls } from "@/lib/rls";
+import { getSystemStatus } from "@/lib/admin-stats";
 import { createSponsor, createProject } from "../sponsors/actions";
 import {
   Button,
+  Card,
   Disclosure,
   EmptyState,
   Field,
@@ -37,8 +39,15 @@ export default async function DashboardPage() {
   }
   const user = session.user;
 
+  // Was hardcoded `isSuperAdmin: true` regardless of the actual caller —
+  // silently gave every admin-console visitor a full RLS bypass on this
+  // query the moment the layout guard above stopped being isSuperAdmin-only
+  // (see layout.tsx). Sponsor/project data has no permission model of its
+  // own yet (Sponsor Core is Session 11's scope) — the real access boundary
+  // for non-super-admins is `projects_select`'s `status = 'active'` RLS
+  // policy, not an app-layer bypass.
   const { sponsors, projects } = await withRls(
-    { userId: user.id, isSuperAdmin: true },
+    { userId: user.id, isSuperAdmin: user.isSuperAdmin, permissions: [...user.permissions] },
     async (tx) => ({
       sponsors: await tx.sponsor.findMany({
         orderBy: { createdAt: "desc" },
@@ -51,10 +60,55 @@ export default async function DashboardPage() {
     })
   );
 
+  const status = await getSystemStatus(user);
+
   const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
 
   return (
     <div style={{ display: "grid", gap: "40px" }}>
+      <section id="status">
+        <SectionHeader title="System status" count={status.usersActive + status.usersSuspended} />
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: "12px",
+          }}
+        >
+          <Card style={{ padding: "16px" }}>
+            <div className={ui.sectionCount} style={{ fontSize: 11 }}>Users</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{status.usersActive}</div>
+            <div className={ui.mono} style={{ marginTop: 4 }}>
+              {status.usersSuspended} suspended
+            </div>
+          </Card>
+          <Card style={{ padding: "16px" }}>
+            <div className={ui.sectionCount} style={{ fontSize: 11 }}>Active sessions</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{status.activeSessions}</div>
+          </Card>
+          <Card style={{ padding: "16px" }}>
+            <div className={ui.sectionCount} style={{ fontSize: 11 }}>Feature flags on</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>
+              {status.featureFlagsEnabled}/{status.featureFlagsTotal}
+            </div>
+          </Card>
+          <Card style={{ padding: "16px" }}>
+            <div className={ui.sectionCount} style={{ fontSize: 11 }}>Sponsors / Projects</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>
+              {status.sponsors}/{status.projects}
+            </div>
+          </Card>
+        </div>
+      </section>
+
+      <section id="education">
+        <SectionHeader title="Education management" count={0} />
+        <EmptyState
+          title="Owned by Session 04 (Education Core)"
+          hint="Courses, cohorts, modules, lessons, and assessments will surface here once Education Core exists. This is a placeholder entry point, not a built feature."
+        />
+      </section>
+
       <section id="sponsors">
         <SectionHeader title="Sponsors" count={sponsors.length} />
 
@@ -84,18 +138,20 @@ export default async function DashboardPage() {
           </Table>
         )}
 
-        <Disclosure label="New sponsor">
-          <form action={createSponsor} style={{ display: "contents" }}>
-            <Field label="Sponsor name" className={ui.fieldWide}>
-              <Input name="name" placeholder="e.g. Febambo Youth Elevate" required />
-            </Field>
-            <div className={ui.disclosureActions}>
-              <Button type="submit" variant="primary">
-                Add sponsor
-              </Button>
-            </div>
-          </form>
-        </Disclosure>
+        {user.isSuperAdmin && (
+          <Disclosure label="New sponsor">
+            <form action={createSponsor} style={{ display: "contents" }}>
+              <Field label="Sponsor name" className={ui.fieldWide}>
+                <Input name="name" placeholder="e.g. Febambo Youth Elevate" required />
+              </Field>
+              <div className={ui.disclosureActions}>
+                <Button type="submit" variant="primary">
+                  Add sponsor
+                </Button>
+              </div>
+            </form>
+          </Disclosure>
+        )}
       </section>
 
       <section id="projects">
@@ -140,38 +196,40 @@ export default async function DashboardPage() {
           </Table>
         )}
 
-        <Disclosure label="New project">
-          <form action={createProject} style={{ display: "contents" }}>
-            <Field label="Project name">
-              <Input name="name" placeholder="e.g. Anthropic Skill Up" required />
-            </Field>
-            <Field label="Subdomain">
-              <Input
-                name="slug"
-                placeholder="anthropicskillup"
-                pattern="[a-z0-9-]{3,40}"
-                required
-              />
-            </Field>
-            <Field label="Sponsor" className={ui.fieldWide}>
-              <Select name="sponsorId" required defaultValue="">
-                <option value="" disabled>
-                  Select sponsor
-                </option>
-                {sponsors.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
+        {user.isSuperAdmin && (
+          <Disclosure label="New project">
+            <form action={createProject} style={{ display: "contents" }}>
+              <Field label="Project name">
+                <Input name="name" placeholder="e.g. Anthropic Skill Up" required />
+              </Field>
+              <Field label="Subdomain">
+                <Input
+                  name="slug"
+                  placeholder="anthropicskillup"
+                  pattern="[a-z0-9-]{3,40}"
+                  required
+                />
+              </Field>
+              <Field label="Sponsor" className={ui.fieldWide}>
+                <Select name="sponsorId" required defaultValue="">
+                  <option value="" disabled>
+                    Select sponsor
                   </option>
-                ))}
-              </Select>
-            </Field>
-            <div className={ui.disclosureActions}>
-              <Button type="submit" variant="primary">
-                Create project
-              </Button>
-            </div>
-          </form>
-        </Disclosure>
+                  {sponsors.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <div className={ui.disclosureActions}>
+                <Button type="submit" variant="primary">
+                  Create project
+                </Button>
+              </div>
+            </form>
+          </Disclosure>
+        )}
       </section>
     </div>
   );

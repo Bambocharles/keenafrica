@@ -39,17 +39,18 @@ runtime without a redeploy — that defeats the point. `FEATURE_FLAG_OVERRIDES`
 running the app before a `feature_flags` table exists locally; it is not a
 second flag mechanism.
 
-## Toggling a flag today
+## Toggling a flag
 
-There's no admin UI for this yet (Session 03 — Admin — owns that surface).
-Until then, toggle directly:
+Session 03 built the admin UI: `/flags` in the admin console, gated by the
+`flags.manage` permission (`src/lib/feature-flags.ts`'s `setFeatureFlag()`,
+`src/app/admin/(protected)/flags/**`). See `docs/ADMIN_CONSOLE.md`.
+
+Direct SQL still works as a fallback (e.g. no admin account provisioned
+yet in a fresh environment):
 
 ```sql
 UPDATE feature_flags SET enabled = true WHERE key = 'messaging';
 ```
-
-Session 03 should add an authorized (`flags.manage`-permission-gated) admin
-screen over this same table rather than inventing a parallel config store.
 
 ## Current flags
 

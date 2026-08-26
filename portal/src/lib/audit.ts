@@ -1,4 +1,8 @@
 import { withRls } from "@/lib/rls";
+import { PERMISSIONS, requirePermission, type AuthzActor } from "@/lib/authz";
+
+const MAX_PAGE_SIZE = 200;
+const DEFAULT_PAGE_SIZE = 50;
 
 /**
  * Append-only security/audit log — PLATFORM_DATA_MODEL.md's AuditEvent.
@@ -45,4 +49,87 @@ export async function recordAuditEvent(input: AuditEventInput): Promise<void> {
       )
     `
   );
+}
+
+export interface AuditEventSummary {
+  id: string;
+  actorId: string | null;
+  actorEmail: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  metadata: unknown;
+  ipAddress: string | null;
+  createdAt: Date;
+}
+
+export interface ListAuditEventsFilter {
+  action?: string;
+  entityType?: string;
+  entityId?: string;
+  actorId?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ListAuditEventsResult {
+  events: AuditEventSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * Admin console's security/audit view (Session 03). Requires audit.read —
+ * the audit_events table has no ownership concept (it records actions
+ * *about* the platform, not a per-user resource), so there is no
+ * self-service read path here, unlike listSessions/updateUserProfile.
+ */
+export async function listAuditEvents(
+  filter: ListAuditEventsFilter,
+  actor: AuthzActor
+): Promise<ListAuditEventsResult> {
+  requirePermission(actor, PERMISSIONS.AUDIT_READ);
+
+  const page = Math.max(1, filter.page ?? 1);
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, filter.pageSize ?? DEFAULT_PAGE_SIZE));
+
+  const where = {
+    ...(filter.action ? { action: filter.action } : {}),
+    ...(filter.entityType ? { entityType: filter.entityType } : {}),
+    ...(filter.entityId ? { entityId: filter.entityId } : {}),
+    ...(filter.actorId ? { actorId: filter.actorId } : {}),
+  };
+
+  const rlsCtx = { userId: actor.id, isSuperAdmin: actor.isSuperAdmin, permissions: [...actor.permissions] };
+
+  const [rows, total] = await withRls(rlsCtx, (tx) =>
+    Promise.all([
+      tx.auditEvent.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { actor: { select: { email: true } } },
+      }),
+      tx.auditEvent.count({ where }),
+    ])
+  );
+
+  return {
+    events: rows.map((e) => ({
+      id: e.id,
+      actorId: e.actorId,
+      actorEmail: e.actor?.email ?? null,
+      action: e.action,
+      entityType: e.entityType,
+      entityId: e.entityId,
+      metadata: e.metadata,
+      ipAddress: e.ipAddress,
+      createdAt: e.createdAt,
+    })),
+    total,
+    page,
+    pageSize,
+  };
 }

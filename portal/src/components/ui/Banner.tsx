@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import styles from "./styles.module.css";
 
-export function Banner({ children }: { children: ReactNode }) {
-  return <div className={[styles.banner, styles["banner-danger"]].join(" ")}>{children}</div>;
+type Variant = "danger" | "success";
+
+export function Banner({ children, variant = "danger" }: { children: ReactNode; variant?: Variant }) {
+  return <div className={[styles.banner, styles[`banner-${variant}`]].join(" ")}>{children}</div>;
 }
