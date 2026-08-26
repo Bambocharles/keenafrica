@@ -5,6 +5,7 @@ import { createSession, resolveSessionAuthz } from "@/lib/sessions";
 import {
   assignRole,
   createUser,
+  getOwnProfile,
   getUserById,
   listUsers,
   reinstateUser,
@@ -64,6 +65,36 @@ describe("createUser — authorization boundary", () => {
     await expect(
       createUser({ email: `noroles-${Date.now()}@example.com`, name: "X", password: "x", roles: [] }, adminActor)
     ).rejects.toThrow(/role/i);
+  });
+});
+
+describe("getOwnProfile — self-scoped read, no permission required", () => {
+  it("returns the caller's own fresh row even with no users.read (e.g. a plain TEACHER/STUDENT)", async () => {
+    const u = await user({ roles: ["TEACHER"] });
+    const actor = await actorFromUser(u.id);
+
+    const profile = await getOwnProfile(actor);
+    expect(profile).toEqual({ id: u.id, email: u.email, name: u.name });
+  });
+
+  it("reflects a just-applied update immediately (the case this closes: a stale session-cached name)", async () => {
+    const u = await user();
+    const actor = await actorFromUser(u.id);
+
+    await updateUserProfile(u.id, { name: "Freshly Updated" }, actor);
+
+    const profile = await getOwnProfile(actor);
+    expect(profile?.name).toBe("Freshly Updated");
+  });
+
+  it("cannot be used to read another user's row — actor.id is the only id ever queried", async () => {
+    const owner = await user();
+    const stranger = await user();
+    const strangerActor = await actorFromUser(stranger.id);
+
+    const profile = await getOwnProfile(strangerActor);
+    expect(profile?.id).toBe(stranger.id);
+    expect(profile?.id).not.toBe(owner.id);
   });
 });
 

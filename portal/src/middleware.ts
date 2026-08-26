@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 const ROOT_DOMAIN = process.env.ROOT_DOMAIN ?? "keenafrica.com";
 const RESERVED_SLUGS = new Set([
   "admin",
+  "teacher",
   "www",
   "api",
   "app",
@@ -31,6 +32,16 @@ export function middleware(req: NextRequest) {
   if (subdomain === "admin") {
     const url = req.nextUrl.clone();
     url.pathname = `/admin${pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  // Session 05 (Teacher) — mirrors the "admin" branch above. teacher.<root>
+  // serves src/app/teacher/** the same way admin.<root> serves
+  // src/app/admin/**. Session 06 (Student) is expected to add its own
+  // "student" branch the same way, in parallel — see RESERVED_SLUGS below.
+  if (subdomain === "teacher") {
+    const url = req.nextUrl.clone();
+    url.pathname = `/teacher${pathname}`;
     return NextResponse.rewrite(url);
   }
 

@@ -286,6 +286,23 @@ export async function listUsers(filter: ListUsersFilter, actor: AuthzActor): Pro
   };
 }
 
+/**
+ * Self-scoped profile read — no permission required, since the target is
+ * always the caller's own id (never a parameter an attacker could swap).
+ * Fills the gap Session 03's handoff flagged: getUserById()/listUsers() are
+ * gated on users.read with no ownership bypass, which every
+ * ADMIN_CONSOLE_ROLES role holds but a plain TEACHER/STUDENT does not — a
+ * teacher self-editing their own display name still needs a fresh read of
+ * their own row (the JWT session's `name` claim is set at login and never
+ * refreshed, unlike roles/permissions/isSuperAdmin — see auth.ts's jwt
+ * callback), and users.read is the wrong permission to require for that.
+ */
+export async function getOwnProfile(actor: AuthzActor): Promise<{ id: string; email: string; name: string } | null> {
+  return withRls(actorRlsCtx(actor), (tx) =>
+    tx.user.findUnique({ where: { id: actor.id }, select: { id: true, email: true, name: true } })
+  );
+}
+
 /** Requires users.read. Returns null if the user doesn't exist. */
 export async function getUserById(targetUserId: string, actor: AuthzActor): Promise<UserSummary | null> {
   requirePermission(actor, PERMISSIONS.USERS_READ);

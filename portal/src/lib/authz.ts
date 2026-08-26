@@ -117,6 +117,20 @@ export function canAccessAdminConsole(actor: AdminConsoleActor | null | undefine
   return actor.isSuperAdmin || actor.roles.some((r) => (ADMIN_CONSOLE_ROLES as readonly string[]).includes(r));
 }
 
+/**
+ * Session 05 (Teacher) — the coarse "can see the teacher workspace shell"
+ * gate, same shape as canAccessAdminConsole(). Only TEACHER (plus the
+ * isSuperAdmin bypass, for support/debugging) may reach it — this is not a
+ * substitute for the ownership-scoped checks in courses.ts/content.ts, which
+ * every page/action inside the workspace still enforces per course/cohort.
+ */
+export const TEACHER_PORTAL_ROLES: readonly RoleName[] = ["TEACHER"];
+
+export function canAccessTeacherPortal(actor: AdminConsoleActor | null | undefined): boolean {
+  if (!actor) return false;
+  return actor.isSuperAdmin || actor.roles.some((r) => (TEACHER_PORTAL_ROLES as readonly string[]).includes(r));
+}
+
 /** The minimal shape any caller (session.user, a test fixture) needs. */
 export interface AuthzActor {
   id: string;

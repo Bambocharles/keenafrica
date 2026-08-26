@@ -3,6 +3,7 @@ import {
   AuthorizationError,
   PERMISSIONS,
   canAccessAdminConsole,
+  canAccessTeacherPortal,
   canActOnOwnResource,
   hasPermission,
   requireOwnResourceOrPermission,
@@ -94,5 +95,26 @@ describe("canAccessAdminConsole — the admin-console-shell entry gate", () => {
 
   it("is true for isSuperAdmin regardless of role labels", () => {
     expect(canAccessAdminConsole({ isSuperAdmin: true, roles: [] })).toBe(true);
+  });
+});
+
+describe("canAccessTeacherPortal — the teacher-workspace-shell entry gate (Session 05)", () => {
+  it("is false for no session", () => {
+    expect(canAccessTeacherPortal(null)).toBe(false);
+    expect(canAccessTeacherPortal(undefined)).toBe(false);
+  });
+
+  it("is false for a role with no teacher-workspace standing (e.g. STUDENT/ADMIN)", () => {
+    expect(canAccessTeacherPortal({ isSuperAdmin: false, roles: ["STUDENT"] })).toBe(false);
+    expect(canAccessTeacherPortal({ isSuperAdmin: false, roles: ["ADMIN"] })).toBe(false);
+    expect(canAccessTeacherPortal({ isSuperAdmin: false, roles: [] })).toBe(false);
+  });
+
+  it("is true for TEACHER", () => {
+    expect(canAccessTeacherPortal({ isSuperAdmin: false, roles: ["TEACHER"] })).toBe(true);
+  });
+
+  it("is true for isSuperAdmin regardless of role labels", () => {
+    expect(canAccessTeacherPortal({ isSuperAdmin: true, roles: [] })).toBe(true);
   });
 });
