@@ -193,7 +193,12 @@ export async function getCourseContentForTeacher(courseId: string, actor: AuthzA
       include: {
         modules: {
           orderBy: { order: "asc" },
-          include: { lessons: { orderBy: { order: "asc" }, include: { resources: true } } },
+          include: {
+            lessons: {
+              orderBy: { order: "asc" },
+              include: { resources: true, topics: { include: { topic: true } } },
+            },
+          },
         },
       },
     })
