@@ -2,6 +2,8 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { withRls } from "@/lib/rls";
+import { createSession, resolveSessionAuthz } from "@/lib/sessions";
+import { recordAuditEvent } from "@/lib/audit";
 
 // basePath is "/auth", not the default "/api/auth" — a Cloudflare Worker
 // intercepts keenafrica.com/api/* (and *.keenafrica.com/api/*) at the edge
@@ -27,7 +29,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      authorize: async (credentials) => {
+      authorize: async (credentials, request) => {
         const email = credentials?.email;
         const password = credentials?.password;
         if (typeof email !== "string" || typeof password !== "string") {
@@ -42,26 +44,75 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const valid = await compare(password, user.passwordHash);
         if (!valid) return null;
 
+        // Deny login without distinguishing it from a bad password in the
+        // response — a suspended account shouldn't be discoverable by an
+        // unauthenticated caller any more than a nonexistent one is.
+        if (user.status === "suspended") {
+          await recordAuditEvent({
+            actorId: user.id,
+            action: "login.denied_suspended",
+            entityType: "User",
+            entityId: user.id,
+          });
+          return null;
+        }
+
+        const session = await createSession({
+          userId: user.id,
+          userAgent: request.headers.get("user-agent"),
+          ipAddress: request.headers.get("x-forwarded-for"),
+        });
+
+        await recordAuditEvent({
+          actorId: user.id,
+          action: "login.succeeded",
+          entityType: "User",
+          entityId: user.id,
+          metadata: { sessionId: session.id },
+        });
+
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           isSuperAdmin: user.isSuperAdmin,
+          sessionId: session.id,
         };
       },
     }),
   ],
   callbacks: {
-    jwt: ({ token, user }) => {
+    // Runs on every request that calls auth()/getToken(), not just at
+    // sign-in — this is what makes a JWT-strategy session revocable. It
+    // re-checks the DB-backed Session row (and current roles/permissions/
+    // suspension state) every time and returns null to kill the token the
+    // moment any of that has changed, rather than trusting whatever was
+    // baked in at login.
+    jwt: async ({ token, user }) => {
       if (user) {
-        token.isSuperAdmin = (user as { isSuperAdmin?: boolean }).isSuperAdmin ?? false;
+        token.sessionId = (user as { sessionId?: string }).sessionId;
       }
+      if (!token.sessionId || !token.sub) {
+        return null;
+      }
+
+      const snapshot = await resolveSessionAuthz(token.sessionId, token.sub);
+      if (!snapshot) {
+        return null;
+      }
+
+      token.isSuperAdmin = snapshot.isSuperAdmin;
+      token.roles = snapshot.roles;
+      token.permissions = snapshot.permissions;
       return token;
     },
     session: ({ session, token }) => {
       if (session.user) {
         session.user.id = token.sub as string;
         session.user.isSuperAdmin = Boolean(token.isSuperAdmin);
+        session.user.roles = token.roles ?? [];
+        session.user.permissions = token.permissions ?? [];
+        session.user.sessionId = token.sessionId as string;
       }
       return session;
     },

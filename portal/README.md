@@ -66,3 +66,12 @@ Actions → Deploy Portal → Run workflow.
 - **Feature flags** — `docs/FEATURE_FLAGS.md` (`src/lib/feature-flags.ts`)
 - **Domain events** — `docs/EVENTS.md` (`src/lib/events.ts`)
 - **Seed framework** — `docs/SEED_FRAMEWORK.md` (`prisma/seed/`)
+
+## Identity & Security conventions (Session 02)
+
+- **Roles/permissions/sessions/audit/password-reset** — `docs/IDENTITY_SECURITY.md`
+  (`src/lib/authz.ts`, `src/lib/sessions.ts`, `src/lib/users.ts`,
+  `src/lib/password-reset.ts`, `src/lib/audit.ts`)
+- Includes a critical, unrelated finding from this session's E2E
+  verification: `middleware.ts`'s location appears to break all subdomain
+  routing under the current Next.js version — see that doc's last section.

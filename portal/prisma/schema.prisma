@@ -19,18 +19,143 @@ enum MembershipRole {
   beneficiary
 }
 
-model User {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email         String    @unique @db.Citext
-  passwordHash  String    @map("password_hash")
-  name          String
-  isSuperAdmin  Boolean   @default(false) @map("is_super_admin")
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+enum UserStatus {
+  active
+  suspended
+}
 
-  memberships ProjectMembership[]
+model User {
+  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String     @unique @db.Citext
+  passwordHash  String     @map("password_hash")
+  name          String
+  isSuperAdmin  Boolean    @default(false) @map("is_super_admin")
+  status        UserStatus @default(active)
+  suspendedAt   DateTime?  @map("suspended_at") @db.Timestamptz(6)
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  memberships         ProjectMembership[]
+  userRoles           UserRole[]
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  auditEventsAsActor  AuditEvent[]          @relation("AuditActor")
 
   @@map("users")
+}
+
+// Identity/authorization foundation (Session 02). Additive to the existing
+// isSuperAdmin flag, not a replacement: isSuperAdmin remains the RLS bypass
+// baked into every table's policies (see rls.ts); Role/Permission add
+// finer-grained, least-privilege capability for non-super-admin actors.
+model Role {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique
+  description String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String   @unique
+  description String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+// What a role CAN do. Deliberately writable by super-admin only (see
+// migration RLS comment) — a role holding `roles.manage` may assign
+// existing roles to users, but may not redefine what any role means. That
+// distinction blocks a straightforward privilege-escalation path.
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// Which role(s) a user holds. Many-to-many — a user can be e.g. both
+// TEACHER and SPONSOR_USER.
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  role Role @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// DB-backed session record, checked on every request (see src/lib/sessions.ts
+// and the jwt callback in src/lib/auth.ts). This is what makes JWT-strategy
+// sessions actually revocable: the JWT only ever carries this row's id: the
+// row itself is the source of truth for whether the session is still valid.
+model Session {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  userAgent String?   @map("user_agent")
+  ipAddress String?   @map("ip_address")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedBy String?   @map("revoked_by") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// Single-use, time-limited, hashed-at-rest password reset tokens. The raw
+// token is returned once (to whatever calls requestPasswordReset) and never
+// stored — only its SHA-256 hash is persisted, so a DB read can never
+// recover a usable token.
+model PasswordResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// Append-only. No UPDATE/DELETE RLS policy exists for this table at all —
+// see the migration — so ordinary application code cannot alter or remove
+// an audit record, only insert new ones.
+model AuditEvent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  metadata   Json?
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@map("audit_events")
 }
 
 model Sponsor {

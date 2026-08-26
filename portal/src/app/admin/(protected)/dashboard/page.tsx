@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { withRls } from "@/lib/rls";
 import { createSponsor, createProject } from "../sponsors/actions";
@@ -24,7 +25,17 @@ function formatDate(date: Date) {
 
 export default async function DashboardPage() {
   const session = await auth();
-  const user = session!.user;
+  // Layout and page segments can render concurrently in the App Router, so
+  // this page's own auth() call isn't guaranteed to run after the parent
+  // ProtectedAdminLayout's guard has already redirected — a session that
+  // goes invalid mid-request (revoked/suspended) can reach here with no
+  // session at all. Session 02 (Identity & Security) made this a routine
+  // occurrence rather than a 30-day-JWT-expiry edge case, so the
+  // pre-existing `session!.user` non-null assertion needed this guard.
+  if (!session?.user) {
+    redirect("/login");
+  }
+  const user = session.user;
 
   const { sponsors, projects } = await withRls(
     { userId: user.id, isSuperAdmin: true },

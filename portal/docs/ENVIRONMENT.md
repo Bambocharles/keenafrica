@@ -42,6 +42,7 @@ repo/environment secrets. Never commit real values.
 | `FEATURE_FLAG_OVERRIDES` | no | Local-dev/test-only JSON override for feature flags (see `docs/FEATURE_FLAGS.md`). Do not set in staging/production. |
 | `ALLOW_DEMO_SEED` | no | Must be `true` to allow `npm run seed:demo` to run its demo-kind tasks. See `docs/SEED_FRAMEWORK.md`. |
 | `PORTAL_DATABASE_URL_PROD` | CI only | GitHub Actions secret — the migrator connection string used by `deploy-portal.yml` and `backup-portal-db.yml`. Never exposed to the running application. |
+| `RLS_TEST_DATABASE_URL` | no (local dev only) | Connection string for the non-superuser `portal_rls_test` role (`scripts/dev/create-rls-test-role.sql`) — enables `src/lib/rls.integration.test.ts`, which verifies RLS policies are actually enforced by Postgres rather than bypassed by the superuser connection the default `DATABASE_URL` uses locally. See `docs/IDENTITY_SECURITY.md`. |
 
 ## Secrets handling
 

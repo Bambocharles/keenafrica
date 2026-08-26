@@ -8,11 +8,14 @@
 import { PrismaClient } from "@prisma/client";
 import type { SeedTask } from "./types";
 import { assertDemoSeedAllowed } from "./guard";
+import { rolesPermissionsTask } from "./tasks/roles-permissions";
 import { superAdminTask } from "./tasks/super-admin";
 import { featureFlagsTask } from "./tasks/feature-flags";
 import { demoTask } from "./tasks/demo";
 
-const CORE_TASKS: SeedTask[] = [superAdminTask, featureFlagsTask];
+// Order matters: roles-permissions must run before super-admin, which
+// links the seeded super-admin account to the SUPER_ADMIN role row.
+const CORE_TASKS: SeedTask[] = [rolesPermissionsTask, superAdminTask, featureFlagsTask];
 const DEMO_TASKS: SeedTask[] = [demoTask];
 
 async function main() {

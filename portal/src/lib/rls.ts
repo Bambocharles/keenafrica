@@ -5,11 +5,25 @@ export interface RlsContext {
   userId?: string;
   isSuperAdmin?: boolean;
   /**
+   * Resolved permission keys for this request (e.g. "sessions.revoke"),
+   * from the Role/Permission model — see src/lib/authz.ts. RLS policies
+   * test membership with jsonb `?`. Never a substitute for isSuperAdmin's
+   * RLS bypass; this is the finer-grained layer on top of it.
+   */
+  permissions?: string[];
+  /**
    * Set ONLY by the Auth.js authorize() callback, for the single
    * parameterized exact-email-match lookup that has to run before any
    * session exists. Never set this anywhere else.
    */
   authLookup?: boolean;
+  /**
+   * Set ONLY by src/lib/password-reset.ts, for the token-hash lookup/consume
+   * that has to run before any session exists (the requester is identified
+   * by a possession-proof token, not app.user_id). Never set this anywhere
+   * else.
+   */
+  passwordResetLookup?: boolean;
 }
 
 /**
@@ -24,7 +38,9 @@ export async function withRls<T>(
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.user_id', ${ctx.userId ?? ""}, true)`;
     await tx.$executeRaw`SELECT set_config('app.is_super_admin', ${String(!!ctx.isSuperAdmin)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.permissions', ${JSON.stringify(ctx.permissions ?? [])}, true)`;
     await tx.$executeRaw`SELECT set_config('app.auth_lookup', ${String(!!ctx.authLookup)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.password_reset_lookup', ${String(!!ctx.passwordResetLookup)}, true)`;
     return fn(tx);
   });
 }
