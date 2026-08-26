@@ -4,12 +4,14 @@ import { getCourseContentForStudent } from "@/lib/content";
 import { AuthorizationError } from "@/lib/authz";
 import { listMyNotes } from "@/lib/notes";
 import { listMyBookmarks } from "@/lib/bookmarks";
+import { getCourseProgressForStudent } from "@/lib/progress";
 import { Banner, Button, Card, EmptyState } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
 import {
   addLessonBookmarkAction,
   addLessonNoteAction,
   deleteLessonNoteAction,
+  markLessonCompleteAction,
   removeLessonBookmarkAction,
 } from "./actions";
 
@@ -53,11 +55,15 @@ export default async function StudentLessonPage({
     return <Banner>This lesson isn&apos;t available — it may still be in draft, or doesn&apos;t exist.</Banner>;
   }
 
-  const [notes, bookmarks] = await Promise.all([
+  const [notes, bookmarks, progress] = await Promise.all([
     listMyNotes({ courseId, targetType: "lesson", targetId: lessonId }, actor),
     listMyBookmarks({ courseId, targetType: "lesson" }, actor),
+    getCourseProgressForStudent(courseId, actor),
   ]);
   const bookmark = bookmarks.find((b) => b.targetId === lessonId);
+  const isComplete = progress.modules
+    .flatMap((m) => m.lessons)
+    .find((l) => l.lessonId === lessonId)?.completed;
 
   return (
     <div style={{ display: "grid", gap: "20px", maxWidth: "760px" }}>
@@ -73,14 +79,29 @@ export default async function StudentLessonPage({
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0, fontSize: "19px", fontWeight: 800 }}>{lesson.title}</h2>
-          <form action={bookmark ? removeLessonBookmarkAction : addLessonBookmarkAction}>
-            <input type="hidden" name="courseId" value={courseId} />
-            <input type="hidden" name="lessonId" value={lessonId} />
-            {bookmark && <input type="hidden" name="bookmarkId" value={bookmark.id} />}
-            <Button type="submit" variant={bookmark ? "secondary" : "outline"}>
-              {bookmark ? "★ Saved" : "☆ Save"}
-            </Button>
-          </form>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <form action={bookmark ? removeLessonBookmarkAction : addLessonBookmarkAction}>
+              <input type="hidden" name="courseId" value={courseId} />
+              <input type="hidden" name="lessonId" value={lessonId} />
+              {bookmark && <input type="hidden" name="bookmarkId" value={bookmark.id} />}
+              <Button type="submit" variant={bookmark ? "secondary" : "outline"}>
+                {bookmark ? "★ Saved" : "☆ Save"}
+              </Button>
+            </form>
+            {isComplete ? (
+              <Button type="button" variant="secondary" disabled>
+                ✓ Completed
+              </Button>
+            ) : (
+              <form action={markLessonCompleteAction}>
+                <input type="hidden" name="courseId" value={courseId} />
+                <input type="hidden" name="lessonId" value={lessonId} />
+                <Button type="submit" variant="primary">
+                  Mark complete
+                </Button>
+              </form>
+            )}
+          </div>
         </div>
       </div>
 

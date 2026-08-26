@@ -6,6 +6,7 @@ import { auth } from "@/lib/auth";
 import { AuthorizationError } from "@/lib/authz";
 import { createNote, deleteNote } from "@/lib/notes";
 import { addBookmark, removeBookmark } from "@/lib/bookmarks";
+import { markLessonComplete } from "@/lib/progress";
 
 async function requireActor() {
   const session = await auth();
@@ -68,6 +69,24 @@ export async function addLessonBookmarkAction(formData: FormData) {
   }
 
   revalidatePath(`/courses/${courseId}/lessons/${lessonId}`);
+  if (error) redirect(`/courses/${courseId}/lessons/${lessonId}?error=${error}`);
+}
+
+export async function markLessonCompleteAction(formData: FormData) {
+  const actor = await requireActor();
+  const courseId = String(formData.get("courseId") ?? "");
+  const lessonId = String(formData.get("lessonId") ?? "");
+
+  let error: string | null = null;
+  try {
+    await markLessonComplete(courseId, lessonId, actor);
+  } catch (err) {
+    error = toError(err);
+  }
+
+  revalidatePath(`/courses/${courseId}/lessons/${lessonId}`);
+  revalidatePath(`/progress`);
+  revalidatePath(`/courses/${courseId}`);
   if (error) redirect(`/courses/${courseId}/lessons/${lessonId}?error=${error}`);
 }
 

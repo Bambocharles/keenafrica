@@ -98,6 +98,10 @@ enum AttemptStatus {
   graded
 }
 
+// Session 08 (Progress & Adaptive Learning). No status enum — a row's mere
+// existence IS the evidence (a student completed this lesson); see
+// LessonProgress's own comment for why there's no "in_progress" state.
+
 model User {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String     @unique @db.Citext
@@ -130,6 +134,8 @@ model User {
   assessmentAssignmentsAsStudent AssessmentAssignment[] @relation("AssessmentAssignmentStudent")
   attemptsAsStudent              Attempt[]              @relation("AttemptStudent")
   attemptsGraded                 Attempt[]              @relation("AttemptGrader")
+
+  lessonProgress LessonProgress[]
 
   @@map("users")
 }
@@ -323,6 +329,7 @@ model Course {
   questions             Question[]
   assessments           Assessment[]
   assessmentAssignments AssessmentAssignment[]
+  lessonProgress        LessonProgress[]
 
   @@index([createdBy])
   @@map("courses")
@@ -421,6 +428,7 @@ model Lesson {
   resources Resource[]
   versions  LessonVersion[]
   topics    LessonTopic[]
+  progress  LessonProgress[]
 
   @@index([moduleId])
   @@index([courseId])
@@ -801,4 +809,44 @@ model Answer {
   @@index([attemptId])
   @@index([questionId])
   @@map("answers")
+}
+
+// --- Progress & Adaptive Learning (Session 08) ---------------------------
+// Core model: Student activity -> evidence -> progress/mastery -> views.
+// Reuses Education Core (Course/Module/Lesson/Enrollment) and Assessment
+// (Attempt/Answer/QuestionTopic) as the canonical evidence sources — this
+// session adds exactly one new table (the missing evidence signal Session 04
+// deliberately left unbuilt: "needs a Progress model to drive completion")
+// plus pure read-time calculation functions (src/lib/progress.ts). No
+// separate analytics database, no stored/cached mastery snapshot: topic
+// mastery is always computed fresh from Attempt/Answer/QuestionTopic +
+// LessonProgress/LessonTopic, so there is nothing to invalidate or drift out
+// of sync with the underlying evidence.
+//
+// LessonProgress is a student's explicit "I completed this lesson" evidence
+// record — deliberately NOT a page-view/time-on-page heuristic (unreliable,
+// easy to game, not "trustworthy" per this session's mission) and
+// deliberately NOT tracking an "in_progress" state (no product requirement
+// for it; a row's mere existence is the complete signal). Append-only, same
+// shape as lesson_versions/assessment_versions/audit_events — once a lesson
+// is marked complete that record is permanent history; there is no UPDATE or
+// DELETE RLS policy at all, for any role. courseId is denormalized from
+// lesson.courseId, same pattern as Lesson.courseId itself, so the
+// enrollment/ownership check (and every RLS policy below) is a single join.
+model LessonProgress {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentUserId String   @map("student_user_id") @db.Uuid
+  lessonId      String   @map("lesson_id") @db.Uuid
+  courseId      String   @map("course_id") @db.Uuid
+  completedAt   DateTime @default(now()) @map("completed_at") @db.Timestamptz(6)
+
+  student User   @relation(fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lesson  Lesson @relation(fields: [lessonId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course  Course @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentUserId, lessonId])
+  @@index([studentUserId])
+  @@index([courseId])
+  @@index([lessonId])
+  @@map("lesson_progress")
 }

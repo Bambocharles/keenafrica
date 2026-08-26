@@ -57,6 +57,7 @@ export async function actorFromUser(userId: string): Promise<AuthzActor> {
 
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
+  await prisma.lessonProgress.deleteMany({ where: { studentUserId: { in: userIds } } });
   await prisma.studentNote.deleteMany({ where: { studentUserId: { in: userIds } } });
   await prisma.bookmark.deleteMany({ where: { studentUserId: { in: userIds } } });
   await prisma.session.deleteMany({ where: { userId: { in: userIds } } });
@@ -79,6 +80,8 @@ export async function cleanupTestUsers(userIds: string[]): Promise<void> {
  */
 export async function cleanupTestCourses(courseIds: string[]): Promise<void> {
   if (courseIds.length === 0) return;
+  // Progress (Session 08) — deepest child, no dependents of its own.
+  await prisma.lessonProgress.deleteMany({ where: { courseId: { in: courseIds } } });
   // Assessment Core (Session 07) — deepest children first: answers/attempts
   // reference assessments (via assessment_id) which reference courses.
   await prisma.answer.deleteMany({ where: { attempt: { assessment: { courseId: { in: courseIds } } } } });

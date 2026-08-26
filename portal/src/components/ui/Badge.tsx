@@ -11,7 +11,11 @@ type Status =
   | "withdrawn"
   | "in_progress"
   | "submitted"
-  | "graded";
+  | "graded"
+  | "weak"
+  | "developing"
+  | "strong"
+  | "exposure_only";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -25,6 +29,10 @@ const LABEL: Record<Status, string> = {
   in_progress: "In progress",
   submitted: "Submitted",
   graded: "Graded",
+  weak: "Weak",
+  developing: "Developing",
+  strong: "Strong",
+  exposure_only: "Exposure only",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -40,6 +48,10 @@ export function StatusBadge({ status }: { status: Status }) {
     in_progress: styles["badge-paused"],
     submitted: styles["badge-draft"],
     graded: styles["badge-active"],
+    weak: styles["badge-suspended"],
+    developing: styles["badge-paused"],
+    strong: styles["badge-active"],
+    exposure_only: styles["badge-draft"],
   }[status];
 
   return (

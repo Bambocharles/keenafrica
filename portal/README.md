@@ -101,3 +101,13 @@ Actions → Deploy Portal → Run workflow.
   (`src/lib/notes.ts`, `src/lib/bookmarks.ts`, `src/app/student/**`).
   Assignments/Assessments/Results/Certificates/Messages are entry points
   only — the underlying capabilities belong to Sessions 07/09/10/14.
+
+## Progress & Adaptive Learning (Session 08)
+
+- **Lesson/module/course completion tracking (`LessonProgress`,
+  `Enrollment.completedAt`), read-time topic/skill mastery calculation
+  over Assessment's `Attempt`/`Answer`/`QuestionTopic` evidence,
+  student `/progress` view, teacher cohort progress + topic performance
+  analytics** — `docs/PROGRESS.md` (`src/lib/progress.ts`). No stored
+  mastery snapshot, no separate analytics database — every read is
+  computed fresh from canonical evidence.

@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { getCourseById, listCohortsForCourse, listEnrollmentsForCohort } from "@/lib/courses";
 import { getCourseContentForTeacher } from "@/lib/content";
 import { listTopics } from "@/lib/topics";
+import { getCourseProgressForCohort, getTopicMasteryForCohort } from "@/lib/progress";
 import { AuthorizationError } from "@/lib/authz";
 import {
   addResourceAction,
@@ -63,7 +64,12 @@ export default async function TeacherCourseDetailPage({
   // course — see docs/TEACHER.md's "cohort visibility" note.
   const cohorts = await listCohortsForCourse(courseId, actor);
   const rosters = await Promise.all(
-    cohorts.map(async (c) => ({ cohortId: c.id, enrollments: await listEnrollmentsForCohort(c.id, actor) }))
+    cohorts.map(async (c) => ({
+      cohortId: c.id,
+      enrollments: await listEnrollmentsForCohort(c.id, actor),
+      progress: await getCourseProgressForCohort(c.id, actor),
+      topicMastery: await getTopicMasteryForCohort(c.id, actor),
+    }))
   );
 
   const content = await getCourseContentForTeacher(courseId, actor);
@@ -99,7 +105,9 @@ export default async function TeacherCourseDetailPage({
         ) : (
           <div style={{ display: "grid", gap: "12px" }}>
             {cohorts.map((cohort) => {
-              const enrollments = rosters.find((r) => r.cohortId === cohort.id)?.enrollments ?? [];
+              const roster = rosters.find((r) => r.cohortId === cohort.id);
+              const enrollments = roster?.enrollments ?? [];
+              const progressByStudent = new Map((roster?.progress.students ?? []).map((s) => [s.studentId, s]));
               const statusCounts = enrollments.reduce<Record<string, number>>((acc, e) => {
                 acc[e.status] = (acc[e.status] ?? 0) + 1;
                 return acc;
@@ -112,6 +120,7 @@ export default async function TeacherCourseDetailPage({
                     <span className={ui.mono}>
                       {enrollments.length} enrolled
                       {Object.entries(statusCounts).map(([s, n]) => ` · ${n} ${s}`).join("")}
+                      {roster ? ` · ${roster.progress.totalLessons} lesson(s) published` : ""}
                     </span>
                   </div>
                   {enrollments.length === 0 ? (
@@ -122,24 +131,58 @@ export default async function TeacherCourseDetailPage({
                         <tr>
                           <th>Student</th>
                           <th>Status</th>
+                          <th>Progress</th>
                           <th>Enrolled</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {enrollments.map((e) => (
-                          <tr key={e.id}>
-                            <td className={ui.nameCell}>
-                              {e.student.name}
-                              <span className={ui.subCell}>{e.student.email}</span>
-                            </td>
-                            <td>
-                              <StatusBadge status={e.status} />
-                            </td>
-                            <td className={ui.mono}>{formatDate(e.enrolledAt)}</td>
-                          </tr>
-                        ))}
+                        {enrollments.map((e) => {
+                          const p = progressByStudent.get(e.studentUserId);
+                          return (
+                            <tr key={e.id}>
+                              <td className={ui.nameCell}>
+                                {e.student.name}
+                                <span className={ui.subCell}>{e.student.email}</span>
+                              </td>
+                              <td>
+                                <StatusBadge status={e.status} />
+                              </td>
+                              <td className={ui.mono}>
+                                {p ? `${p.completedLessons}/${p.totalLessons} (${p.percentComplete}%)` : "—"}
+                              </td>
+                              <td className={ui.mono}>{formatDate(e.enrolledAt)}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </Table>
+                  )}
+
+                  {(roster?.topicMastery.length ?? 0) > 0 && (
+                    <Disclosure label="Topic performance">
+                      <Table>
+                        <thead>
+                          <tr>
+                            <th>Topic</th>
+                            <th>Cohort accuracy</th>
+                            <th>Weak / Strong students</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {roster!.topicMastery.map((t) => (
+                            <tr key={t.topicId}>
+                              <td>{t.topicName}</td>
+                              <td className={ui.mono}>
+                                {t.cohortAccuracyPercent}% ({t.correctAnswers}/{t.totalGradedAnswers})
+                              </td>
+                              <td className={ui.mono}>
+                                {t.studentsWeak} weak · {t.studentsStrong} strong (of {t.studentsWithEvidence})
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    </Disclosure>
                   )}
                 </Card>
               );
@@ -147,8 +190,9 @@ export default async function TeacherCourseDetailPage({
           </div>
         )}
         <Banner variant="success">
-          This is enrollment-status progress, not lesson-level completion or mastery — those need the Progress
-          model (Session 08), not built yet. See docs/TEACHER.md.
+          Progress is real lesson-completion data (Session 08) driven by the student&apos;s own
+          &quot;Mark complete&quot; actions and graded assessment answers — nothing here is estimated or
+          duplicated locally; see docs/PROGRESS.md.
         </Banner>
       </section>
 

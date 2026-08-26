@@ -56,8 +56,14 @@ export async function requireCourseContentAccess(
   }
 }
 
-/** Read-only variant: can this actor see the course at all (admin, teacher, or super_admin)? */
-async function assertCanManageOrTeachCourse(courseId: string, actor: AuthzActor): Promise<void> {
+/**
+ * Read-only variant: can this actor see the course at all (admin, teacher, or
+ * super_admin)? Exported for Session 08 (Progress) to reuse for its
+ * teacher-facing cohort/course progress reads — the exact same ownership
+ * shape already used by getCourseById/listCohortsForCourse/
+ * listEnrollmentsForCohort below, not a new check.
+ */
+export async function assertCanManageOrTeachCourse(courseId: string, actor: AuthzActor): Promise<void> {
   if (actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.COURSES_MANAGE)) return;
   if (!(await isCourseTeacher(courseId, actor))) {
     throw new AuthorizationError("Not authorized");

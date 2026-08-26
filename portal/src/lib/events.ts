@@ -32,7 +32,12 @@ export interface DomainEventMap {
   RoleChanged: { userId: string; actorId: string };
   CoursePublished: { courseId: string; actorId: string };
   StudentEnrolled: { enrollmentId: string; studentId: string; courseId: string };
-  LessonCompleted: { lessonId: string; studentId: string };
+  // courseId added by Session 08 (Progress & Adaptive Learning), the first
+  // real emitter — Session 01 only reserved the name/shape as a guess.
+  // Included per this file's own "Payload discipline" rule (enough context
+  // for a listener to look the rest up itself) so a course-completion
+  // listener never needs an extra round trip just to resolve it.
+  LessonCompleted: { lessonId: string; studentId: string; courseId: string };
   AssessmentSubmitted: { attemptId: string; studentId: string; assessmentId: string };
   AssessmentGraded: { attemptId: string; studentId: string; assessmentId: string };
   CertificateIssued: { certificateId: string; studentId: string };
