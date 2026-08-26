@@ -1,0 +1,59 @@
+name: Backup Portal DB
+
+# Daily logical backup of the portal database, plus a restore-verification
+# pass on every run (a backup that's never restored isn't a backup — see
+# portal/docs/BACKUP_RESTORE.md). Runs on the same self-hosted runner as
+# deploy-portal.yml, which already has network access to the DB and Docker
+# installed.
+on:
+  schedule:
+    - cron: "17 2 * * *" # 02:17 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: [self-hosted, keenafrica-vm]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Take backup
+        env:
+          DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_PROD }}
+          BACKUP_DIR: /home/keen/backups/portal-db
+        run: portal/scripts/backup/pg-backup.sh
+
+      - name: Verify latest backup restores cleanly
+        env:
+          BACKUP_DIR: /home/keen/backups/portal-db
+        run: |
+          set -euo pipefail
+          CONTAINER="portal-backup-verify-$$"
+          cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          docker run -d --name "$CONTAINER" \
+            -e POSTGRES_PASSWORD=verify -e POSTGRES_DB=verify \
+            -p 55599:5432 postgres:16-alpine >/dev/null
+          for _ in $(seq 1 30); do
+            docker exec "$CONTAINER" pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec "$CONTAINER" psql -U postgres -d verify -c \
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS citext;" >/dev/null
+
+          latest="$(ls -t "$BACKUP_DIR"/*.dump | head -1)"
+          echo "Verifying $latest"
+          RESTORE_CONFIRM=yes portal/scripts/backup/pg-restore.sh \
+            "$latest" "postgresql://postgres:verify@localhost:55599/verify"
+
+          users="$(docker exec "$CONTAINER" psql -U postgres -d verify -tAc "SELECT count(*) FROM users;")"
+          policies="$(docker exec "$CONTAINER" psql -U postgres -d verify -tAc "SELECT count(*) FROM pg_policies;")"
+          echo "users=$users policies=$policies"
+          if [ "$policies" -lt 1 ]; then
+            echo "::error::Restored backup has no RLS policies — treating backup as failed verification."
+            exit 1
+          fi

@@ -25,8 +25,8 @@ model User {
   passwordHash  String    @map("password_hash")
   name          String
   isSuperAdmin  Boolean   @default(false) @map("is_super_admin")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   memberships ProjectMembership[]
 
@@ -36,8 +36,8 @@ model User {
 model Sponsor {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name      String
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   projects Project[]
 
@@ -50,13 +50,23 @@ model Project {
   name      String
   slug      String        @unique
   status    ProjectStatus @default(active)
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @default(now()) @updatedAt @map("updated_at")
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sponsor     Sponsor              @relation(fields: [sponsorId], references: [id])
+  sponsor     Sponsor              @relation(fields: [sponsorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships ProjectMembership[]
 
   @@map("projects")
+}
+
+model FeatureFlag {
+  key         String   @id
+  description String
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("feature_flags")
 }
 
 model ProjectMembership {
@@ -64,10 +74,10 @@ model ProjectMembership {
   userId    String         @map("user_id") @db.Uuid
   projectId String         @map("project_id") @db.Uuid
   role      MembershipRole
-  createdAt DateTime       @default(now()) @map("created_at")
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user    User    @relation(fields: [userId], references: [id])
-  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  project Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([userId, projectId])
   @@map("project_memberships")

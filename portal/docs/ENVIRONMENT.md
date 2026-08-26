@@ -1,0 +1,59 @@
+# Environments, configuration, and secrets
+
+## Environments
+
+- **Local development** — developer's own Postgres (e.g. `docker run
+  postgres:16-alpine`, or `docker-compose` if you add one), `npm run dev`.
+  `/etc/hosts` entries + `ROOT_DOMAIN=portal.local` exercise subdomain
+  routing without touching real DNS (see README).
+- **Production** — `keen-prod` k8s namespace, deployed by
+  `.github/workflows/deploy-portal.yml` on push to `main` (paths:
+  `portal/**`), gated by the `production` GitHub Environment's manual
+  approval.
+- **Staging** — does **not** currently exist for the portal. It was
+  provisioned, verified end-to-end, and then deliberately retired to free
+  resources on `keenafrica-infra` before this repo's Phase 1 cutover (see
+  `portal/README.md` and `deploy-portal.yml`'s own comment). This is an
+  intentional prior infrastructure decision, not an oversight — re-adding a
+  staging portal environment (a second DB, a second k8s ingress
+  host/namespace routing rule, DNS/tunnel wiring) is an infra-cost decision
+  outside this session's scope. See the Session 01 handoff for the explicit
+  BLOCKED note.
+
+Demo/test accounts and data belong only to local development today. There
+is nowhere else appropriate to put them until a staging environment exists
+again — see `prisma/seed/tasks/demo.ts` and its `ALLOW_DEMO_SEED` guard,
+which exists specifically to keep synthetic data out of production even in
+that gap.
+
+## Environment variables
+
+None of the values below are secrets themselves — this table documents
+names and purpose only; actual values live in `portal-secrets` (k8s Secret,
+referenced via `envFrom` in `k8s/portal-prod.yaml`) and in GitHub Actions
+repo/environment secrets. Never commit real values.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres connection string. Prod uses the `kf_portal_prod_app` role (RLS-scoped, no `BYPASSRLS`); migrations/backups use `kf_portal_prod_migrator` (table owner, legitimately bypasses RLS) — see `README.md` and `docs/BACKUP_RESTORE.md`. |
+| `AUTH_SECRET` | yes | Auth.js JWT signing secret. Generate with `npx auth secret` or `openssl rand -base64 32`. Rotating it invalidates all sessions. |
+| `ROOT_DOMAIN` | no (defaults `keenafrica.com`) | Base domain `middleware.ts` strips to resolve the tenant subdomain. Set to `portal.local` for local dev. |
+| `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` / `SUPER_ADMIN_NAME` | only when running `npm run seed` | One-time super-admin bootstrap — see `prisma/seed/tasks/super-admin.ts`. Never set these in a persisted environment config; pass them inline on the command that runs the seed. |
+| `FEATURE_FLAG_OVERRIDES` | no | Local-dev/test-only JSON override for feature flags (see `docs/FEATURE_FLAGS.md`). Do not set in staging/production. |
+| `ALLOW_DEMO_SEED` | no | Must be `true` to allow `npm run seed:demo` to run its demo-kind tasks. See `docs/SEED_FRAMEWORK.md`. |
+| `PORTAL_DATABASE_URL_PROD` | CI only | GitHub Actions secret — the migrator connection string used by `deploy-portal.yml` and `backup-portal-db.yml`. Never exposed to the running application. |
+
+## Secrets handling
+
+- Secrets never live in this repo (`.env`/`.env.local` are gitignored).
+- Production secrets are a k8s `Secret` (`portal-secrets`) consumed via
+  `envFrom`, populated out-of-band (not by this repo's CI) — rotating one
+  means updating the k8s Secret and rolling the deployment.
+- CI-time secrets (`PORTAL_DATABASE_URL_PROD`, `GITHUB_TOKEN`) are GitHub
+  Actions secrets scoped to the `production` Environment, which requires
+  manual approval before a workflow run can read them.
+- Encryption at rest: Postgres data lives on `postgres01`'s ZFS mirrored
+  pool (`tank`) — ZFS does not encrypt at rest by default; whether
+  encryption-at-rest is required before real production data lands is an
+  infra decision, flagged as a limitation in the Session 01 handoff (see
+  `status/project-status.md`).

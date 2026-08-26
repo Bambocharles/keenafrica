@@ -1,0 +1,64 @@
+import { withRls } from "@/lib/rls";
+
+/**
+ * Canonical flag keys. Adding a flag means: add the key here, add a row for
+ * it in prisma/seed/tasks/feature-flags.ts (defaulted to disabled), then
+ * gate the feature behind isFeatureEnabled() server-side. See
+ * docs/FEATURE_FLAGS.md for the full convention.
+ */
+export const FEATURE_FLAGS = {
+  MESSAGING: "messaging",
+  CERTIFICATES: "certificates",
+  SPONSOR_REPORTING: "sponsor_reporting",
+  ADAPTIVE_RECOMMENDATIONS: "adaptive_recommendations",
+  AI_TUTORING: "ai_tutoring",
+  UTME_FEATURES: "utme_features",
+} as const;
+
+export type FeatureFlagKey =
+  (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];
+
+const CACHE_TTL_MS = 30_000;
+const cache = new Map<string, { value: boolean; expiresAt: number }>();
+
+/**
+ * Local-dev/test escape hatch: FEATURE_FLAG_OVERRIDES='{"messaging":true}'
+ * short-circuits the DB lookup entirely for the listed keys. Never read in
+ * production decision paths beyond this — it's for running the app without
+ * a seeded feature_flags table, not a real toggle mechanism.
+ */
+function readOverrides(): Record<string, boolean> {
+  const raw = process.env.FEATURE_FLAG_OVERRIDES;
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Server-side-only flag check. Flags are public-read (see migration RLS
+ * policy), so this deliberately runs without a user context — callers that
+ * already have one may still call withRls-scoped code around it.
+ */
+export async function isFeatureEnabled(key: FeatureFlagKey): Promise<boolean> {
+  const overrides = readOverrides();
+  if (key in overrides) return Boolean(overrides[key]);
+
+  const cached = cache.get(key);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const flag = await withRls({}, (tx) =>
+    tx.featureFlag.findUnique({ where: { key } })
+  );
+  const value = flag?.enabled ?? false;
+  cache.set(key, { value, expiresAt: now + CACHE_TTL_MS });
+  return value;
+}
+
+/** Test/dev helper — clears the in-process cache between assertions. */
+export function _resetFeatureFlagCache() {
+  cache.clear();
+}

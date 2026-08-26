@@ -14,14 +14,22 @@ that environment was retired afterward to free resources on the node.
 
 ```bash
 npm install
+docker run -d --name portal-dev-pg -e POSTGRES_PASSWORD=devpass \
+  -e POSTGRES_DB=portal_dev -p 55432:5432 postgres:16-alpine
+export DATABASE_URL=postgresql://postgres:devpass@localhost:55432/portal_dev
 npx prisma generate
-DATABASE_URL=postgresql://... npx prisma migrate dev
+npx prisma migrate dev
+SUPER_ADMIN_EMAIL=you@example.com SUPER_ADMIN_PASSWORD=... npm run seed
 npm run dev
 ```
 
 Add `/etc/hosts` entries pointing `admin.portal.local` and any test project
 slug at `127.0.0.1`, with `ROOT_DOMAIN=portal.local`, to exercise the
 subdomain routing locally without touching real DNS.
+
+Run `npm test` for the unit/integration test suite (needs the same
+`DATABASE_URL` — a couple of tests round-trip through it). See
+`docs/ENVIRONMENT.md` for the full environment-variable reference.
 
 ## Deploying
 
@@ -49,3 +57,12 @@ Actions → Deploy Portal → Run workflow.
   manifest — Kubernetes sets `HOSTNAME` to the pod name for every container,
   which makes Next.js's standalone server bind only to the pod's own IP
   instead of all interfaces otherwise.
+
+## Foundation conventions (Session 01)
+
+- **Environments/secrets** — `docs/ENVIRONMENT.md`
+- **Backup/restore** — `docs/BACKUP_RESTORE.md` (scripts in `scripts/backup/`,
+  scheduled by `../.github/workflows/backup-portal-db.yml`)
+- **Feature flags** — `docs/FEATURE_FLAGS.md` (`src/lib/feature-flags.ts`)
+- **Domain events** — `docs/EVENTS.md` (`src/lib/events.ts`)
+- **Seed framework** — `docs/SEED_FRAMEWORK.md` (`prisma/seed/`)
