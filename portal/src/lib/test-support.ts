@@ -65,3 +65,32 @@ export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   await prisma.userRole.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.user.deleteMany({ where: { id: { in: userIds } } });
 }
+
+/**
+ * Deletes a set of test-created courses and everything hanging off them
+ * (cohorts/enrollments/cohort_teachers, modules/lessons/resources/
+ * lesson_versions/lesson_topics), in dependency order. Call this BEFORE
+ * cleanupTestUsers() for any users referenced as course creators/teachers/
+ * students/publishers — the education_core migration's foreign keys are
+ * all ON DELETE NO ACTION, so a user row can't be deleted while a course
+ * entity still references it.
+ */
+export async function cleanupTestCourses(courseIds: string[]): Promise<void> {
+  if (courseIds.length === 0) return;
+  await prisma.lessonTopic.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });
+  await prisma.resource.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });
+  await prisma.lessonVersion.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });
+  await prisma.lesson.deleteMany({ where: { courseId: { in: courseIds } } });
+  await prisma.module.deleteMany({ where: { courseId: { in: courseIds } } });
+  await prisma.enrollment.deleteMany({ where: { cohort: { courseId: { in: courseIds } } } });
+  await prisma.cohortTeacher.deleteMany({ where: { cohort: { courseId: { in: courseIds } } } });
+  await prisma.cohort.deleteMany({ where: { courseId: { in: courseIds } } });
+  await prisma.auditEvent.deleteMany({ where: { entityId: { in: courseIds } } });
+  await prisma.course.deleteMany({ where: { id: { in: courseIds } } });
+}
+
+export async function cleanupTestTopics(topicIds: string[]): Promise<void> {
+  if (topicIds.length === 0) return;
+  await prisma.lessonTopic.deleteMany({ where: { topicId: { in: topicIds } } });
+  await prisma.topic.deleteMany({ where: { id: { in: topicIds } } });
+}

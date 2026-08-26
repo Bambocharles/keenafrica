@@ -27,6 +27,12 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.SESSIONS_REVOKE]: "Revoke another user's session(s).",
   [PERMISSIONS.AUDIT_READ]: "Read the security/audit event log.",
   [PERMISSIONS.FLAGS_MANAGE]: "Toggle feature flags on/off.",
+  [PERMISSIONS.COURSES_CREATE]: "Create a new course.",
+  [PERMISSIONS.COURSES_MANAGE]: "Manage course metadata, cohorts, teacher assignment, and enrollment.",
+  [PERMISSIONS.COURSES_PUBLISH]: "Publish or archive a course.",
+  [PERMISSIONS.COURSES_CONTENT_WRITE]: "Create or edit module/lesson draft content (ownership-scoped).",
+  [PERMISSIONS.COURSES_CONTENT_PUBLISH]: "Publish or unpublish module/lesson content (ownership-scoped).",
+  [PERMISSIONS.TOPICS_MANAGE]: "Manage the topic/skill taxonomy.",
 };
 
 /**

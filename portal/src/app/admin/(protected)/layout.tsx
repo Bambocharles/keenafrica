@@ -41,6 +41,7 @@ export default async function ProtectedAdminLayout({
         <NavLinks
           showUsers={hasPermission(user, PERMISSIONS.USERS_READ)}
           showAudit={hasPermission(user, PERMISSIONS.AUDIT_READ)}
+          showEducation={hasPermission(user, PERMISSIONS.COURSES_MANAGE)}
         />
 
         <div className={styles.foot}>

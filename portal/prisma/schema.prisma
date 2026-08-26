@@ -24,6 +24,36 @@ enum UserStatus {
   suspended
 }
 
+// Education Core (Session 04).
+enum CourseStatus {
+  draft
+  published
+  archived
+}
+
+enum ContentStatus {
+  draft
+  published
+  archived
+}
+
+enum CohortStatus {
+  active
+  archived
+}
+
+enum EnrollmentStatus {
+  active
+  completed
+  withdrawn
+}
+
+enum ResourceType {
+  link
+  document
+  video
+}
+
 model User {
   id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email         String     @unique @db.Citext
@@ -40,6 +70,12 @@ model User {
   sessions            Session[]
   passwordResetTokens PasswordResetToken[]
   auditEventsAsActor  AuditEvent[]          @relation("AuditActor")
+
+  coursesCreated     Course[]        @relation("CourseCreator")
+  cohortTeaching     CohortTeacher[]
+  enrollments        Enrollment[]
+  lessonVersionsPublished LessonVersion[]
+  resourcesCreated   Resource[]
 
   @@map("users")
 }
@@ -206,4 +242,200 @@ model ProjectMembership {
 
   @@unique([userId, projectId])
   @@map("project_memberships")
+}
+
+// --- Education Core (Session 04) ---------------------------------------
+// Course -> Cohort -> Teacher(s) + Students
+// Course -> Modules -> Lessons -> Resources
+// See docs/EDUCATION_CORE.md for the full ownership/visibility model and
+// the RLS policies in this migration's SQL.
+
+model Course {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title       String
+  description String       @default("")
+  status      CourseStatus @default(draft)
+  createdBy   String       @map("created_by") @db.Uuid
+  publishedAt DateTime?    @map("published_at") @db.Timestamptz(6)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  creator User     @relation("CourseCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cohorts Cohort[]
+  modules Module[]
+  lessons Lesson[]
+
+  @@index([createdBy])
+  @@map("courses")
+}
+
+model Cohort {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId  String       @map("course_id") @db.Uuid
+  name      String
+  status    CohortStatus @default(active)
+  startsAt  DateTime?    @map("starts_at") @db.Timestamptz(6)
+  endsAt    DateTime?    @map("ends_at") @db.Timestamptz(6)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  course      Course          @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  teachers    CohortTeacher[]
+  enrollments Enrollment[]
+
+  @@index([courseId])
+  @@map("cohorts")
+}
+
+// Many-to-many: a cohort can have multiple teachers, a teacher can teach
+// multiple cohorts. This — not a direct Course->Teacher link — is the
+// ownership boundary every content-authorization check in src/lib/courses.ts
+// walks: cohorts.course_id = <course> AND cohort_teachers.teacher_user_id = <actor>.
+model CohortTeacher {
+  cohortId      String   @map("cohort_id") @db.Uuid
+  teacherUserId String   @map("teacher_user_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  cohort  Cohort @relation(fields: [cohortId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  teacher User   @relation(fields: [teacherUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([cohortId, teacherUserId])
+  @@index([teacherUserId])
+  @@map("cohort_teachers")
+}
+
+model Enrollment {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cohortId      String           @map("cohort_id") @db.Uuid
+  studentUserId String           @map("student_user_id") @db.Uuid
+  status        EnrollmentStatus @default(active)
+  enrolledAt    DateTime         @default(now()) @map("enrolled_at") @db.Timestamptz(6)
+  completedAt   DateTime?        @map("completed_at") @db.Timestamptz(6)
+  withdrawnAt   DateTime?        @map("withdrawn_at") @db.Timestamptz(6)
+
+  cohort  Cohort @relation(fields: [cohortId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student User   @relation(fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([cohortId, studentUserId])
+  @@index([studentUserId])
+  @@map("enrollments")
+}
+
+model Module {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId    String        @map("course_id") @db.Uuid
+  title       String
+  order       Int
+  status      ContentStatus @default(draft)
+  publishedAt DateTime?     @map("published_at") @db.Timestamptz(6)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lessons Lesson[]
+
+  @@index([courseId])
+  @@map("modules")
+}
+
+// courseId is denormalized from module.courseId — immutable once set
+// (lessons are never moved across courses in this foundation). This keeps
+// every RLS ownership/visibility check a single join (lessons.course_id ->
+// cohorts -> cohort_teachers/enrollments) instead of a three-table walk
+// through modules on every policy.
+model Lesson {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  moduleId    String        @map("module_id") @db.Uuid
+  courseId    String        @map("course_id") @db.Uuid
+  title       String
+  content     String
+  order       Int
+  status      ContentStatus @default(draft)
+  version     Int           @default(0)
+  publishedAt DateTime?     @map("published_at") @db.Timestamptz(6)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  module    Module          @relation(fields: [moduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course    Course          @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  resources Resource[]
+  versions  LessonVersion[]
+  topics    LessonTopic[]
+
+  @@index([moduleId])
+  @@index([courseId])
+  @@map("lessons")
+}
+
+// Content-versioning foundation: an immutable snapshot taken every time a
+// lesson is published, so a later draft edit can never silently rewrite
+// what an already-published/completed lesson said. Nothing reads these
+// yet (no Progress/Attempt model exists to pin a student's completion to a
+// specific version) — that's for Session 07/08 to consume; this session
+// only guarantees the history is captured and never overwritten.
+model LessonVersion {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  lessonId    String   @map("lesson_id") @db.Uuid
+  version     Int
+  title       String
+  content     String
+  publishedBy String   @map("published_by") @db.Uuid
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+
+  lesson    Lesson @relation(fields: [lessonId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  publisher User   @relation(fields: [publishedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([lessonId, version])
+  @@index([lessonId])
+  @@map("lesson_versions")
+}
+
+// Deliberately an external URL, not a file upload — Session 01's handoff
+// flagged that no storage/asset abstraction exists yet anywhere in the app.
+// A real upload-backed Resource.type belongs to Session 13 (Files & Content);
+// this is the minimal relationship the data model calls for today.
+model Resource {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  lessonId  String       @map("lesson_id") @db.Uuid
+  title     String
+  url       String
+  type      ResourceType @default(link)
+  createdBy String       @map("created_by") @db.Uuid
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  lesson  Lesson @relation(fields: [lessonId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator User   @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([lessonId])
+  @@map("resources")
+}
+
+// Subject -> Topic -> Subtopic/Skill, modeled as one self-referential
+// hierarchy rather than three separate tables. Tags Lesson content today;
+// Session 07 (Assessment) is expected to reuse this same table to tag
+// Question rows rather than building a parallel taxonomy.
+model Topic {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  parentId  String?  @map("parent_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  parent       Topic?        @relation("TopicHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children     Topic[]       @relation("TopicHierarchy")
+  lessonTopics LessonTopic[]
+
+  @@index([parentId])
+  @@map("topics")
+}
+
+model LessonTopic {
+  lessonId String @map("lesson_id") @db.Uuid
+  topicId  String @map("topic_id") @db.Uuid
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  topic  Topic  @relation(fields: [topicId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([lessonId, topicId])
+  @@index([topicId])
+  @@map("lesson_topics")
 }

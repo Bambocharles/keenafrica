@@ -40,6 +40,24 @@ export const PERMISSIONS = {
   // super-admin-only write with this key explicitly anticipated for the
   // admin UI over it (see docs/FEATURE_FLAGS.md "Toggling a flag today").
   FLAGS_MANAGE: "flags.manage",
+  // Added by Session 04 (Education Core). courses.manage is the admin
+  // "full course/cohort/enrollment management" key; courses.publish gates
+  // only the COURSE-level draft->published->archived lifecycle (kept
+  // separate from courses.manage per PLATFORM_ARCHITECTURE.md §6's
+  // explicit courses.publish example). courses.content.write/
+  // courses.content.publish gate Module/Lesson/Resource/topic-tag
+  // authoring and publishing and are always ownership-scoped in
+  // application code AND at the RLS layer: a holder must also be a
+  // cohort_teachers row for a cohort of that course (see
+  // src/lib/courses.ts's isCourseTeacher()) unless they also hold
+  // courses.manage or are super_admin. topics.manage guards the shared
+  // Subject/Topic/Skill taxonomy (a catalog table, public-read).
+  COURSES_CREATE: "courses.create",
+  COURSES_MANAGE: "courses.manage",
+  COURSES_PUBLISH: "courses.publish",
+  COURSES_CONTENT_WRITE: "courses.content.write",
+  COURSES_CONTENT_PUBLISH: "courses.content.publish",
+  TOPICS_MANAGE: "topics.manage",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
@@ -67,7 +85,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
     PERMISSIONS.SESSIONS_REVOKE,
     PERMISSIONS.AUDIT_READ,
   ],
-  TEACHER: [],
+  // Ownership-scoped in practice: a TEACHER only gets to exercise these on
+  // courses where they hold a cohort_teachers row (see courses.ts). Holding
+  // the permission with no matching cohort assignment grants nothing.
+  TEACHER: [PERMISSIONS.COURSES_CONTENT_WRITE, PERMISSIONS.COURSES_CONTENT_PUBLISH],
   STUDENT: [],
   SPONSOR_ADMIN: [],
   SPONSOR_USER: [],

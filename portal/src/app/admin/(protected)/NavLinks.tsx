@@ -14,9 +14,11 @@ interface NavItem {
 export function NavLinks({
   showUsers,
   showAudit,
+  showEducation,
 }: {
   showUsers: boolean;
   showAudit: boolean;
+  showEducation: boolean;
 }) {
   const pathname = usePathname();
 
@@ -24,6 +26,7 @@ export function NavLinks({
     { href: "/dashboard", icon: "▣", label: "Dashboard" },
     { href: "/dashboard#sponsors", icon: "◈", label: "Sponsors", activePrefix: "__never__" },
     { href: "/dashboard#projects", icon: "▬", label: "Projects", activePrefix: "__never__" },
+    ...(showEducation ? [{ href: "/education", icon: "🎓", label: "Courses" }] : []),
     ...(showUsers ? [{ href: "/users", icon: "◉", label: "Users" }] : []),
     ...(showAudit ? [{ href: "/audit", icon: "☰", label: "Audit Log" }] : []),
     { href: "/flags", icon: "⚑", label: "Feature Flags" },

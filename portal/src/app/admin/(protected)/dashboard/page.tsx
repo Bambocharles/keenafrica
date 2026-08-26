@@ -102,11 +102,22 @@ export default async function DashboardPage() {
       </section>
 
       <section id="education">
-        <SectionHeader title="Education management" count={0} />
-        <EmptyState
-          title="Owned by Session 04 (Education Core)"
-          hint="Courses, cohorts, modules, lessons, and assessments will surface here once Education Core exists. This is a placeholder entry point, not a built feature."
-        />
+        <SectionHeader title="Education" count={status.courses} />
+        {status.courses === 0 ? (
+          <EmptyState title="No courses yet" hint="Create your first course to get started." />
+        ) : (
+          <Card style={{ padding: "16px" }}>
+            <div className={ui.sectionCount} style={{ fontSize: 11 }}>Courses / Cohorts / Enrollments</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>
+              {status.courses} / {status.cohorts} / {status.enrollments}
+            </div>
+          </Card>
+        )}
+        <div style={{ marginTop: 12 }}>
+          <a className={ui.linkMono} href="/education">
+            Manage courses →
+          </a>
+        </div>
       </section>
 
       <section id="sponsors">

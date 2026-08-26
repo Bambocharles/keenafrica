@@ -84,3 +84,11 @@ Actions → Deploy Portal → Run workflow.
   (`src/app/admin/(protected)/{users,audit,flags}/**`,
   `src/lib/admin-stats.ts`). Extends Session 02's Role/Permission model —
   the `(protected)` layout guard is no longer `isSuperAdmin`-only.
+
+## Education Core (Session 04)
+
+- **Course/Cohort/Module/Lesson/Resource/Enrollment/Topic, ownership model,
+  content-publishing lifecycle, versioning** — `docs/EDUCATION_CORE.md`
+  (`src/lib/courses.ts`, `src/lib/content.ts`, `src/lib/topics.ts`,
+  `src/app/admin/(protected)/education/**`). Teacher/Student UI is
+  deliberately not built here — see Session 05/06.

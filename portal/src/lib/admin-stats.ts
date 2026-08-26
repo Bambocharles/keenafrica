@@ -11,6 +11,9 @@ export interface AdminSystemStatus {
   featureFlagsTotal: number;
   sponsors: number;
   projects: number;
+  courses: number;
+  cohorts: number;
+  enrollments: number;
 }
 
 /**
@@ -26,7 +29,7 @@ export async function getSystemStatus(actor: AuthzActor): Promise<AdminSystemSta
   const rlsCtx = { userId: actor.id, isSuperAdmin: actor.isSuperAdmin, permissions: [...actor.permissions] };
 
   return withRls(rlsCtx, async (tx) => {
-    const [roleCounts, usersActive, usersSuspended, activeSessions, flags, sponsors, projects] =
+    const [roleCounts, usersActive, usersSuspended, activeSessions, flags, sponsors, projects, courses, cohorts, enrollments] =
       await Promise.all([
         Promise.all(
           ROLE_NAMES.map(async (role) => ({
@@ -40,6 +43,9 @@ export async function getSystemStatus(actor: AuthzActor): Promise<AdminSystemSta
         tx.featureFlag.findMany({ select: { enabled: true } }),
         tx.sponsor.count(),
         tx.project.count(),
+        tx.course.count(),
+        tx.cohort.count(),
+        tx.enrollment.count(),
       ]);
 
     return {
@@ -51,6 +57,9 @@ export async function getSystemStatus(actor: AuthzActor): Promise<AdminSystemSta
       featureFlagsTotal: flags.length,
       sponsors,
       projects,
+      courses,
+      cohorts,
+      enrollments,
     };
   });
 }
