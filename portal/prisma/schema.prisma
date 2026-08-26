@@ -54,6 +54,20 @@ enum ResourceType {
   video
 }
 
+// Session 06 (Student).
+enum NoteTargetType {
+  course
+  module
+  lesson
+  resource
+  question
+}
+
+enum BookmarkTargetType {
+  lesson
+  resource
+}
+
 model User {
   id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email         String     @unique @db.Citext
@@ -76,6 +90,8 @@ model User {
   enrollments        Enrollment[]
   lessonVersionsPublished LessonVersion[]
   resourcesCreated   Resource[]
+  studentNotes       StudentNote[]
+  bookmarks          Bookmark[]
 
   @@map("users")
 }
@@ -264,6 +280,8 @@ model Course {
   cohorts Cohort[]
   modules Module[]
   lessons Lesson[]
+  studentNotes StudentNote[]
+  bookmarks    Bookmark[]
 
   @@index([createdBy])
   @@map("courses")
@@ -438,4 +456,59 @@ model LessonTopic {
   @@id([lessonId, topicId])
   @@index([topicId])
   @@map("lesson_topics")
+}
+
+// --- Student Workspace (Session 06) --------------------------------------
+// Private, student-owned productivity data. Not part of Education Core
+// (Course/Module/Lesson/Enrollment remain Session 04's canonical entities,
+// referenced here, never redefined) and not a Progress/mastery system
+// (Session 08 owns that) — just notes and saved-resource bookmarks a
+// student attaches to their own learning content.
+//
+// targetType/targetId is a lightweight polymorphic reference rather than
+// one nullable FK column per attachable type: "question" has no table yet
+// (Session 07 hasn't run), so a real FK isn't even possible for that case,
+// and this keeps course/module/lesson/resource/question notes one uniform
+// shape instead of four one-off nullable columns. courseId is always
+// populated (same denormalization pattern as Lesson.courseId) so the
+// enrollment/ownership check src/lib/notes.ts and src/lib/bookmarks.ts
+// perform, and the RLS policies below, are a single join instead of a walk
+// through modules/lessons.
+
+model StudentNote {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentUserId String         @map("student_user_id") @db.Uuid
+  courseId      String         @map("course_id") @db.Uuid
+  targetType    NoteTargetType @map("target_type")
+  targetId      String         @map("target_id") @db.Uuid
+  body          String
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  student User   @relation(fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course  Course @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentUserId])
+  @@index([courseId])
+  @@index([targetType, targetId])
+  @@map("student_notes")
+}
+
+// Saved lessons/resources ("Saved Resources") — restricted to the two
+// content types that make sense to bookmark today.
+model Bookmark {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentUserId String             @map("student_user_id") @db.Uuid
+  courseId      String             @map("course_id") @db.Uuid
+  targetType    BookmarkTargetType @map("target_type")
+  targetId      String             @map("target_id") @db.Uuid
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  student User   @relation(fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course  Course @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentUserId, targetType, targetId])
+  @@index([studentUserId])
+  @@index([courseId])
+  @@map("bookmarks")
 }
