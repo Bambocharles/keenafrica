@@ -1,0 +1,45 @@
+name: Seed Portal DB
+
+# Manual-only. Runs the "core" seed tasks (super-admin bootstrap,
+# roles/permissions catalog, feature flags) against production —
+# deploy-portal.yml deliberately does NOT run the seed automatically (see
+# portal/docs/IDENTITY_SECURITY.md), so this is the actual "prompt" for
+# doing it: click Run workflow.
+#
+# One-time setup before first use: add SUPER_ADMIN_EMAIL and
+# SUPER_ADMIN_PASSWORD as secrets on the "production" GitHub Environment
+# (Settings -> Environments -> production -> Secrets). SUPER_ADMIN_NAME is
+# optional. These are read-only inputs to the seed, never logged, and
+# prisma/seed/tasks/super-admin.ts will NOT overwrite the password of an
+# account that already exists — safe to leave these secrets in place and
+# re-run this workflow any time (e.g. after this session's
+# roles-permissions task changes) without resetting a live admin password.
+#
+# Never runs prisma/seed/tasks/demo.ts (npm run seed, not seed:demo) —
+# demo/synthetic data must never enter production, per
+# docs/SEED_FRAMEWORK.md.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  seed-portal:
+    runs-on: [self-hosted, keenafrica-vm]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run core seed tasks
+        env:
+          DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_PROD }}
+          SUPER_ADMIN_EMAIL: ${{ secrets.SUPER_ADMIN_EMAIL }}
+          SUPER_ADMIN_PASSWORD: ${{ secrets.SUPER_ADMIN_PASSWORD }}
+          SUPER_ADMIN_NAME: ${{ secrets.SUPER_ADMIN_NAME }}
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          cd portal
+          npm ci
+          npm run seed

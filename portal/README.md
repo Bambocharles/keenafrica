@@ -2,8 +2,8 @@
 
 Multi-tenant sponsor/project portal. A super-admin creates a sponsor +
 project from the admin console; each project gets a subdomain
-(`{slug}.keenafrica.com`) automatically, resolved by `middleware.ts` from
-the `Host` header — no redeploy needed per project.
+(`{slug}.keenafrica.com`) automatically, resolved by `src/middleware.ts`
+from the `Host` header — no redeploy needed per project.
 
 Deploys straight to production (`keen-prod`) — there is no separate
 dev-prefixed portal environment. The mechanism was verified end-to-end in
@@ -72,6 +72,8 @@ Actions → Deploy Portal → Run workflow.
 - **Roles/permissions/sessions/audit/password-reset** — `docs/IDENTITY_SECURITY.md`
   (`src/lib/authz.ts`, `src/lib/sessions.ts`, `src/lib/users.ts`,
   `src/lib/password-reset.ts`, `src/lib/audit.ts`)
-- Includes a critical, unrelated finding from this session's E2E
-  verification: `middleware.ts`'s location appears to break all subdomain
-  routing under the current Next.js version — see that doc's last section.
+- `deploy-portal.yml` never runs the seed automatically — use
+  `../.github/workflows/seed-portal.yml` (manual `workflow_dispatch`) to
+  (re)populate roles/permissions/super-admin in production. See
+  `docs/ENVIRONMENT.md`'s `SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD` row
+  for the one-time secret setup.

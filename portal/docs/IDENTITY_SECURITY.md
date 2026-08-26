@@ -182,6 +182,25 @@ First real emitters into `src/lib/events.ts` (per Session 01's handoff):
 `UserCreated` (from `createUser()`), `RoleChanged` (from `assignRole()`/
 `removeRole()`), `UserSuspended` (from `suspendUser()`).
 
+## Getting roles/permissions/super-admin into an already-deployed environment
+
+`deploy-portal.yml` runs `prisma migrate deploy` on every push to `main`
+but never runs the seed — that was already true before this session
+(there's no seed step in that workflow at all). The migration alone
+creates the `roles`/`permissions`/`role_permissions` tables, but they stay
+empty (and any existing super-admin stays unlinked from the `SUPER_ADMIN`
+role row, though `isSuperAdmin` keeps working regardless) until the seed
+actually runs.
+
+`../.github/workflows/seed-portal.yml` (manual `workflow_dispatch` only)
+runs the "core" seed tasks against production. One-time setup: add
+`SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD` as secrets on the `production`
+GitHub Environment, then trigger the workflow from the Actions tab. Safe to
+leave configured and re-run any time — `prisma/seed/tasks/super-admin.ts`
+never overwrites the password of an account that already exists (only sets
+one on first creation), specifically so this can't silently reset a real
+admin's live password.
+
 ## Known limitations
 
 - **No transactional email provider exists in this infra** — see
@@ -197,29 +216,20 @@ First real emitters into `src/lib/events.ts` (per Session 01's handoff):
   "Using authorization in code" section above. Application code is the
   real gate for which fields a given permission may touch.
 
-## Critical finding (unrelated to this session, discovered during E2E verification)
+## `middleware.ts` location (dev-only issue, now fixed)
 
-`middleware.ts` sits at the **project root**, but this repo uses a `src/`
-layout (`src/app`, `src/lib`, ...). Next.js's file-convention resolution
-does not detect a root-level `middleware.ts` when a `src/` directory is
-present — it must be `src/middleware.ts` (Next 16 additionally deprecates
-the name in favor of `proxy.ts`, i.e. `src/proxy.ts`; both were confirmed
-to work in Next 16.2.11, `middleware.ts` with a one-time deprecation
-warning). **As currently placed, `middleware.ts` never runs at all** — no
-deprecation warning is even logged — meaning every subdomain-routing
-rewrite (the entire `admin.` console and every tenant `{slug}.` page) 404s
-in the current dev setup. Confirmed live: `Host: portal.local` returned the
-generic Next.js HTML 404 page instead of `middleware.ts`'s own plain-text
-`"Not found"` response, and moving a copy to `src/middleware.ts` fixed
-subdomain routing immediately (verified, then reverted — routing/deploy
-infra is outside Identity & Security's boundary).
+`middleware.ts` used to sit at the **project root**, but this repo uses a
+`src/` layout (`src/app`, `src/lib`, ...) and Next's file-convention
+resolution expects it at `src/middleware.ts` in that case (Next 16 also
+deprecates the name in favor of `proxy.ts` — a one-time deprecation warning
+logs either way, now that it's found at all).
 
-This predates this session (middleware.ts wasn't touched) and is not
-something this session fixes, per CLAUDE_BUILD_RULES.md §2 — reporting it
-here and in the handoff's Blockers section instead. If this reproduces in
-production (same Next.js version, same `src/` layout), the admin console
-and every tenant page are currently unreachable via their intended
-subdomain. This needs someone with authority over deploy/routing to
-confirm and fix (likely a one-line move: `git mv middleware.ts
-src/middleware.ts`, or `src/proxy.ts` per the new convention) — flagging as
-urgent given the blast radius.
+**Initial report on this was overstated** — an earlier pass concluded this
+was breaking subdomain routing in production. It wasn't: `next build`
+already listed `ƒ Proxy (Middleware)` correctly from the root-level file,
+and a live check of `admin.keenafrica.com/login` confirmed production
+rendered the real login page correctly. The bug was real but scoped to
+`next dev` (Turbopack) only, not to `next build`/production. Moved to
+`src/middleware.ts` anyway since it's the correct, forward-compatible
+location and fixes local dev — verified `next dev`, `next build`, and the
+full test suite all still pass after the move.
