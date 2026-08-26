@@ -57,6 +57,8 @@ export async function actorFromUser(userId: string): Promise<AuthzActor> {
 
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
+  await prisma.studentNote.deleteMany({ where: { studentUserId: { in: userIds } } });
+  await prisma.bookmark.deleteMany({ where: { studentUserId: { in: userIds } } });
   await prisma.session.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.passwordResetToken.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.auditEvent.deleteMany({
@@ -77,6 +79,8 @@ export async function cleanupTestUsers(userIds: string[]): Promise<void> {
  */
 export async function cleanupTestCourses(courseIds: string[]): Promise<void> {
   if (courseIds.length === 0) return;
+  await prisma.studentNote.deleteMany({ where: { courseId: { in: courseIds } } });
+  await prisma.bookmark.deleteMany({ where: { courseId: { in: courseIds } } });
   await prisma.lessonTopic.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });
   await prisma.resource.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });
   await prisma.lessonVersion.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });

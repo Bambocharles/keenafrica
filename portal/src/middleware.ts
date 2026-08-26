@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 const ROOT_DOMAIN = process.env.ROOT_DOMAIN ?? "keenafrica.com";
 const RESERVED_SLUGS = new Set([
   "admin",
+  "student",
   "www",
   "api",
   "app",
@@ -34,7 +35,14 @@ export function middleware(req: NextRequest) {
     return NextResponse.rewrite(url);
   }
 
-  // Reserved but not "admin" (e.g. someone hits www.keenafrica.com) —
+  // Session 06 (Student) — same rewrite shape as "admin" above.
+  if (subdomain === "student") {
+    const url = req.nextUrl.clone();
+    url.pathname = `/student${pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  // Reserved but not "admin"/"student" (e.g. someone hits www.keenafrica.com) —
   // no tenant to resolve, don't rewrite into /t/[slug] with a slug that can
   // never exist as a project.
   if (RESERVED_SLUGS.has(subdomain)) {

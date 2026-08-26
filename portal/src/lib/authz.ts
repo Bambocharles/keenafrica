@@ -117,6 +117,22 @@ export function canAccessAdminConsole(actor: AdminConsoleActor | null | undefine
   return actor.isSuperAdmin || actor.roles.some((r) => (ADMIN_CONSOLE_ROLES as readonly string[]).includes(r));
 }
 
+/**
+ * Added by Session 06 (Student). Coarse "can see the student portal shell"
+ * gate, same shape as canAccessAdminConsole() — every page/action inside
+ * still enforces its own ownership check (listMyEnrollments/
+ * getCourseContentForStudent's assertActiveEnrollment, notes/bookmarks'
+ * self-scoping), so this alone grants no data access. isSuperAdmin is
+ * included only so an operator can smoke-test the shell; a super admin has
+ * no enrollments of their own and so sees only empty states beyond it.
+ */
+export const STUDENT_PORTAL_ROLES: readonly RoleName[] = ["STUDENT"];
+
+export function canAccessStudentPortal(actor: AdminConsoleActor | null | undefined): boolean {
+  if (!actor) return false;
+  return actor.isSuperAdmin || actor.roles.some((r) => (STUDENT_PORTAL_ROLES as readonly string[]).includes(r));
+}
+
 /** The minimal shape any caller (session.user, a test fixture) needs. */
 export interface AuthzActor {
   id: string;
