@@ -92,3 +92,12 @@ Actions → Deploy Portal → Run workflow.
   (`src/lib/courses.ts`, `src/lib/content.ts`, `src/lib/topics.ts`,
   `src/app/admin/(protected)/education/**`). Teacher/Student UI is
   deliberately not built here — see Session 05/06.
+
+## Student Workspace (Session 06)
+
+- **Student-facing app (dashboard, My Learning, lesson viewer, practice,
+  private notes/bookmarks, progress, profile), StudentNote/Bookmark
+  model, `student.` subdomain routing** — `docs/STUDENT_WORKSPACE.md`
+  (`src/lib/notes.ts`, `src/lib/bookmarks.ts`, `src/app/student/**`).
+  Assignments/Assessments/Results/Certificates/Messages are entry points
+  only — the underlying capabilities belong to Sessions 07/09/10/14.
