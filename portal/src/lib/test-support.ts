@@ -79,6 +79,17 @@ export async function cleanupTestUsers(userIds: string[]): Promise<void> {
  */
 export async function cleanupTestCourses(courseIds: string[]): Promise<void> {
   if (courseIds.length === 0) return;
+  // Assessment Core (Session 07) — deepest children first: answers/attempts
+  // reference assessments (via assessment_id) which reference courses.
+  await prisma.answer.deleteMany({ where: { attempt: { assessment: { courseId: { in: courseIds } } } } });
+  await prisma.attempt.deleteMany({ where: { assessment: { courseId: { in: courseIds } } } });
+  await prisma.assessmentAssignment.deleteMany({ where: { assessment: { courseId: { in: courseIds } } } });
+  await prisma.assessmentVersion.deleteMany({ where: { assessment: { courseId: { in: courseIds } } } });
+  await prisma.assessmentQuestion.deleteMany({ where: { assessment: { courseId: { in: courseIds } } } });
+  await prisma.questionTopic.deleteMany({ where: { question: { courseId: { in: courseIds } } } });
+  await prisma.questionOption.deleteMany({ where: { question: { courseId: { in: courseIds } } } });
+  await prisma.question.deleteMany({ where: { courseId: { in: courseIds } } });
+  await prisma.assessment.deleteMany({ where: { courseId: { in: courseIds } } });
   await prisma.studentNote.deleteMany({ where: { courseId: { in: courseIds } } });
   await prisma.bookmark.deleteMany({ where: { courseId: { in: courseIds } } });
   await prisma.lessonTopic.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });

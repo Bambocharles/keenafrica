@@ -1,6 +1,17 @@
 import styles from "./styles.module.css";
 
-type Status = "active" | "draft" | "paused" | "suspended" | "published" | "archived" | "completed" | "withdrawn";
+type Status =
+  | "active"
+  | "draft"
+  | "paused"
+  | "suspended"
+  | "published"
+  | "archived"
+  | "completed"
+  | "withdrawn"
+  | "in_progress"
+  | "submitted"
+  | "graded";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -11,6 +22,9 @@ const LABEL: Record<Status, string> = {
   archived: "Archived",
   completed: "Completed",
   withdrawn: "Withdrawn",
+  in_progress: "In progress",
+  submitted: "Submitted",
+  graded: "Graded",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -23,6 +37,9 @@ export function StatusBadge({ status }: { status: Status }) {
     archived: styles["badge-draft"],
     completed: styles["badge-active"],
     withdrawn: styles["badge-suspended"],
+    in_progress: styles["badge-paused"],
+    submitted: styles["badge-draft"],
+    graded: styles["badge-active"],
   }[status];
 
   return (

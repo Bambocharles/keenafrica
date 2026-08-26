@@ -68,30 +68,68 @@ enum BookmarkTargetType {
   resource
 }
 
+// Session 07 (Assessment).
+enum QuestionType {
+  single_choice
+  multiple_choice
+  short_answer
+}
+
+enum QuestionDifficulty {
+  easy
+  medium
+  hard
+}
+
+enum AssessmentStatus {
+  draft
+  published
+  archived
+}
+
+enum AssessmentAssignmentScope {
+  cohort
+  student
+}
+
+enum AttemptStatus {
+  in_progress
+  submitted
+  graded
+}
+
 model User {
-  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email         String     @unique @db.Citext
-  passwordHash  String     @map("password_hash")
-  name          String
-  isSuperAdmin  Boolean    @default(false) @map("is_super_admin")
-  status        UserStatus @default(active)
-  suspendedAt   DateTime?  @map("suspended_at") @db.Timestamptz(6)
-  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String     @unique @db.Citext
+  passwordHash String     @map("password_hash")
+  name         String
+  isSuperAdmin Boolean    @default(false) @map("is_super_admin")
+  status       UserStatus @default(active)
+  suspendedAt  DateTime?  @map("suspended_at") @db.Timestamptz(6)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   memberships         ProjectMembership[]
   userRoles           UserRole[]
   sessions            Session[]
   passwordResetTokens PasswordResetToken[]
-  auditEventsAsActor  AuditEvent[]          @relation("AuditActor")
+  auditEventsAsActor  AuditEvent[]         @relation("AuditActor")
 
-  coursesCreated     Course[]        @relation("CourseCreator")
-  cohortTeaching     CohortTeacher[]
-  enrollments        Enrollment[]
+  coursesCreated          Course[]        @relation("CourseCreator")
+  cohortTeaching          CohortTeacher[]
+  enrollments             Enrollment[]
   lessonVersionsPublished LessonVersion[]
-  resourcesCreated   Resource[]
-  studentNotes       StudentNote[]
-  bookmarks          Bookmark[]
+  resourcesCreated        Resource[]
+  studentNotes            StudentNote[]
+  bookmarks               Bookmark[]
+
+  questionsCreated               Question[]
+  assessmentsCreated             Assessment[]           @relation("AssessmentCreator")
+  assessmentVersionsPublished    AssessmentVersion[]    @relation("AssessmentVersionPublisher")
+  assessmentAssignmentsCreated   AssessmentAssignment[] @relation("AssessmentAssignmentCreator")
+  assessmentAssignmentsAsStudent AssessmentAssignment[] @relation("AssessmentAssignmentStudent")
+  attemptsAsStudent              Attempt[]              @relation("AttemptStudent")
+  attemptsGraded                 Attempt[]              @relation("AttemptGrader")
 
   @@map("users")
 }
@@ -230,7 +268,7 @@ model Project {
   createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  sponsor     Sponsor              @relation(fields: [sponsorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sponsor     Sponsor             @relation(fields: [sponsorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships ProjectMembership[]
 
   @@map("projects")
@@ -276,12 +314,15 @@ model Course {
   createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  creator User     @relation("CourseCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  cohorts Cohort[]
-  modules Module[]
-  lessons Lesson[]
-  studentNotes StudentNote[]
-  bookmarks    Bookmark[]
+  creator               User                   @relation("CourseCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cohorts               Cohort[]
+  modules               Module[]
+  lessons               Lesson[]
+  studentNotes          StudentNote[]
+  bookmarks             Bookmark[]
+  questions             Question[]
+  assessments           Assessment[]
+  assessmentAssignments AssessmentAssignment[]
 
   @@index([createdBy])
   @@map("courses")
@@ -297,9 +338,10 @@ model Cohort {
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  course      Course          @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  teachers    CohortTeacher[]
-  enrollments Enrollment[]
+  course                Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  teachers              CohortTeacher[]
+  enrollments           Enrollment[]
+  assessmentAssignments AssessmentAssignment[]
 
   @@index([courseId])
   @@map("cohorts")
@@ -438,9 +480,10 @@ model Topic {
   parentId  String?  @map("parent_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  parent       Topic?        @relation("TopicHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  children     Topic[]       @relation("TopicHierarchy")
-  lessonTopics LessonTopic[]
+  parent         Topic?          @relation("TopicHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children       Topic[]         @relation("TopicHierarchy")
+  lessonTopics   LessonTopic[]
+  questionTopics QuestionTopic[]
 
   @@index([parentId])
   @@map("topics")
@@ -511,4 +554,251 @@ model Bookmark {
   @@index([studentUserId])
   @@index([courseId])
   @@map("bookmarks")
+}
+
+// --- Assessment (Session 07) ---------------------------------------------
+// Owns the question bank, assessments built from it, assignment to
+// cohorts/students, student attempts/answers, and grading/results. Reuses
+// Education Core's Course/Cohort/Enrollment (never redefined) and the
+// Topic/LessonTopic taxonomy pattern for Question tagging, per Session 04's
+// handoff. Authoring/publishing is ownership-scoped via cohort_teachers
+// exactly like Module/Lesson (src/lib/courses.ts's
+// requireCourseContentAccess()) — no new permission keys.
+//
+// Question (courseId-scoped bank, reusable across assessments)
+//   -> AssessmentQuestion (join: which questions are on an assessment, in
+//      what order, worth how many points)
+//   -> Assessment (draft, live-editable — title/instructions/settings/
+//      question list)
+//   -> AssessmentVersion (immutable snapshot taken on every publish — the
+//      content-versioning foundation, exact LessonVersion pattern applied
+//      to a whole assessment tree: questions/options/correct-answers
+//      denormalized into `questions` Json so a later edit to the live
+//      Question bank or Assessment can NEVER retroactively change what an
+//      already-attempted version asked or how it's graded)
+//   -> Attempt (student's attempt, permanently bound to ONE AssessmentVersion
+//      — never the live/mutable Assessment)
+//   -> Answer (per-question response + grading outcome for that attempt)
+//
+// See docs/ASSESSMENT.md for the full contract, RLS policy shapes, and the
+// "why AssessmentVersion.questions carries the answer key" note (RLS is a
+// row-level backstop, not column-level — see Session 02's documented
+// limitation — so hiding the answer key from an in-progress student attempt
+// is enforced by application-layer redaction, not by a DB policy).
+
+model Question {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId          String             @map("course_id") @db.Uuid
+  type              QuestionType
+  prompt            String
+  explanation       String             @default("")
+  difficulty        QuestionDifficulty @default(medium)
+  learningObjective String             @default("") @map("learning_objective")
+  // Short-answer only: optional case-insensitive exact-match auto-grade
+  // candidates (e.g. ["Lagos", "lagos, nigeria"]). Null/empty -> every
+  // short-answer response on this question requires manual grading.
+  acceptableAnswers Json?              @map("acceptable_answers")
+  createdBy         String             @map("created_by") @db.Uuid
+  archivedAt        DateTime?          @map("archived_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  course              Course               @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator             User                 @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  options             QuestionOption[]
+  topics              QuestionTopic[]
+  assessmentQuestions AssessmentQuestion[]
+  answers             Answer[]
+
+  @@index([courseId])
+  @@index([createdBy])
+  @@map("questions")
+}
+
+model QuestionOption {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  questionId String   @map("question_id") @db.Uuid
+  text       String
+  isCorrect  Boolean  @default(false) @map("is_correct")
+  order      Int
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([questionId])
+  @@map("question_options")
+}
+
+model QuestionTopic {
+  questionId String @map("question_id") @db.Uuid
+  topicId    String @map("topic_id") @db.Uuid
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  topic    Topic    @relation(fields: [topicId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([questionId, topicId])
+  @@index([topicId])
+  @@map("question_topics")
+}
+
+model Assessment {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId            String           @map("course_id") @db.Uuid
+  title               String
+  instructions        String           @default("")
+  status              AssessmentStatus @default(draft)
+  version             Int              @default(0)
+  timeLimitMinutes    Int?             @map("time_limit_minutes")
+  maxAttempts         Int?             @map("max_attempts")
+  passingScorePercent Int?             @map("passing_score_percent")
+  createdBy           String           @map("created_by") @db.Uuid
+  publishedAt         DateTime?        @map("published_at") @db.Timestamptz(6)
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  course      Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     User                   @relation("AssessmentCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  questions   AssessmentQuestion[]
+  versions    AssessmentVersion[]
+  assignments AssessmentAssignment[]
+  attempts    Attempt[]
+
+  @@index([courseId])
+  @@map("assessments")
+}
+
+// Bank -> assessment link: which questions, in what order, worth how many
+// points. Live/mutable — editing this after a publish never touches past
+// attempts, which are bound to an immutable AssessmentVersion snapshot.
+model AssessmentQuestion {
+  assessmentId String @map("assessment_id") @db.Uuid
+  questionId   String @map("question_id") @db.Uuid
+  order        Int
+  points       Int    @default(1)
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  question   Question   @relation(fields: [questionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([assessmentId, questionId])
+  @@index([questionId])
+  @@map("assessment_questions")
+}
+
+// Immutable snapshot taken every time an assessment is (re)published —
+// the versioning foundation the session brief requires ("never permanently
+// overwrite historical attempts when an assessment changes"). `questions`
+// denormalizes the full question/option/correct-answer tree as it stood at
+// publish time; every Attempt is permanently bound to one specific row
+// here, never to the live Assessment/Question rows, so later edits can
+// never retroactively change what a student was asked or how they were
+// graded. Append-only at the RLS layer (see migration), same shape as
+// lesson_versions.
+model AssessmentVersion {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assessmentId String   @map("assessment_id") @db.Uuid
+  version      Int
+  title        String
+  instructions String
+  questions    Json
+  publishedBy  String   @map("published_by") @db.Uuid
+  publishedAt  DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  publisher  User       @relation("AssessmentVersionPublisher", fields: [publishedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attempts   Attempt[]
+
+  @@unique([assessmentId, version])
+  @@index([assessmentId])
+  @@map("assessment_versions")
+}
+
+// Assigns a published assessment to either a whole cohort or one specific
+// student — exactly one of cohortId/studentUserId is set (enforced by a
+// CHECK constraint in the migration, Prisma has no native XOR constraint).
+//
+// courseId is denormalized from assessment.course_id — same reasoning as
+// Lesson.courseId (see that model's comment): assessments_select's
+// student-visibility branch has to read assessment_assignments, and
+// assessment_assignments_select's teacher-ownership branch has to resolve
+// back to a course. Doing that second hop through the `assessments` table
+// itself creates a genuine RLS policy cycle (Postgres evaluates a table
+// reference inside a policy against that table's OWN policies, so
+// assessments_select -> assessment_assignments -> assessments would recurse
+// infinitely — hit exactly this while authoring the migration, confirmed
+// via "infinite recursion detected in policy for relation" against a real
+// non-superuser role). Denormalizing courseId breaks the cycle the same way
+// Lesson.courseId keeps lessons_select a single join instead of a walk
+// through modules.
+model AssessmentAssignment {
+  id            String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assessmentId  String                    @map("assessment_id") @db.Uuid
+  courseId      String                    @map("course_id") @db.Uuid
+  scope         AssessmentAssignmentScope
+  cohortId      String?                   @map("cohort_id") @db.Uuid
+  studentUserId String?                   @map("student_user_id") @db.Uuid
+  dueAt         DateTime?                 @map("due_at") @db.Timestamptz(6)
+  createdBy     String                    @map("created_by") @db.Uuid
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cohort     Cohort?    @relation(fields: [cohortId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student    User?      @relation("AssessmentAssignmentStudent", fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator    User       @relation("AssessmentAssignmentCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([assessmentId])
+  @@index([courseId])
+  @@index([cohortId])
+  @@index([studentUserId])
+  @@map("assessment_assignments")
+}
+
+model Attempt {
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assessmentId        String        @map("assessment_id") @db.Uuid
+  assessmentVersionId String        @map("assessment_version_id") @db.Uuid
+  studentUserId       String        @map("student_user_id") @db.Uuid
+  attemptNumber       Int           @map("attempt_number")
+  status              AttemptStatus @default(in_progress)
+  startedAt           DateTime      @default(now()) @map("started_at") @db.Timestamptz(6)
+  submittedAt         DateTime?     @map("submitted_at") @db.Timestamptz(6)
+  gradedAt            DateTime?     @map("graded_at") @db.Timestamptz(6)
+  gradedBy            String?       @map("graded_by") @db.Uuid
+  scorePoints         Int?          @map("score_points")
+  maxPoints           Int?          @map("max_points")
+  scorePercent        Float?        @map("score_percent")
+  passed              Boolean?
+
+  assessment        Assessment        @relation(fields: [assessmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assessmentVersion AssessmentVersion @relation(fields: [assessmentVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student           User              @relation("AttemptStudent", fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  grader            User?             @relation("AttemptGrader", fields: [gradedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  answers           Answer[]
+
+  @@unique([assessmentId, studentUserId, attemptNumber])
+  @@index([studentUserId])
+  @@index([assessmentId])
+  @@index([assessmentVersionId])
+  @@map("attempts")
+}
+
+model Answer {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  attemptId         String   @map("attempt_id") @db.Uuid
+  questionId        String   @map("question_id") @db.Uuid
+  selectedOptionIds Json?    @map("selected_option_ids")
+  textResponse      String?  @map("text_response")
+  // null = pending manual grade (short-answer, no acceptable-answer match).
+  isCorrect         Boolean? @map("is_correct")
+  awardedPoints     Int?     @map("awarded_points")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  attempt  Attempt  @relation(fields: [attemptId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  question Question @relation(fields: [questionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+  @@index([questionId])
+  @@map("answers")
 }
