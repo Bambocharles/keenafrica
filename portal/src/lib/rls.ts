@@ -50,6 +50,14 @@ export interface RlsContext {
    * else.
    */
   orgInvitationLookup?: boolean;
+  /**
+   * Set ONLY by src/lib/registration.ts's registerUser(), for the one
+   * pre-auth INSERT into "users" (the new account) and its accompanying
+   * "user_roles" row — there is no session/app.user_id yet at the point a
+   * new self-registered account is being created. Never set this anywhere
+   * else. See the self_registration migration's policy comments.
+   */
+  selfRegistration?: boolean;
 }
 
 /**
@@ -70,6 +78,7 @@ export async function withRls<T>(
     await tx.$executeRaw`SELECT set_config('app.rate_limit_lookup', ${String(!!ctx.rateLimitLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.organization_ids', ${JSON.stringify(ctx.organizationIds ?? [])}, true)`;
     await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
     return fn(tx);
   });
 }

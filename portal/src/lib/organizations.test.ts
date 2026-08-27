@@ -17,6 +17,7 @@ import {
   removeMembership,
   requestToJoinOrganization,
   requireOrgPermission,
+  searchJoinableOrganizations,
   setOrganizationStatus,
   suspendMembership,
   updateOrganizationSettings,
@@ -318,6 +319,37 @@ describe("Platform Admin cross-tenant access is unaffected", () => {
 
     await expect(listOrganizations({}, strangerActor)).rejects.toThrow(AuthorizationError);
     await expect(setOrganizationStatus(org.id, "archived", strangerActor)).rejects.toThrow(AuthorizationError);
+  });
+});
+
+describe("searchJoinableOrganizations (Session 18)", () => {
+  it("any authenticated actor — not just organizations.manage — finds a non-archived org by name, without leaking contact fields", async () => {
+    const founder = await user();
+    const org = await makeOrg(founder);
+    const stranger = await user();
+    const strangerActor = await orgActorFromUser(stranger.id);
+
+    const results = await searchJoinableOrganizations(org.name, strangerActor);
+    expect(results.map((o) => o.id)).toContain(org.id);
+    const found = results.find((o) => o.id === org.id)!;
+    expect(found).toEqual({ id: org.id, name: org.name, slug: org.slug, type: org.type, status: org.status });
+    expect(found).not.toHaveProperty("contactEmail");
+  });
+
+  it("an archived organization is excluded from search results", async () => {
+    const founder = await user();
+    const org = await makeOrg(founder);
+    const admin = await user({ roles: ["ADMIN"] });
+    await setOrganizationStatus(org.id, "archived", await actorFromUser(admin.id));
+
+    const stranger = await user();
+    const results = await searchJoinableOrganizations(org.name, await orgActorFromUser(stranger.id));
+    expect(results.map((o) => o.id)).not.toContain(org.id);
+  });
+
+  it("returns nothing for a blank search string", async () => {
+    const someone = await user();
+    expect(await searchJoinableOrganizations("   ", await orgActorFromUser(someone.id))).toEqual([]);
   });
 });
 

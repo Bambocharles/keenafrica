@@ -259,6 +259,44 @@ export async function listOrganizations(filter: ListOrganizationsFilter, actor: 
   return { organizations, total, page, pageSize };
 }
 
+export interface JoinableOrganizationSummary {
+  id: string;
+  name: string;
+  slug: string;
+  type: string;
+  status: "pending" | "active" | "suspended" | "archived";
+}
+
+/**
+ * Session 18's "join an existing organization" search — any authenticated
+ * actor, no organizations.manage required. Relies entirely on
+ * organizations_select's own "any authenticated caller may see any
+ * non-archived organization's basic profile" RLS branch (see the
+ * organization_core migration's policy comment, which explicitly
+ * anticipates this function), so this runs under the actor's normal RLS
+ * context rather than SYSTEM_CTX — an unauthenticated caller (empty actor
+ * id) still sees nothing, matching the RLS policy's own
+ * "nullif(...) IS NOT NULL" guard. Returns only the fields a prospective
+ * member needs to pick the right organization — no contact_email/
+ * contact_phone (kept out, unlike getOrganizationById, which is only ever
+ * called by someone who already has a reason to see the full profile).
+ */
+export async function searchJoinableOrganizations(search: string, actor: OrgActor): Promise<JoinableOrganizationSummary[]> {
+  const trimmed = search.trim();
+  if (!trimmed) return [];
+
+  const organizations = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.organization.findMany({
+      where: { name: { contains: trimmed, mode: "insensitive" as const }, status: { not: "archived" } },
+      orderBy: { name: "asc" },
+      take: 20,
+      select: { id: true, name: true, slug: true, type: true, status: true },
+    })
+  );
+
+  return organizations;
+}
+
 /** Self-scoped: every organization the caller holds ANY membership row in (invited/pending/active/suspended), for a future "my organizations" surface (Session 18). No permission required — always self. */
 export async function listMyOrganizations(actor: OrgActor) {
   return withRls(actorRlsCtx(actor), (tx) =>
