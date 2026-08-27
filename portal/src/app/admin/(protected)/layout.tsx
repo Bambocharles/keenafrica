@@ -46,6 +46,7 @@ export default async function ProtectedAdminLayout({
           showAudit={hasPermission(user, PERMISSIONS.AUDIT_READ)}
           showEducation={hasPermission(user, PERMISSIONS.COURSES_MANAGE)}
           showMessages={user.isSuperAdmin || hasPermission(user, PERMISSIONS.MESSAGES_ADMIN)}
+          showReports={user.isSuperAdmin || hasPermission(user, PERMISSIONS.COURSES_MANAGE)}
         />
 
         <div className={styles.foot}>

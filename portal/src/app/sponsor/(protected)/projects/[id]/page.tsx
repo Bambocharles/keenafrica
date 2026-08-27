@@ -9,6 +9,7 @@ import {
   listProjectDocuments,
   listProjectTeam,
 } from "@/lib/sponsor";
+import { getMilestoneReport, getBeneficiaryEngagementSummary } from "@/lib/reporting";
 import { AuthorizationError, hasPermission, PERMISSIONS } from "@/lib/authz";
 import { inviteTeamMemberAction, removeTeamMemberAction } from "./actions";
 import { Banner, Button, Card, Disclosure, EmptyState, Field, Input, SectionHeader, StatusBadge, Table } from "@/components/ui";
@@ -51,13 +52,15 @@ export default async function SponsorProjectDetailPage({
   }
   if (!project) return <Banner>Project not found.</Banner>;
 
-  const [milestones, impactSummary, beneficiaryCount, beneficiaries, documents, team] = await Promise.all([
+  const [milestones, impactSummary, beneficiaryCount, beneficiaries, documents, team, milestoneReport, engagement] = await Promise.all([
     listMilestonesForProject(projectId, actor),
     getProjectImpactSummary(projectId, actor),
     getProjectBeneficiaryCount(projectId, actor),
     listProjectBeneficiaries(projectId, actor),
     listProjectDocuments(projectId, actor),
     listProjectTeam(projectId, actor),
+    getMilestoneReport(projectId, actor),
+    getBeneficiaryEngagementSummary(projectId, actor),
   ]);
 
   const canManageTeam = hasPermission(actor, PERMISSIONS.SPONSOR_USERS_MANAGE) || actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.SPONSOR_MANAGE);
@@ -91,7 +94,32 @@ export default async function SponsorProjectDetailPage({
       </section>
 
       <section>
-        <SectionHeader title="Milestones" count={milestones.length} />
+        <SectionHeader
+          title="Milestones"
+          count={milestones.length}
+          action={
+            <a className={ui.linkMono} href={`/projects/${projectId}/report/export`}>
+              Download report (CSV)
+            </a>
+          }
+        />
+        {milestoneReport.total > 0 && (
+          <Card style={{ padding: "16px", marginBottom: 12 }}>
+            <div className={ui.sectionCount} style={{ fontSize: 11 }}>
+              Milestone status
+            </div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>
+              {milestoneReport.achieved} achieved · {milestoneReport.inProgress} in progress · {milestoneReport.planned} planned ·{" "}
+              {milestoneReport.missed} missed
+              {milestoneReport.rows.some((r) => r.overdue) && (
+                <span style={{ color: "var(--danger-ink)" }}>
+                  {" "}
+                  · {milestoneReport.rows.filter((r) => r.overdue).length} overdue
+                </span>
+              )}
+            </div>
+          </Card>
+        )}
         {milestones.length === 0 ? (
           <EmptyState title="No milestones yet" hint="Your administrator will add project milestones here as they're agreed." />
         ) : (
@@ -169,6 +197,48 @@ export default async function SponsorProjectDetailPage({
               ))}
             </ul>
           </Disclosure>
+        )}
+      </section>
+
+      <section>
+        <SectionHeader title="Beneficiary engagement" count={engagement.beneficiaryCount} />
+        {engagement.beneficiaryCount === 0 ? (
+          <EmptyState title="No beneficiaries recorded yet" />
+        ) : (
+          <Card style={{ padding: "16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "12px" }}>
+              <div>
+                <div className={ui.sectionCount} style={{ fontSize: 11 }}>
+                  Enrolled
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>
+                  {engagement.withEnrollmentCount}/{engagement.beneficiaryCount}
+                </div>
+              </div>
+              <div>
+                <div className={ui.sectionCount} style={{ fontSize: 11 }}>
+                  Avg lesson completion
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>{engagement.avgCompletionPercent ?? "—"}%</div>
+              </div>
+              <div>
+                <div className={ui.sectionCount} style={{ fontSize: 11 }}>
+                  Assessments attempted
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>{engagement.assessmentsAttempted}</div>
+              </div>
+              <div>
+                <div className={ui.sectionCount} style={{ fontSize: 11 }}>
+                  Pass rate
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>{engagement.passRatePercent ?? "—"}%</div>
+              </div>
+            </div>
+            <p className={ui.mono} style={{ marginTop: 10, marginBottom: 0 }}>
+              Aggregate counts only, across each beneficiary&apos;s own enrollments platform-wide — never a per-student
+              breakdown, name, or score.
+            </p>
+          </Card>
         )}
       </section>
 

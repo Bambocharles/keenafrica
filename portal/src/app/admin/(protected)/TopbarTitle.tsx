@@ -5,6 +5,7 @@ import styles from "./layout.module.css";
 
 const TITLES: Array<[prefix: string, title: string]> = [
   ["/dashboard", "Dashboard"],
+  ["/reports", "Reports"],
   ["/users", "Users"],
   ["/audit", "Audit Log"],
   ["/flags", "Feature Flags"],
