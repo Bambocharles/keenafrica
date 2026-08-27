@@ -208,6 +208,18 @@ async function canAccessAssetAttachment(entityType: string, entityId: string, ac
     return !!message;
   }
 
+  if (entityType === "certificate") {
+    // A certificate's downloadable file is visible to exactly whoever can
+    // see the certificate itself — reuses certificates_select's RLS-
+    // enforced scoping (self/course-teacher/certificates.manage/
+    // super_admin, see the certificates_core migration, Session 14) rather
+    // than a second visibility rule for the same data.
+    const certificate = await withRls(actorRlsCtx(actor), (tx) =>
+      tx.certificate.findUnique({ where: { id: entityId }, select: { id: true } })
+    );
+    return !!certificate;
+  }
+
   if (entityType !== "lesson_resource") return false;
 
   const resource = await withRls(actorRlsCtx(actor), (tx) =>

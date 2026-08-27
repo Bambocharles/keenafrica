@@ -7,6 +7,7 @@ import { AuthorizationError } from "@/lib/authz";
 import { createNote, deleteNote } from "@/lib/notes";
 import { addBookmark, removeBookmark } from "@/lib/bookmarks";
 import { markLessonComplete } from "@/lib/progress";
+import { issueCertificateIfEligible } from "@/lib/certificates";
 
 async function requireActor() {
   const session = await auth();
@@ -80,6 +81,14 @@ export async function markLessonCompleteAction(formData: FormData) {
   let error: string | null = null;
   try {
     await markLessonComplete(courseId, lessonId, actor);
+    // Certificate issuance is triggered by this defined completion
+    // criterion (Enrollment.status === 'completed', which
+    // markLessonComplete() above just awaited Progress recomputing) — not
+    // a separate "Issue Certificate" button. A failure here must not fail
+    // the lesson-completion action itself; see src/lib/certificates.ts.
+    await issueCertificateIfEligible(courseId, actor).catch((err) => {
+      console.error("[certificates] issuance check failed after lesson completion", err);
+    });
   } catch (err) {
     error = toError(err);
   }
@@ -87,6 +96,7 @@ export async function markLessonCompleteAction(formData: FormData) {
   revalidatePath(`/courses/${courseId}/lessons/${lessonId}`);
   revalidatePath(`/progress`);
   revalidatePath(`/courses/${courseId}`);
+  revalidatePath(`/certificates`);
   if (error) redirect(`/courses/${courseId}/lessons/${lessonId}?error=${error}`);
 }
 

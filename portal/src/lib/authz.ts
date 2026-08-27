@@ -83,6 +83,15 @@ export const PERMISSIONS = {
   SPONSOR_MANAGE: "sponsor.manage",
   SPONSOR_PROJECTS_READ: "sponsor.projects.read",
   SPONSOR_USERS_MANAGE: "sponsor.users.manage",
+  // Added by Session 14 (Certificates). Gates admin verification/management
+  // (issuing is NOT gated by this on the student side — see below) AND is
+  // the ONLY permission src/lib/certificates.ts's internal
+  // systemCertificateCtx() ever carries when it writes a certificates row.
+  // No STUDENT or TEACHER role holds this (see DEFAULT_ROLE_PERMISSIONS
+  // below) — a real actor's own permission set can never satisfy
+  // certificates_write/update's RLS policy, only this module's own narrow
+  // system context can, which is never exposed to a real actor's request.
+  CERTIFICATES_MANAGE: "certificates.manage",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 

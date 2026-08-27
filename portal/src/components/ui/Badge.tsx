@@ -19,7 +19,9 @@ type Status =
   // Added by Session 11 (Sponsor) for Milestone.status.
   | "planned"
   | "achieved"
-  | "missed";
+  | "missed"
+  // Added by Session 14 (Certificates) for Certificate.status.
+  | "revoked";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -40,6 +42,7 @@ const LABEL: Record<Status, string> = {
   planned: "Planned",
   achieved: "Achieved",
   missed: "Missed",
+  revoked: "Revoked",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -62,6 +65,7 @@ export function StatusBadge({ status }: { status: Status }) {
     planned: styles["badge-draft"],
     achieved: styles["badge-active"],
     missed: styles["badge-suspended"],
+    revoked: styles["badge-suspended"],
   }[status];
 
   return (

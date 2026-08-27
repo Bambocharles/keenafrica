@@ -17,12 +17,14 @@ export function NavLinks({
   showEducation,
   showMessages,
   showReports,
+  showCertificates,
 }: {
   showUsers: boolean;
   showAudit: boolean;
   showEducation: boolean;
   showMessages: boolean;
   showReports: boolean;
+  showCertificates: boolean;
 }) {
   const pathname = usePathname();
 
@@ -32,6 +34,7 @@ export function NavLinks({
     { href: "/dashboard#projects", icon: "▬", label: "Projects", activePrefix: "__never__" },
     ...(showEducation ? [{ href: "/education", icon: "🎓", label: "Courses" }] : []),
     ...(showReports ? [{ href: "/reports", icon: "📊", label: "Reports" }] : []),
+    ...(showCertificates ? [{ href: "/certificates", icon: "🏅", label: "Certificates" }] : []),
     ...(showUsers ? [{ href: "/users", icon: "◉", label: "Users" }] : []),
     ...(showMessages ? [{ href: "/messages", icon: "✉", label: "Messages" }] : []),
     ...(showAudit ? [{ href: "/audit", icon: "☰", label: "Audit Log" }] : []),
