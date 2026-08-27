@@ -4,6 +4,7 @@ import { getCourseById, listCohortsForCourse, listEnrollmentsForCohort } from "@
 import { getCourseContentForTeacher } from "@/lib/content";
 import { listTopics } from "@/lib/topics";
 import { getCourseProgressForCohort, getTopicMasteryForCohort } from "@/lib/progress";
+import { getAssessmentOutcomesForCohort } from "@/lib/reporting";
 import { AuthorizationError } from "@/lib/authz";
 import {
   addResourceAction,
@@ -72,6 +73,7 @@ export default async function TeacherCourseDetailPage({
       enrollments: await listEnrollmentsForCohort(c.id, actor),
       progress: await getCourseProgressForCohort(c.id, actor),
       topicMastery: await getTopicMasteryForCohort(c.id, actor),
+      assessmentOutcomes: await getAssessmentOutcomesForCohort(c.id, actor),
     }))
   );
 
@@ -181,6 +183,33 @@ export default async function TeacherCourseDetailPage({
                               <td className={ui.mono}>
                                 {t.studentsWeak} weak · {t.studentsStrong} strong (of {t.studentsWithEvidence})
                               </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    </Disclosure>
+                  )}
+
+                  {(roster?.assessmentOutcomes.length ?? 0) > 0 && (
+                    <Disclosure label="Assessment outcomes">
+                      <Table>
+                        <thead>
+                          <tr>
+                            <th>Assessment</th>
+                            <th>Attempts</th>
+                            <th>Graded</th>
+                            <th>Avg score</th>
+                            <th>Pass rate</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {roster!.assessmentOutcomes.map((a) => (
+                            <tr key={a.assessmentId}>
+                              <td className={ui.nameCell}>{a.assessmentTitle}</td>
+                              <td className={ui.mono}>{a.attempts}</td>
+                              <td className={ui.mono}>{a.gradedAttempts}</td>
+                              <td className={ui.mono}>{a.avgScorePercent ?? "—"}%</td>
+                              <td className={ui.mono}>{a.passRatePercent ?? "—"}%</td>
                             </tr>
                           ))}
                         </tbody>
