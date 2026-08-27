@@ -41,6 +41,8 @@ export interface AuthzSnapshot {
   status: "active" | "suspended";
   roles: string[];
   permissions: string[];
+  /** Organization Core (Session 17) — organization ids the user holds an ACTIVE membership in. */
+  organizationIds: string[];
 }
 
 /**
@@ -92,7 +94,19 @@ export async function resolveSessionAuthz(
       new Set(userRoles.flatMap((ur) => ur.role.rolePermissions.map((rp) => rp.permission.key)))
     );
 
-    return { isSuperAdmin: user.isSuperAdmin, status: user.status, roles, permissions };
+    // Organization Core (Session 17) — resolved server-side, the same way
+    // roles/permissions are, and re-checked on every request exactly like
+    // them (see this function's own docstring): an org membership change
+    // takes effect on the target's very next request, not at next login.
+    // Self-row read only (organization_memberships_select's "user_id = self"
+    // branch) — no recursion, no dependency on app.organization_ids itself.
+    const orgMemberships = await tx.organizationMembership.findMany({
+      where: { userId, status: "active" },
+      select: { organizationId: true },
+    });
+    const organizationIds = orgMemberships.map((m) => m.organizationId);
+
+    return { isSuperAdmin: user.isSuperAdmin, status: user.status, roles, permissions, organizationIds };
   });
 }
 

@@ -7,6 +7,8 @@ declare module "next-auth" {
       isSuperAdmin: boolean;
       roles: string[];
       permissions: string[];
+      /** Organization Core (Session 17) — organization ids the user holds an ACTIVE membership in. */
+      organizationIds: string[];
       /** The DB-backed sessions.id this login corresponds to — see src/lib/sessions.ts. */
       sessionId: string;
     } & DefaultSession["user"];
@@ -24,6 +26,7 @@ declare module "next-auth/jwt" {
     isSuperAdmin?: boolean;
     roles?: string[];
     permissions?: string[];
+    organizationIds?: string[];
     sessionId?: string;
   }
 }
@@ -37,6 +40,7 @@ declare module "@auth/core/jwt" {
     isSuperAdmin?: boolean;
     roles?: string[];
     permissions?: string[];
+    organizationIds?: string[];
     sessionId?: string;
   }
 }

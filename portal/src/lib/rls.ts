@@ -30,6 +30,26 @@ export interface RlsContext {
    * evaluate before app.user_id exists. Never set this anywhere else.
    */
   rateLimitLookup?: boolean;
+  /**
+   * Organization Core (Session 17). Server-resolved JSON array of the
+   * organization ids the caller holds an ACTIVE OrganizationMembership in
+   * (any role) — resolved in src/lib/sessions.ts's resolveSessionAuthz(),
+   * the same way roles/permissions already are, and NEVER trusted from a
+   * client-supplied organization id. RLS policies test membership with a
+   * jsonb_array_elements_text expression (see the organization_core
+   * migration) since this is a set of ids, not a set of jsonb object keys
+   * (unlike app.permissions' `?` key-existence test).
+   */
+  organizationIds?: string[];
+  /**
+   * Set ONLY by src/lib/organizations.ts's acceptOrganizationInvitation(),
+   * for the token-authorized (not app.user_id/app.organization_ids
+   * -authorized) invitation lookup/consume and the resulting
+   * organization_memberships row it creates. Mirrors the existing
+   * app.password_reset_lookup convention exactly. Never set this anywhere
+   * else.
+   */
+  orgInvitationLookup?: boolean;
 }
 
 /**
@@ -48,6 +68,8 @@ export async function withRls<T>(
     await tx.$executeRaw`SELECT set_config('app.auth_lookup', ${String(!!ctx.authLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.password_reset_lookup', ${String(!!ctx.passwordResetLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.rate_limit_lookup', ${String(!!ctx.rateLimitLookup)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.organization_ids', ${JSON.stringify(ctx.organizationIds ?? [])}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
     return fn(tx);
   });
 }

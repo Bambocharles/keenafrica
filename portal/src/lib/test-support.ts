@@ -268,3 +268,25 @@ export async function cleanupTestSponsors(sponsorIds: string[]): Promise<void> {
   await prisma.auditEvent.deleteMany({ where: { entityId: { in: sponsorIds } } });
   await prisma.sponsor.deleteMany({ where: { id: { in: sponsorIds } } });
 }
+
+/**
+ * Deletes a set of test-created organizations and everything hanging off
+ * them (memberships, invitations) — call this BEFORE cleanupTestUsers()
+ * for any users referenced as creator/member/inviter (organization_core
+ * migration's FKs are all ON DELETE NO ACTION, same convention as every
+ * other cleanup helper here).
+ */
+export async function cleanupTestOrganizations(organizationIds: string[]): Promise<void> {
+  if (organizationIds.length === 0) return;
+  await prisma.organizationInvitation.deleteMany({ where: { organizationId: { in: organizationIds } } });
+  await prisma.organizationMembership.deleteMany({ where: { organizationId: { in: organizationIds } } });
+  await prisma.auditEvent.deleteMany({ where: { entityId: { in: organizationIds } } });
+  await prisma.organization.deleteMany({ where: { id: { in: organizationIds } } });
+}
+
+/** The same {id, isSuperAdmin, permissions} shape as actorFromUser(), plus organizationIds — for src/lib/organizations.test.ts, which needs the org-scoped RLS session var populated. */
+export async function orgActorFromUser(userId: string) {
+  const actor = await actorFromUser(userId);
+  const memberships = await prisma.organizationMembership.findMany({ where: { userId, status: "active" }, select: { organizationId: true } });
+  return { ...actor, organizationIds: memberships.map((m) => m.organizationId) };
+}

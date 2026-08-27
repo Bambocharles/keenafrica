@@ -23,15 +23,22 @@ import { featureFlagsTask } from "./tasks/feature-flags";
 import { demoTask } from "./tasks/demo";
 import {
   cleanupTestCourses,
+  cleanupTestOrganizations,
   cleanupTestProjects,
   cleanupTestSponsors,
   cleanupTestTopics,
   cleanupTestUsers,
 } from "@/lib/test-support";
-import { DEMO_COURSE_TITLES, DEMO_EMAIL_DOMAIN, DEMO_SPONSOR_NAMES, DEMO_TOPIC_NAMES } from "./tasks/demo/constants";
+import {
+  DEMO_COURSE_TITLES,
+  DEMO_EMAIL_DOMAIN,
+  DEMO_ORGANIZATION_NAMES,
+  DEMO_SPONSOR_NAMES,
+  DEMO_TOPIC_NAMES,
+} from "./tasks/demo/constants";
 
 async function wipeDemoData(prisma: PrismaClient): Promise<void> {
-  const [courses, sponsors, projects, topics, users] = await Promise.all([
+  const [courses, sponsors, projects, topics, organizations, users] = await Promise.all([
     prisma.course.findMany({
       where: { title: { in: [...DEMO_COURSE_TITLES] }, creator: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } } },
       select: { id: true },
@@ -39,22 +46,24 @@ async function wipeDemoData(prisma: PrismaClient): Promise<void> {
     prisma.sponsor.findMany({ where: { name: { in: [...DEMO_SPONSOR_NAMES] } }, select: { id: true } }),
     prisma.project.findMany({ where: { sponsor: { name: { in: [...DEMO_SPONSOR_NAMES] } } }, select: { id: true } }),
     prisma.topic.findMany({ where: { name: { in: [...DEMO_TOPIC_NAMES] } }, select: { id: true } }),
+    prisma.organization.findMany({ where: { name: { in: [...DEMO_ORGANIZATION_NAMES] } }, select: { id: true } }),
     prisma.user.findMany({ where: { email: { endsWith: `@${DEMO_EMAIL_DOMAIN}` } }, select: { id: true } }),
   ]);
 
   console.log(
     `[demo:reset] wiping ${courses.length} course(s), ${projects.length} project(s), ${sponsors.length} sponsor(s), ` +
-      `${topics.length} topic(s), ${users.length} user(s)...`
+      `${topics.length} topic(s), ${organizations.length} organization(s), ${users.length} user(s)...`
   );
 
-  // Dependency order — courses/projects/sponsors/topics before users, since
-  // their rows (and everything cascaded off them) still reference user ids
-  // via ON DELETE NO ACTION foreign keys. See test-support.ts's own
-  // docstrings for the full per-function cascade.
+  // Dependency order — courses/projects/sponsors/topics/organizations
+  // before users, since their rows (and everything cascaded off them)
+  // still reference user ids via ON DELETE NO ACTION foreign keys. See
+  // test-support.ts's own docstrings for the full per-function cascade.
   await cleanupTestCourses(courses.map((c) => c.id));
   await cleanupTestProjects(projects.map((p) => p.id));
   await cleanupTestSponsors(sponsors.map((s) => s.id));
   await cleanupTestTopics(topics.map((t) => t.id));
+  await cleanupTestOrganizations(organizations.map((o) => o.id));
   await cleanupTestUsers(users.map((u) => u.id));
 }
 

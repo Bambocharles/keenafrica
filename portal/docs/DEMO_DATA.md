@@ -109,6 +109,24 @@ threshold.
   (verified live — see the Session 15 handoff in
   `status/project-status.md`).
 
+## Organizations (Session 17)
+
+2 organizations, seeded entirely through the real `src/lib/organizations.ts`
+API (never raw inserts) — reuses existing demo teacher/student accounts as
+members rather than inventing new ones:
+
+- **Baobab Learning Hub** (`training_center`) — `teacher1` is its founding
+  `org_admin`; `teacher2` was invited as a known existing user and accepted
+  (`org_member`, active); `student001` requested to join and was approved
+  (active); `student002` requested to join and is still **pending**
+  (deliberately left unapproved — a realistic in-flight state); `student003`
+  was approved then **suspended**.
+- **Sahel Community School** (`school`) — `teacher4` is its founding
+  `org_admin`; `student001` (the same student as above — proves multi-org
+  membership) and `student004` are active `org_member`s.
+
+See `docs/ORGANIZATION_CORE.md` for the full contract these exercise.
+
 ## Feature flags
 
 The demo seed deliberately does **not** toggle any feature flag. All the

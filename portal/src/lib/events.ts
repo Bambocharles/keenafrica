@@ -62,6 +62,18 @@ export interface DomainEventMap {
   CertificateIssued: { certificateId: string; studentId: string };
   MessageReceived: { messageId: string; conversationId: string; recipientId: string };
   ProjectMilestoneUpdated: { projectId: string; milestoneId: string };
+  // Added by Session 17 (Organization Core). Unemitted by anything before
+  // this session — the first real emitters are src/lib/organizations.ts.
+  // membershipId is the organization_memberships row id; actorId is who
+  // triggered the change (may equal userId for a self-service action like
+  // requesting to join or leaving).
+  OrganizationCreated: { organizationId: string; actorId: string };
+  OrganizationMembershipChanged: {
+    organizationId: string;
+    membershipId: string;
+    userId: string;
+    actorId: string;
+  };
 }
 
 export type DomainEventName = keyof DomainEventMap;
