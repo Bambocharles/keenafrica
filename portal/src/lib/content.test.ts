@@ -4,6 +4,7 @@ import { AuthorizationError } from "@/lib/authz";
 import { assignTeacherToCohort, createCohort, createCourse } from "@/lib/courses";
 import {
   addResource,
+  addResourceFromUpload,
   createLesson,
   createModule,
   getCourseContentForStudent,
@@ -16,8 +17,11 @@ import {
   unpublishLesson,
   updateLesson,
 } from "@/lib/content";
+import { UnsupportedFileTypeError } from "@/lib/assets";
 import { enrollStudent } from "@/lib/courses";
 import { actorFromUser, cleanupTestCourses, cleanupTestUsers, createTestUser } from "@/lib/test-support";
+
+const MINIMAL_PDF = Buffer.from("%PDF-1.4\n%test pdf content for upload validation\n%%EOF");
 
 const createdUserIds: string[] = [];
 const createdCourseIds: string[] = [];
@@ -240,5 +244,122 @@ describe("getCourseContentForTeacher vs getCourseContentForStudent — the visib
     const studentActor = await actorFromUser(unenrolledStudent.id);
 
     await expect(getCourseContentForStudent(course.id, studentActor)).rejects.toThrow(AuthorizationError);
+  });
+});
+
+describe("addResourceFromUpload / removeResource — Session 13 Asset integration", () => {
+  it("an assigned teacher can upload a file resource; it carries an assetId and no url", async () => {
+    const { course, teacherActor } = await setupCourseWithTeacher();
+    const module = await createModule(course.id, { title: "M1" }, teacherActor);
+    const lesson = await createLesson(module.id, { title: "L1", content: "body" }, teacherActor);
+
+    const resource = await addResourceFromUpload(
+      lesson.id,
+      { title: "Slides", originalFilename: "slides.pdf", declaredMimeType: "application/pdf", buffer: MINIMAL_PDF },
+      teacherActor
+    );
+
+    expect(resource.assetId).not.toBeNull();
+    expect(resource.url).toBeNull();
+
+    const asset = await prisma.asset.findUnique({ where: { id: resource.assetId! } });
+    expect(asset?.status).toBe("active");
+    expect(asset?.mimeType).toBe("application/pdf");
+
+    const attachment = await prisma.assetAttachment.findUnique({
+      where: { entityType_entityId: { entityType: "lesson_resource", entityId: resource.id } },
+    });
+    expect(attachment).not.toBeNull();
+  });
+
+  it("a teacher NOT assigned to the course cannot upload a resource, and no Asset row is left behind", async () => {
+    const { course, teacherActor } = await setupCourseWithTeacher();
+    const module = await createModule(course.id, { title: "M1" }, teacherActor);
+    const lesson = await createLesson(module.id, { title: "L1", content: "body" }, teacherActor);
+
+    const outsider = await user({ roles: ["TEACHER"] });
+    const outsiderActor = await actorFromUser(outsider.id);
+
+    await expect(
+      addResourceFromUpload(
+        lesson.id,
+        { title: "Slides", originalFilename: "slides.pdf", declaredMimeType: "application/pdf", buffer: MINIMAL_PDF },
+        outsiderActor
+      )
+    ).rejects.toThrow(AuthorizationError);
+
+    const orphanCount = await prisma.asset.count({ where: { uploaderId: outsider.id } });
+    expect(orphanCount).toBe(0);
+  });
+
+  it("rejects a file whose content doesn't match its declared MIME type", async () => {
+    const { course, teacherActor } = await setupCourseWithTeacher();
+    const module = await createModule(course.id, { title: "M1" }, teacherActor);
+    const lesson = await createLesson(module.id, { title: "L1", content: "body" }, teacherActor);
+
+    await expect(
+      addResourceFromUpload(
+        lesson.id,
+        {
+          title: "Fake PDF",
+          originalFilename: "fake.pdf",
+          declaredMimeType: "application/pdf",
+          buffer: Buffer.from("this is not a pdf"),
+        },
+        teacherActor
+      )
+    ).rejects.toThrow(UnsupportedFileTypeError);
+  });
+
+  it("removeResource detaches and purges the underlying asset (storage bytes + row) once orphaned", async () => {
+    const { course, teacherActor } = await setupCourseWithTeacher();
+    const module = await createModule(course.id, { title: "M1" }, teacherActor);
+    const lesson = await createLesson(module.id, { title: "L1", content: "body" }, teacherActor);
+
+    const resource = await addResourceFromUpload(
+      lesson.id,
+      { title: "Slides", originalFilename: "slides.pdf", declaredMimeType: "application/pdf", buffer: MINIMAL_PDF },
+      teacherActor
+    );
+    const assetId = resource.assetId!;
+
+    await removeResource(resource.id, teacherActor);
+
+    const resourceRow = await prisma.resource.findUnique({ where: { id: resource.id } });
+    expect(resourceRow).toBeNull();
+
+    const attachment = await prisma.assetAttachment.findUnique({
+      where: { entityType_entityId: { entityType: "lesson_resource", entityId: resource.id } },
+    });
+    expect(attachment).toBeNull();
+
+    const asset = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(asset?.status).toBe("deleted");
+  });
+
+  it("a student sees an uploaded resource only once its lesson/module are published and they are enrolled", async () => {
+    const { course, cohort, teacherActor, adminActor } = await setupCourseWithTeacher();
+    const module = await createModule(course.id, { title: "M1" }, teacherActor);
+    const lesson = await createLesson(module.id, { title: "L1", content: "body" }, teacherActor);
+    await addResourceFromUpload(
+      lesson.id,
+      { title: "Slides", originalFilename: "slides.pdf", declaredMimeType: "application/pdf", buffer: MINIMAL_PDF },
+      teacherActor
+    );
+
+    const student = await user({ roles: ["STUDENT"] });
+    await enrollStudent(cohort.id, student.id, adminActor);
+    const studentActor = await actorFromUser(student.id);
+
+    const beforePublish = await getCourseContentForStudent(course.id, studentActor);
+    expect(beforePublish!.modules.flatMap((m) => m.lessons)).toHaveLength(0);
+
+    await publishModule(module.id, teacherActor);
+    await publishLesson(lesson.id, teacherActor);
+
+    const afterPublish = await getCourseContentForStudent(course.id, studentActor);
+    const resources = afterPublish!.modules.flatMap((m) => m.lessons).flatMap((l) => l.resources);
+    expect(resources).toHaveLength(1);
+    expect(resources[0].assetId).not.toBeNull();
   });
 });

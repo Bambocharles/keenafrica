@@ -102,6 +102,25 @@ enum AttemptStatus {
 // existence IS the evidence (a student completed this lesson); see
 // LessonProgress's own comment for why there's no "in_progress" state.
 
+// Session 13 (Files & Content Assets). Canonical Asset/File service —
+// storage-vendor-agnostic (see src/lib/storage.ts): Postgres only ever
+// stores metadata, never binary content. AssetAttachment is a generic,
+// polymorphic join (the same targetType/targetId shape as
+// NoteTargetType/BookmarkTargetType above) so Messaging/Sponsor/
+// Certificates (Sessions 09/11/14) attach to the same Asset table by adding
+// their own AssetEntityType value + a matching case in
+// src/lib/assets.ts's visibility resolver, instead of building a parallel
+// TeacherFiles/StudentFiles/SponsorFiles system. Only "lesson_resource"
+// exists today — the one real, wired consumer (Resource, Session 04).
+enum AssetStatus {
+  active
+  deleted
+}
+
+enum AssetEntityType {
+  lesson_resource
+}
+
 model User {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String     @unique @db.Citext
@@ -126,6 +145,9 @@ model User {
   resourcesCreated        Resource[]
   studentNotes            StudentNote[]
   bookmarks               Bookmark[]
+
+  assetsUploaded       Asset[]
+  assetAttachmentsMade AssetAttachment[]
 
   questionsCreated               Question[]
   assessmentsCreated             Assessment[]           @relation("AssessmentCreator")
@@ -423,8 +445,8 @@ model Lesson {
   createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  module    Module          @relation(fields: [moduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  course    Course          @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  module    Module           @relation(fields: [moduleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course    Course           @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   resources Resource[]
   versions  LessonVersion[]
   topics    LessonTopic[]
@@ -458,21 +480,23 @@ model LessonVersion {
   @@map("lesson_versions")
 }
 
-// Deliberately an external URL, not a file upload — Session 01's handoff
-// flagged that no storage/asset abstraction exists yet anywhere in the app.
-// A real upload-backed Resource.type belongs to Session 13 (Files & Content);
-// this is the minimal relationship the data model calls for today.
+// Either an external URL (unchanged since Session 04) or a real
+// upload-backed file via Asset (Session 13's Asset/File service) — exactly
+// one of url/assetId is set, enforced by a CHECK constraint added directly
+// in the assets_files migration (Prisma's schema DSL has no CHECK syntax).
 model Resource {
   id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   lessonId  String       @map("lesson_id") @db.Uuid
   title     String
-  url       String
+  url       String?
+  assetId   String?      @unique @map("asset_id") @db.Uuid
   type      ResourceType @default(link)
   createdBy String       @map("created_by") @db.Uuid
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
   lesson  Lesson @relation(fields: [lessonId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   creator User   @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  asset   Asset? @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([lessonId])
   @@map("resources")
@@ -849,4 +873,63 @@ model LessonProgress {
   @@index([courseId])
   @@index([lessonId])
   @@map("lesson_progress")
+}
+
+// --- Files & Content Assets (Session 13) ----------------------------------
+// The canonical Asset/File service (PLATFORM_ARCHITECTURE.md §11): every
+// upload in the platform — course resources today, message/sponsor-document/
+// certificate attachments once those sessions land — is one Asset row here,
+// never a second per-module file table. Postgres stores metadata only;
+// bytes live behind src/lib/storage.ts's StorageDriver interface (local disk
+// in dev — see docs/ASSETS.md for why no production object-storage backend
+// exists yet), so swapping the storage vendor never touches this schema or
+// any domain model that references an Asset.
+//
+// No UPDATE/DELETE policy at the RLS layer for either table below (same
+// append-only shape as lesson_versions/assessment_versions/audit_events) —
+// "deleting" an asset is an application-layer soft-delete
+// (status=deleted, deletedAt set, storage bytes purged) via
+// src/lib/assets.ts, never a real row DELETE, so a past attachment
+// reference can never dangle silently.
+model Asset {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  uploaderId       String      @map("uploader_id") @db.Uuid
+  originalFilename String      @map("original_filename")
+  mimeType         String      @map("mime_type")
+  sizeBytes        Int         @map("size_bytes")
+  storageDriver    String      @map("storage_driver")
+  storageKey       String      @unique @map("storage_key")
+  checksumSha256   String      @map("checksum_sha256")
+  status           AssetStatus @default(active)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  uploader    User              @relation(fields: [uploaderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attachments AssetAttachment[]
+  resources   Resource[]
+
+  @@index([uploaderId])
+  @@map("assets")
+}
+
+// entityId is a lightweight polymorphic reference (no FK — the referenced
+// table varies by entityType), same convention as StudentNote/Bookmark's
+// targetType/targetId above. @@unique([entityType, entityId]) keeps today's
+// relationship 1:1 (one lesson_resource Resource carries at most one Asset);
+// a future entity type that legitimately needs many assets per entity would
+// need this loosened — not required by anything in this session's scope.
+model AssetAttachment {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assetId    String          @map("asset_id") @db.Uuid
+  entityType AssetEntityType @map("entity_type")
+  entityId   String          @map("entity_id") @db.Uuid
+  attachedBy String          @map("attached_by") @db.Uuid
+  attachedAt DateTime        @default(now()) @map("attached_at") @db.Timestamptz(6)
+
+  asset    Asset @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attacher User  @relation(fields: [attachedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([entityType, entityId])
+  @@index([assetId])
+  @@map("asset_attachments")
 }

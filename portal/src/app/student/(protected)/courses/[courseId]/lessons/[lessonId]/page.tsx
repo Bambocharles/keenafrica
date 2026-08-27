@@ -116,13 +116,13 @@ export default async function StudentLessonPage({
             {lesson.resources.map((r) => (
               <a
                 key={r.id}
-                href={r.url}
+                href={r.assetId ? `/assets/${r.assetId}/download` : (r.url ?? "#")}
                 target="_blank"
                 rel="noreferrer"
                 className={ui.linkMono}
                 style={{ display: "block", padding: "8px 0" }}
               >
-                [{r.type}] {r.title} ↗
+                [{r.type}] {r.title} {r.assetId ? "(download)" : "↗"}
               </a>
             ))}
           </div>

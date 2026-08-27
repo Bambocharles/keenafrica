@@ -6,6 +6,7 @@ import { auth } from "@/lib/auth";
 import { AuthorizationError, type AuthzActor } from "@/lib/authz";
 import {
   addResource,
+  addResourceFromUpload,
   createLesson,
   createModule,
   getCourseContentForTeacher,
@@ -19,6 +20,7 @@ import {
   updateLesson,
   updateModule,
 } from "@/lib/content";
+import { FileTooLargeError, UnsupportedFileTypeError } from "@/lib/assets";
 import { tagLesson, untagLesson } from "@/lib/topics";
 
 async function requireActor(): Promise<AuthzActor> {
@@ -28,7 +30,10 @@ async function requireActor(): Promise<AuthzActor> {
 }
 
 function toError(err: unknown): string {
-  return err instanceof AuthorizationError ? "not_authorized" : "action_failed";
+  if (err instanceof AuthorizationError) return "not_authorized";
+  if (err instanceof UnsupportedFileTypeError) return "unsupported_file_type";
+  if (err instanceof FileTooLargeError) return "file_too_large";
+  return "action_failed";
 }
 
 async function finish(courseId: string, error: string | null) {
@@ -231,6 +236,38 @@ export async function addResourceAction(formData: FormData) {
   } else {
     try {
       await addResource(lessonId, { title, url, type: type as "link" | "document" | "video" }, actor);
+    } catch (err) {
+      error = toError(err);
+    }
+  }
+  await finish(courseId, error);
+}
+
+export async function uploadResourceFileAction(formData: FormData) {
+  const actor = await requireActor();
+  const courseId = String(formData.get("courseId") ?? "");
+  const lessonId = String(formData.get("lessonId") ?? "");
+  const title = String(formData.get("title") ?? "").trim();
+  const type = String(formData.get("type") ?? "document");
+  const file = formData.get("file");
+
+  let error: string | null = null;
+  if (!title || !(file instanceof File) || file.size === 0) {
+    error = "missing_fields";
+  } else {
+    try {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      await addResourceFromUpload(
+        lessonId,
+        {
+          title,
+          type: type as "link" | "document" | "video",
+          originalFilename: file.name,
+          declaredMimeType: file.type || "application/octet-stream",
+          buffer,
+        },
+        actor
+      );
     } catch (err) {
       error = toError(err);
     }

@@ -43,6 +43,9 @@ repo/environment secrets. Never commit real values.
 | `ALLOW_DEMO_SEED` | no | Must be `true` to allow `npm run seed:demo` to run its demo-kind tasks. See `docs/SEED_FRAMEWORK.md`. |
 | `PORTAL_DATABASE_URL_PROD` | CI only | GitHub Actions secret — the migrator connection string used by `deploy-portal.yml` and `backup-portal-db.yml`. Never exposed to the running application. |
 | `RLS_TEST_DATABASE_URL` | no (local dev only) | Connection string for the non-superuser `portal_rls_test` role (`scripts/dev/create-rls-test-role.sql`) — enables `src/lib/rls.integration.test.ts`, which verifies RLS policies are actually enforced by Postgres rather than bypassed by the superuser connection the default `DATABASE_URL` uses locally. See `docs/IDENTITY_SECURITY.md`. |
+| `STORAGE_DRIVER` | no (default `local`) | Selects the Asset/File service's storage backend (`src/lib/storage.ts`). Only `local` (disk) is implemented today — see `docs/ASSETS.md`'s Known limitations for why this isn't production-ready as-is. |
+| `ASSET_STORAGE_LOCAL_ROOT` | no (default `<repo>/var/asset-storage`) | Where the local-disk storage driver writes uploaded file bytes. Outside `public/`; never served directly, only through the authorized `assets/[id]/download` routes. |
+| `ASSET_MAX_SIZE_BYTES` | no (default 26214400 / 25 MiB) | Upload size cap enforced by `src/lib/assets.ts`'s `uploadAsset()`. |
 
 ## Secrets handling
 

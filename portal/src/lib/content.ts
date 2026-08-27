@@ -2,6 +2,7 @@ import { withRls } from "@/lib/rls";
 import { AuthorizationError, PERMISSIONS, hasPermission, type AuthzActor } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
 import { actorRlsCtx, assertActiveEnrollment, isCourseTeacher, requireCourseContentAccess } from "@/lib/courses";
+import { deleteAssetIfOrphanedAsContentOwner, uploadAsset } from "@/lib/assets";
 
 /**
  * Education Core (Session 04) — Module, Lesson, LessonVersion, Resource.
@@ -274,14 +275,81 @@ export async function addResource(lessonId: string, input: AddResourceInput, act
   return resource;
 }
 
+/**
+ * Upload-backed resource (Session 13's Asset/File service) — the real,
+ * upload-backed counterpart to addResource()'s external-link case. Same
+ * ownership gate, same lesson resolution; the only difference is the file
+ * goes through uploadAsset() (storage write + Asset row) and the Resource
+ * row references it via assetId instead of an external url.
+ */
+export interface AddUploadedResourceInput {
+  title: string;
+  type?: "link" | "document" | "video";
+  originalFilename: string;
+  declaredMimeType: string;
+  buffer: Buffer;
+}
+
+export async function addResourceFromUpload(lessonId: string, input: AddUploadedResourceInput, actor: AuthzActor) {
+  const lesson = await withRls(actorRlsCtx(actor), (tx) => tx.lesson.findUnique({ where: { id: lessonId }, select: { courseId: true } }));
+  if (!lesson) throw new Error("Lesson not found");
+  await requireCourseContentAccess(lesson.courseId, actor, PERMISSIONS.COURSES_CONTENT_WRITE);
+
+  const asset = await uploadAsset(
+    { originalFilename: input.originalFilename, declaredMimeType: input.declaredMimeType, buffer: input.buffer },
+    actor
+  );
+
+  try {
+    const resource = await withRls(actorRlsCtx(actor), async (tx) => {
+      const created = await tx.resource.create({
+        data: { lessonId, title: input.title, type: input.type ?? "document", assetId: asset.id, createdBy: actor.id },
+      });
+      await tx.assetAttachment.create({
+        data: { assetId: asset.id, entityType: "lesson_resource", entityId: created.id, attachedBy: actor.id },
+      });
+      return created;
+    });
+
+    await recordAuditEvent({
+      actorId: actor.id,
+      action: "resource.added",
+      entityType: "Resource",
+      entityId: resource.id,
+      metadata: { lessonId, assetId: asset.id },
+    });
+
+    return resource;
+  } catch (err) {
+    await deleteAssetIfOrphanedAsContentOwner(asset.id, actor).catch(() => {});
+    throw err;
+  }
+}
+
 export async function removeResource(resourceId: string, actor: AuthzActor) {
   const resource = await withRls(actorRlsCtx(actor), (tx) =>
-    tx.resource.findUnique({ where: { id: resourceId }, select: { lessonId: true, lesson: { select: { courseId: true } } } })
+    tx.resource.findUnique({
+      where: { id: resourceId },
+      select: { lessonId: true, assetId: true, lesson: { select: { courseId: true } } },
+    })
   );
   if (!resource) throw new Error("Resource not found");
   await requireCourseContentAccess(resource.lesson.courseId, actor, PERMISSIONS.COURSES_CONTENT_WRITE);
 
-  await withRls(actorRlsCtx(actor), (tx) => tx.resource.delete({ where: { id: resourceId } }));
+  // Detach BEFORE deleting the Resource row — asset_attachments_delete's
+  // RLS policy re-derives ownership through the still-existing resource;
+  // deleting the resource first would make that ownership check
+  // unresolvable (see the migration's RLS comment).
+  await withRls(actorRlsCtx(actor), async (tx) => {
+    if (resource.assetId) {
+      await tx.assetAttachment.deleteMany({ where: { entityType: "lesson_resource", entityId: resourceId } });
+    }
+    await tx.resource.delete({ where: { id: resourceId } });
+  });
+
+  if (resource.assetId) {
+    await deleteAssetIfOrphanedAsContentOwner(resource.assetId, actor).catch(() => {});
+  }
 
   await recordAuditEvent({ actorId: actor.id, action: "resource.removed", entityType: "Resource", entityId: resourceId });
 }

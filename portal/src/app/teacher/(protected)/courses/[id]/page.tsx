@@ -20,6 +20,7 @@ import {
   untagLessonAction,
   updateLessonAction,
   updateModuleAction,
+  uploadResourceFileAction,
 } from "./actions";
 import { Banner, Button, Card, Disclosure, EmptyState, Field, Input, Select, SectionHeader, StatusBadge, Table } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
@@ -28,6 +29,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing_fields: "That field is required.",
   not_authorized: "You do not have permission to perform that action.",
   action_failed: "That action could not be completed.",
+  unsupported_file_type: "That file type isn't supported, or its content didn't match its extension.",
+  file_too_large: "That file is too large.",
 };
 
 function formatDate(date: Date) {
@@ -369,7 +372,15 @@ export default async function TeacherCourseDetailPage({
                         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                           {lesson.resources.map((r) => (
                             <span key={r.id} className={ui.roleTag}>
-                              {r.title} ({r.type})
+                              {r.assetId ? (
+                                <a href={`/assets/${r.assetId}/download`} target="_blank" rel="noreferrer">
+                                  {r.title} ({r.type})
+                                </a>
+                              ) : (
+                                <>
+                                  {r.title} ({r.type})
+                                </>
+                              )}
                               <form action={removeResourceAction} style={{ display: "inline" }}>
                                 <input type="hidden" name="courseId" value={courseId} />
                                 <input type="hidden" name="resourceId" value={r.id} />
@@ -380,7 +391,7 @@ export default async function TeacherCourseDetailPage({
                             </span>
                           ))}
                         </div>
-                        <Disclosure label="Add resource">
+                        <Disclosure label="Add resource (link)">
                           <form action={addResourceAction} style={{ display: "flex", gap: "8px", alignItems: "flex-end", width: "100%", flexWrap: "wrap", gridColumn: "1 / -1" }}>
                             <input type="hidden" name="courseId" value={courseId} />
                             <input type="hidden" name="lessonId" value={lesson.id} />
@@ -399,6 +410,27 @@ export default async function TeacherCourseDetailPage({
                             </Field>
                             <Button type="submit" variant="secondary">
                               Add
+                            </Button>
+                          </form>
+                        </Disclosure>
+                        <Disclosure label="Upload file">
+                          <form action={uploadResourceFileAction} style={{ display: "flex", gap: "8px", alignItems: "flex-end", width: "100%", flexWrap: "wrap", gridColumn: "1 / -1" }}>
+                            <input type="hidden" name="courseId" value={courseId} />
+                            <input type="hidden" name="lessonId" value={lesson.id} />
+                            <Field label="Title">
+                              <Input name="title" placeholder="Lecture slides" required />
+                            </Field>
+                            <Field label="File" className={ui.fieldWide}>
+                              <input type="file" name="file" required />
+                            </Field>
+                            <Field label="Type">
+                              <Select name="type" defaultValue="document">
+                                <option value="document">Document</option>
+                                <option value="video">Video</option>
+                              </Select>
+                            </Field>
+                            <Button type="submit" variant="secondary">
+                              Upload
                             </Button>
                           </form>
                         </Disclosure>
