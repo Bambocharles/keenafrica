@@ -128,6 +128,23 @@ enum AssetEntityType {
   message
 }
 
+// Session 10 (Notifications). event-to-notification mapping — see
+// schema.prisma's "Notifications (Session 10)" section below and
+// docs/NOTIFICATIONS.md for the full contract and which domain event
+// produces which type.
+enum NotificationType {
+  message_received
+  assessment_assigned
+  assessment_submitted
+  assessment_graded
+  course_published
+  student_enrolled
+  certificate_issued
+  account_suspended
+  role_changed
+  project_milestone_updated
+}
+
 model User {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String     @unique @db.Citext
@@ -169,6 +186,8 @@ model User {
   attemptsGraded                 Attempt[]              @relation("AttemptGrader")
 
   lessonProgress LessonProgress[]
+
+  notificationsReceived Notification[]
 
   @@map("users")
 }
@@ -1044,4 +1063,59 @@ model Message {
   @@index([conversationId, sentAt])
   @@index([senderId])
   @@map("messages")
+}
+
+// --- Notifications (Session 10) ------------------------------------------
+// The ONE canonical notification center for the whole platform
+// (PLATFORM_CONTEXT.md's "Shared communication rule" — "notifications" is
+// listed as a platform-core service exactly like messaging). Every domain
+// event this session maps into a notification (see src/lib/notifications.ts)
+// writes into THIS table; no portal owns a parallel notification table.
+//
+// entityType/entityId is the same lightweight polymorphic reference
+// convention as StudentNote/Bookmark's targetType/targetId and
+// AssetAttachment's entityType/entityId — but modeled as plain TEXT (not an
+// enum) because it spans every domain in the platform (conversation,
+// attempt, course, certificate, project, ...), the same reasoning
+// AuditEvent.entityType already uses. `metadata` carries whatever extra
+// structured context a notification's link/rendering needs beyond one id
+// (e.g. assessment_submitted needs both an attemptId AND the assessmentId
+// to build the teacher's attempt-review route) — same purpose as
+// AuditEvent.metadata.
+//
+// dedupeKey is the duplicate-delivery-protection mechanism (explicit
+// acceptance criterion): each event listener in src/lib/notifications.ts
+// derives it from the driving event's own natural identity (e.g. a specific
+// messageId, a specific gradedAt timestamp on a specific attempt) so the
+// SAME real-world occurrence delivered twice (a re-registered listener, a
+// caller that emits idempotently, or a future durable-queue redelivery once
+// events.ts's transport is swapped per its own docstring) creates at most
+// one row and triggers channel delivery (e.g. email) at most once — while a
+// genuinely NEW occurrence for the same recipient/type (a second message, a
+// re-grade, a re-enrollment) still gets its own notification. See
+// docs/NOTIFICATIONS.md's "Duplicate delivery protection" section for which
+// event types have a fully precise key vs. a documented weaker one.
+//
+// No UPDATE policy beyond the recipient marking their own readAt, and no
+// DELETE policy at all for any role — same append-oriented spirit as
+// audit_events, just with one mutable field.
+model Notification {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  recipientId String           @map("recipient_id") @db.Uuid
+  type        NotificationType
+  title       String
+  body        String
+  entityType  String?          @map("entity_type")
+  entityId    String?          @map("entity_id")
+  metadata    Json?
+  dedupeKey   String           @map("dedupe_key")
+  readAt      DateTime?        @map("read_at") @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([recipientId, dedupeKey])
+  @@index([recipientId, createdAt])
+  @@index([recipientId, readAt])
+  @@map("notifications")
 }

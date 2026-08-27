@@ -15,6 +15,22 @@ export const FEATURE_FLAGS = {
   ADAPTIVE_RECOMMENDATIONS: "adaptive_recommendations",
   AI_TUTORING: "ai_tutoring",
   UTME_FEATURES: "utme_features",
+  // Added by Session 10 (Notifications). The in-app notification center
+  // itself is NOT flag-gated (core plumbing, same as audit/progress) — only
+  // delivery CHANNELS beyond in-app are, per that session's explicit
+  // acceptance criterion "feature flags prevent incomplete channels from
+  // exposing broken UX". NOTIFICATIONS_EMAIL has a real (dev-stub-backed,
+  // see src/lib/mailer.ts) implementation behind it, default off because
+  // the underlying provider is still Session 02's open blocker. The other
+  // three have NO implementation at all yet (no push/SMS/WhatsApp provider
+  // exists anywhere in this infra) — they're reserved keys only, same
+  // pre-declared-ahead-of-the-owning-session pattern this file already uses
+  // for CERTIFICATES/SPONSOR_REPORTING/AI_TUTORING. See
+  // docs/NOTIFICATIONS.md's "Delivery channels" section.
+  NOTIFICATIONS_EMAIL: "notifications_email",
+  NOTIFICATIONS_PUSH: "notifications_push",
+  NOTIFICATIONS_SMS: "notifications_sms",
+  NOTIFICATIONS_WHATSAPP: "notifications_whatsapp",
 } as const;
 
 export type FeatureFlagKey =

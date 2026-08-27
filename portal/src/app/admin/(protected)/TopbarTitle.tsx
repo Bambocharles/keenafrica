@@ -8,6 +8,7 @@ const TITLES: Array<[prefix: string, title: string]> = [
   ["/users", "Users"],
   ["/audit", "Audit Log"],
   ["/flags", "Feature Flags"],
+  ["/notifications", "Notifications"],
 ];
 
 export function TopbarTitle() {

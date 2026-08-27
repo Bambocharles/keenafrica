@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
 import { canAccessStudentPortal } from "@/lib/authz";
+import { getUnreadNotificationCount } from "@/lib/notifications";
+import { NotificationBell } from "@/components/ui";
 import { TopbarTitle } from "./TopbarTitle";
 import { NavLinks } from "./NavLinks";
 import styles from "./layout.module.css";
@@ -24,6 +26,7 @@ export default async function ProtectedStudentLayout({ children }: { children: R
     redirect("/login");
   }
   const user = session.user;
+  const unreadCount = await getUnreadNotificationCount(user);
 
   return (
     <div className={styles.shell}>
@@ -59,8 +62,11 @@ export default async function ProtectedStudentLayout({ children }: { children: R
       <div className={styles.main}>
         <header className={styles.topbar}>
           <TopbarTitle />
-          <div className={styles.avatar} title={user.email ?? undefined}>
-            {initials(user.name, user.email)}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <NotificationBell unreadCount={unreadCount} />
+            <div className={styles.avatar} title={user.email ?? undefined}>
+              {initials(user.name, user.email)}
+            </div>
           </div>
         </header>
         <main className={styles.content}>{children}</main>

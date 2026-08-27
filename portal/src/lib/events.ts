@@ -40,6 +40,25 @@ export interface DomainEventMap {
   LessonCompleted: { lessonId: string; studentId: string; courseId: string };
   AssessmentSubmitted: { attemptId: string; studentId: string; assessmentId: string };
   AssessmentGraded: { attemptId: string; studentId: string; assessmentId: string };
+  // Added by Session 10 (Notifications), which needs an "a new assessment
+  // was assigned to you" signal but does not own AssessmentAssignment
+  // (Session 07's entity) — per CLAUDE_BUILD_RULES.md §2, this defines the
+  // minimal contract without touching src/lib/assessments.ts's own
+  // assignment-creation logic. Unemitted today (same "pre-typed, zero
+  // emitters" state Session 01 left every event in originally) — Session 10
+  // already subscribes to it (src/lib/notifications.ts), so the moment
+  // whoever owns src/lib/assessments.ts adds one
+  // `emitDomainEvent("AssessmentAssigned", ...)` call at the end of its
+  // assignment-creation function, notifications start flowing with zero
+  // further Notifications-side work. Exactly one of cohortId/studentUserId
+  // is set, mirroring AssessmentAssignment.scope's own CHECK constraint.
+  AssessmentAssigned: {
+    assignmentId: string;
+    assessmentId: string;
+    courseId: string;
+    cohortId?: string;
+    studentUserId?: string;
+  };
   CertificateIssued: { certificateId: string; studentId: string };
   MessageReceived: { messageId: string; conversationId: string; recipientId: string };
   ProjectMilestoneUpdated: { projectId: string; milestoneId: string };
