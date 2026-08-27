@@ -36,6 +36,22 @@ rate limiting anywhere in the platform before this session.
 - **Per-IP**: 30 failed attempts / 15 minutes, keyed by `X-Forwarded-For`.
   Covers email-enumeration/spraying attempts against unknown emails, which
   have no account to key the per-account limit on.
+  **Post-deploy E2E fix**: the first version of this shipped a real bug
+  here — `authorize()`'s `if (!user) return null` path recorded no audit
+  event at all for an unknown email, so the per-IP limit could never
+  actually accumulate against exactly the attack it's documented to cover.
+  Caught during this session's post-deploy live E2E pass (the earlier live
+  verification only drove wrong-password attempts against a *real* known
+  user, never an unknown one) — a real end-to-end HTTP run against a
+  locally built server, not just a unit test, since the unit tests wrote
+  audit rows directly and never exercised `authorize()` itself. Fixed:
+  `!user` now records `login.failed` with `actorId: null`, mirroring what
+  `src/lib/audit.ts`'s own `AuditEventInput` docstring already anticipated
+  ("actorId is nullable — some security events have no authenticated
+  actor (e.g. a failed login attempt against an unknown email)"). Re-
+  verified live: 31 real attempts against a nonexistent email correctly
+  produced 30 `login.failed` + 1 `login.rate_limited`, then cleaned up
+  from the local dev DB.
 - Checked **before** the bcrypt password compare, so a blocked attempt
   doesn't pay that cost, and a blocked attempt fails identically to a wrong
   password (no information leak about which limit tripped, or that a limit
