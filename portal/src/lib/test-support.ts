@@ -73,8 +73,43 @@ export async function cleanupTestAssets(assetIds: string[]): Promise<void> {
   await Promise.all(assets.map((a) => driver.delete(a.storageKey).catch(() => {})));
 }
 
+/** Shared by cleanupTestConversations/cleanupTestCourses — deletes a known set of conversation ids and everything hanging off them. */
+async function deleteConversationsByIds(conversationIds: string[]): Promise<void> {
+  if (conversationIds.length === 0) return;
+
+  const messages = await prisma.message.findMany({ where: { conversationId: { in: conversationIds } }, select: { id: true } });
+  const messageIds = messages.map((m) => m.id);
+  const messageAssetIds = (
+    await prisma.assetAttachment.findMany({
+      where: { entityType: "message", entityId: { in: messageIds } },
+      select: { assetId: true },
+    })
+  ).map((a) => a.assetId);
+  await prisma.assetAttachment.deleteMany({ where: { entityType: "message", entityId: { in: messageIds } } });
+  await cleanupTestAssets(messageAssetIds);
+  await prisma.message.deleteMany({ where: { conversationId: { in: conversationIds } } });
+  await prisma.conversationParticipant.deleteMany({ where: { conversationId: { in: conversationIds } } });
+  await prisma.conversation.deleteMany({ where: { id: { in: conversationIds } } });
+}
+
+/**
+ * Deletes any Conversation rows a set of test users participate in
+ * (including messages, message attachments, and participant rows) — call
+ * this before cleanupTestUsers() deletes the User rows those reference
+ * (messaging_core migration's FKs are all ON DELETE NO ACTION, same
+ * convention as every other cleanup helper here).
+ */
+export async function cleanupTestConversations(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  const conversationIds = (
+    await prisma.conversationParticipant.findMany({ where: { userId: { in: userIds } }, select: { conversationId: true } })
+  ).map((p) => p.conversationId);
+  await deleteConversationsByIds(conversationIds);
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
+  await cleanupTestConversations(userIds);
   const uploadedAssetIds = (
     await prisma.asset.findMany({ where: { uploaderId: { in: userIds } }, select: { id: true } })
   ).map((a) => a.id);
@@ -134,6 +169,15 @@ export async function cleanupTestCourses(courseIds: string[]): Promise<void> {
   await prisma.lessonVersion.deleteMany({ where: { lesson: { courseId: { in: courseIds } } } });
   await prisma.lesson.deleteMany({ where: { courseId: { in: courseIds } } });
   await prisma.module.deleteMany({ where: { courseId: { in: courseIds } } });
+  // Session 09 — cohort_broadcast conversations reference a cohort via
+  // context_cohort_id; must go before the cohorts themselves are deleted.
+  const broadcastConversationIds = (
+    await prisma.conversation.findMany({
+      where: { contextCohort: { courseId: { in: courseIds } } },
+      select: { id: true },
+    })
+  ).map((c) => c.id);
+  await deleteConversationsByIds(broadcastConversationIds);
   await prisma.enrollment.deleteMany({ where: { cohort: { courseId: { in: courseIds } } } });
   await prisma.cohortTeacher.deleteMany({ where: { cohort: { courseId: { in: courseIds } } } });
   await prisma.cohort.deleteMany({ where: { courseId: { in: courseIds } } });

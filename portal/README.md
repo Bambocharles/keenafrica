@@ -111,3 +111,22 @@ Actions → Deploy Portal → Run workflow.
   analytics** — `docs/PROGRESS.md` (`src/lib/progress.ts`). No stored
   mastery snapshot, no separate analytics database — every read is
   computed fresh from canonical evidence.
+
+## Files & Content Assets (Session 13)
+
+- **Canonical Asset/File service** (`Asset`/`AssetAttachment`, a
+  storage-vendor-agnostic driver interface, upload validation, upload/
+  download authorization) — `docs/ASSETS.md` (`src/lib/storage.ts`,
+  `src/lib/assets.ts`). Course resources (Session 04) and message
+  attachments (Session 09) both attach through this — never a parallel
+  file table.
+
+## Messaging (Session 09)
+
+- **The one canonical Conversation/Message system for the whole
+  platform** (`Conversation`/`ConversationParticipant`/`Message`,
+  server-side participant authorization, read/unread state, attachments
+  via Session 13's Asset service, `MessageReceived` domain event) —
+  `docs/MESSAGING.md` (`src/lib/messaging.ts`,
+  `src/app/{admin,teacher,student}/(protected)/messages/**`). Gated
+  behind the pre-existing `messaging` feature flag (default off).

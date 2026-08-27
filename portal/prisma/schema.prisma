@@ -117,8 +117,15 @@ enum AssetStatus {
   deleted
 }
 
+// 'message' added by Session 09 (Messaging) — see that section below and
+// docs/ASSETS.md's "Extending this for a new consumer" walkthrough. Added
+// in a separate migration from the Message/Conversation tables themselves:
+// Postgres cannot use a new enum value in the same transaction that adds
+// it, so the asset_attachments RLS branch referencing 'message' had to
+// land as its own follow-up migration.
 enum AssetEntityType {
   lesson_resource
+  message
 }
 
 model User {
@@ -148,6 +155,10 @@ model User {
 
   assetsUploaded       Asset[]
   assetAttachmentsMade AssetAttachment[]
+
+  conversationsCreated       Conversation[]            @relation("ConversationCreator")
+  conversationParticipations ConversationParticipant[]
+  messagesSent                Message[]                @relation("MessageSender")
 
   questionsCreated               Question[]
   assessmentsCreated             Assessment[]           @relation("AssessmentCreator")
@@ -371,6 +382,7 @@ model Cohort {
   teachers              CohortTeacher[]
   enrollments           Enrollment[]
   assessmentAssignments AssessmentAssignment[]
+  broadcastConversations Conversation[]
 
   @@index([courseId])
   @@map("cohorts")
@@ -932,4 +944,104 @@ model AssetAttachment {
   @@unique([entityType, entityId])
   @@index([assetId])
   @@map("asset_attachments")
+}
+
+// --- Messaging (Session 09) -----------------------------------------------
+// The ONE canonical messaging system for the whole platform
+// (PLATFORM_CONTEXT.md's "Shared communication rule") — every portal
+// (teacher/student/admin) consumes this Conversation/ConversationParticipant/
+// Message contract rather than building its own inbox table.
+//
+// Server-side participant authorization is the core guarantee: a user can
+// read/send only in a conversation they hold a ConversationParticipant row
+// for. The RLS policies (messaging_core migration) enforce this via a
+// SECURITY DEFINER helper function, app_current_user_conversation_ids(),
+// rather than a raw self-referencing subquery on conversation_participants
+// from within that table's own SELECT policy — a naive self-join there is a
+// well-documented Postgres RLS infinite-recursion trap, the same failure
+// class as Sessions 08/13's cross-table cycles but triggered by a single
+// table referencing itself. The function runs as the migrator/table owner
+// (bypasses RLS internally, same as any owner-run query), so referencing it
+// from a policy never re-triggers RLS rewriting on conversation_participants.
+//
+// Attachments reuse Session 13's Asset/File service via the 'message'
+// AssetEntityType value + matching asset_attachments RLS branches (added in
+// a separate migration, since a new enum value can't be used in the same
+// transaction that adds it) — never a parallel attachment mechanism. A
+// message carries at most one attachment (AssetAttachment's existing
+// @@unique([entityType, entityId]) constraint, per Session 13's own
+// documented limitation).
+//
+// Participant set is fixed at conversation-creation time — no add/remove-
+// participant-later feature, not required by this session's acceptance
+// criteria. Messages are permanent once sent (no edit/delete), same
+// append-only spirit as lesson_versions/audit_events/asset rows.
+//
+// WHO may start a conversation with whom is application-layer relationship
+// logic (src/lib/messaging.ts's assertCanMessage), mirroring how
+// courses.content.write is necessary-but-not-sufficient without a matching
+// cohort_teachers row: holding `messages.send` is necessary but the real
+// scope check is "do these two users share a cohort as teacher/student or
+// as fellow students," computed fresh from Session 04's canonical
+// CohortTeacher/Enrollment tables — never a duplicated relationship table.
+// `messages.admin` (ADMIN/SUPER_ADMIN) bypasses the relationship check
+// entirely, matching the "Admin -> permitted users" required use case.
+//
+// See docs/MESSAGING.md for the full contract.
+enum ConversationType {
+  direct
+  group
+  cohort_broadcast
+}
+
+model Conversation {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type            ConversationType
+  contextCohortId String?          @map("context_cohort_id") @db.Uuid
+  createdBy       String           @map("created_by") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastMessageAt   DateTime?        @map("last_message_at") @db.Timestamptz(6)
+
+  creator       User                      @relation("ConversationCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contextCohort Cohort?                   @relation(fields: [contextCohortId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  participants  ConversationParticipant[]
+  messages      Message[]
+
+  @@index([createdBy])
+  @@index([contextCohortId])
+  @@map("conversations")
+}
+
+// Fixed at creation time (see Conversation's own comment above). lastReadAt
+// drives per-participant unread counts, computed at read time (count of
+// messages.sentAt > lastReadAt from other senders) — same "no stored/
+// cached derived state" spirit as Session 08's read-time mastery
+// calculation, nothing to invalidate or let drift out of sync.
+model ConversationParticipant {
+  conversationId String    @map("conversation_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  joinedAt       DateTime  @default(now()) @map("joined_at") @db.Timestamptz(6)
+  lastReadAt     DateTime? @map("last_read_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User         @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  senderId       String   @map("sender_id") @db.Uuid
+  body           String
+  sentAt         DateTime @default(now()) @map("sent_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sender       User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([conversationId, sentAt])
+  @@index([senderId])
+  @@map("messages")
 }
