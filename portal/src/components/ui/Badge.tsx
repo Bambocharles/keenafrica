@@ -15,7 +15,11 @@ type Status =
   | "weak"
   | "developing"
   | "strong"
-  | "exposure_only";
+  | "exposure_only"
+  // Added by Session 11 (Sponsor) for Milestone.status.
+  | "planned"
+  | "achieved"
+  | "missed";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -33,6 +37,9 @@ const LABEL: Record<Status, string> = {
   developing: "Developing",
   strong: "Strong",
   exposure_only: "Exposure only",
+  planned: "Planned",
+  achieved: "Achieved",
+  missed: "Missed",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -52,6 +59,9 @@ export function StatusBadge({ status }: { status: Status }) {
     developing: styles["badge-paused"],
     strong: styles["badge-active"],
     exposure_only: styles["badge-draft"],
+    planned: styles["badge-draft"],
+    achieved: styles["badge-active"],
+    missed: styles["badge-suspended"],
   }[status];
 
   return (

@@ -123,9 +123,14 @@ enum AssetStatus {
 // Postgres cannot use a new enum value in the same transaction that adds
 // it, so the asset_attachments RLS branch referencing 'message' had to
 // land as its own follow-up migration.
+//
+// 'sponsor_document' added by Session 11 (Sponsor) — same reasoning, same
+// split-migration requirement. Anchor row is ProjectDocument (see Sponsor
+// Core section below), mirroring Resource's role for 'lesson_resource'.
 enum AssetEntityType {
   lesson_resource
   message
+  sponsor_document
 }
 
 // Session 10 (Notifications). event-to-notification mapping — see
@@ -156,11 +161,12 @@ model User {
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  memberships         ProjectMembership[]
-  userRoles           UserRole[]
-  sessions            Session[]
-  passwordResetTokens PasswordResetToken[]
-  auditEventsAsActor  AuditEvent[]         @relation("AuditActor")
+  memberships              ProjectMembership[]
+  projectDocumentsUploaded ProjectDocument[]
+  userRoles                UserRole[]
+  sessions                 Session[]
+  passwordResetTokens      PasswordResetToken[]
+  auditEventsAsActor       AuditEvent[]         @relation("AuditActor")
 
   coursesCreated          Course[]        @relation("CourseCreator")
   cohortTeaching          CohortTeacher[]
@@ -175,7 +181,7 @@ model User {
 
   conversationsCreated       Conversation[]            @relation("ConversationCreator")
   conversationParticipations ConversationParticipant[]
-  messagesSent                Message[]                @relation("MessageSender")
+  messagesSent               Message[]                 @relation("MessageSender")
 
   questionsCreated               Question[]
   assessmentsCreated             Assessment[]           @relation("AssessmentCreator")
@@ -318,16 +324,25 @@ model Sponsor {
 }
 
 model Project {
-  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sponsorId String        @map("sponsor_id") @db.Uuid
-  name      String
-  slug      String        @unique
-  status    ProjectStatus @default(active)
-  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sponsorId   String        @map("sponsor_id") @db.Uuid
+  name        String
+  slug        String        @unique
+  // description/startDate/endDate added by Session 11, per
+  // PLATFORM_DATA_MODEL.md's Project contract ("description", "dates") —
+  // the Phase-1 scaffold only had name/slug/status.
+  description String?
+  startDate   DateTime?     @map("start_date") @db.Timestamptz(6)
+  endDate     DateTime?     @map("end_date") @db.Timestamptz(6)
+  status      ProjectStatus @default(active)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   sponsor     Sponsor             @relation(fields: [sponsorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships ProjectMembership[]
+  milestones  Milestone[]
+  metrics     ProjectMetric[]
+  documents   ProjectDocument[]
 
   @@map("projects")
 }
@@ -342,6 +357,18 @@ model FeatureFlag {
   @@map("feature_flags")
 }
 
+// role='sponsor_admin' means "this user is on the sponsor-side project
+// team" (the ownership/relationship row Session 11 scopes sponsor-portal
+// access through, mirroring cohort_teachers for Education Core) — it is
+// orthogonal to the global SPONSOR_ADMIN/SPONSOR_USER Role a user holds
+// (src/lib/authz.ts). The global Role controls CAPABILITY (SPONSOR_ADMIN
+// can manage other sponsor users via sponsor.users.manage; SPONSOR_USER is
+// read-only); this row's role='sponsor_admin' controls WHICH projects a
+// sponsor-side user can see at all, regardless of their global Role. Both
+// a SPONSOR_ADMIN and a SPONSOR_USER need a role='sponsor_admin' row here
+// to see a given project — the enum value name predates Session 11's
+// Role/Permission-based rebuild and is kept as-is per "extend, don't
+// replace the Phase-1 scaffold."
 model ProjectMembership {
   id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String         @map("user_id") @db.Uuid
@@ -397,10 +424,10 @@ model Cohort {
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  course                Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  teachers              CohortTeacher[]
-  enrollments           Enrollment[]
-  assessmentAssignments AssessmentAssignment[]
+  course                 Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  teachers               CohortTeacher[]
+  enrollments            Enrollment[]
+  assessmentAssignments  AssessmentAssignment[]
   broadcastConversations Conversation[]
 
   @@index([courseId])
@@ -935,9 +962,10 @@ model Asset {
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz(6)
 
-  uploader    User              @relation(fields: [uploaderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  attachments AssetAttachment[]
-  resources   Resource[]
+  uploader         User              @relation(fields: [uploaderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  attachments      AssetAttachment[]
+  resources        Resource[]
+  projectDocuments ProjectDocument[]
 
   @@index([uploaderId])
   @@map("assets")
@@ -1118,4 +1146,94 @@ model Notification {
   @@index([recipientId, createdAt])
   @@index([recipientId, readAt])
   @@map("notifications")
+}
+
+// --- Sponsor Core (Session 11) --------------------------------------------
+// Extends the Phase-1 Sponsor/Project/ProjectMembership scaffold (already
+// in the schema — see those models above) rather than replacing it.
+// Authorization is rebuilt on Session 02's Role/Permission model
+// (PERMISSIONS.SPONSOR_MANAGE / SPONSOR_PROJECTS_READ / SPONSOR_USERS_MANAGE,
+// src/lib/authz.ts) layered on ProjectMembership as the ownership/
+// relationship check — the exact same "permission + ownership row" shape
+// Education Core uses (courses.content.write + cohort_teachers). See
+// docs/SPONSOR_CORE.md for the full contract.
+//
+// Milestones/metrics/documents are admin/staff-authored (sponsor.manage);
+// sponsor-side users (SPONSOR_ADMIN/SPONSOR_USER, ownership-scoped via
+// ProjectMembership) are read-only over their own permitted projects' data
+// — matches the session brief's "sponsor dashboard... reports/documents"
+// as a visibility surface, not a sponsor-editable one. Beneficiary rows
+// (ProjectMembership role='beneficiary') are read via a dedicated,
+// privacy-aware summary function (src/lib/sponsor.ts's
+// listProjectBeneficiaries) that never exposes email/contact/academic
+// data to a sponsor — see that file's header for why this can't be a
+// plain RLS-scoped join against `users`.
+
+enum MilestoneStatus {
+  planned
+  in_progress
+  achieved
+  missed
+}
+
+model Milestone {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId   String          @map("project_id") @db.Uuid
+  title       String
+  description String?
+  targetDate  DateTime?       @map("target_date") @db.Timestamptz(6)
+  status      MilestoneStatus @default(planned)
+  achievedAt  DateTime?       @map("achieved_at") @db.Timestamptz(6)
+  createdBy   String          @map("created_by") @db.Uuid
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([projectId])
+  @@map("milestones")
+}
+
+// Point-in-time impact metric samples ("beneficiaries reached: 120",
+// "attendance rate: 92%"), not a running total — multiple rows per label
+// over time form the reporting time series Session 12 (Reporting & Impact)
+// consumes (see getProjectImpactSummary in src/lib/sponsor.ts). Append-only
+// by convention (no update/delete RLS policy — a correction is a new
+// sample, not a rewrite of history, same reasoning as lesson_versions/
+// audit_events).
+model ProjectMetric {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  label      String
+  value      Float
+  unit       String?
+  recordedAt DateTime @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  createdBy  String   @map("created_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([projectId, label, recordedAt])
+  @@map("project_metrics")
+}
+
+// Anchor row for a sponsor-visible document upload — the same shape as
+// Resource for 'lesson_resource' (Session 13's convention: AssetAttachment
+// needs a dedicated business row per attached file since @@unique
+// ([entityType, entityId]) is 1:1, and a project needs to hold many
+// documents over time).
+model ProjectDocument {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  title      String
+  assetId    String   @unique @map("asset_id") @db.Uuid
+  uploadedBy String   @map("uploaded_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  uploader User    @relation(fields: [uploadedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  asset    Asset   @relation(fields: [assetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([projectId])
+  @@map("project_documents")
 }

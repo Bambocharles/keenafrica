@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { withRls } from "@/lib/rls";
 import { getSystemStatus } from "@/lib/admin-stats";
-import { createSponsor, createProject } from "../sponsors/actions";
+import { hasPermission, PERMISSIONS } from "@/lib/authz";
+import { createSponsorAction, createProjectAction } from "../sponsors/actions";
 import {
   Button,
   Card,
@@ -38,14 +39,16 @@ export default async function DashboardPage() {
     redirect("/login");
   }
   const user = session.user;
+  const canManageSponsors = user.isSuperAdmin || hasPermission(user, PERMISSIONS.SPONSOR_MANAGE);
 
   // Was hardcoded `isSuperAdmin: true` regardless of the actual caller —
   // silently gave every admin-console visitor a full RLS bypass on this
   // query the moment the layout guard above stopped being isSuperAdmin-only
-  // (see layout.tsx). Sponsor/project data has no permission model of its
-  // own yet (Sponsor Core is Session 11's scope) — the real access boundary
-  // for non-super-admins is `projects_select`'s `status = 'active'` RLS
-  // policy, not an app-layer bypass.
+  // (see layout.tsx). Fixed by passing the real actor context; Session 11
+  // (Sponsor) has since given Sponsor Core its own permission model
+  // (sponsor.manage), so a non-super-admin ADMIN now legitimately sees
+  // every project (not just active ones) via projects_select's
+  // sponsor.manage branch, rather than relying on an app-layer bypass.
   const { sponsors, projects } = await withRls(
     { userId: user.id, isSuperAdmin: user.isSuperAdmin, permissions: [...user.permissions] },
     async (tx) => ({
@@ -149,9 +152,9 @@ export default async function DashboardPage() {
           </Table>
         )}
 
-        {user.isSuperAdmin && (
+        {canManageSponsors && (
           <Disclosure label="New sponsor">
-            <form action={createSponsor} style={{ display: "contents" }}>
+            <form action={createSponsorAction} style={{ display: "contents" }}>
               <Field label="Sponsor name" className={ui.fieldWide}>
                 <Input name="name" placeholder="e.g. Febambo Youth Elevate" required />
               </Field>
@@ -187,7 +190,9 @@ export default async function DashboardPage() {
             <tbody>
               {projects.map((p) => (
                 <tr key={p.id}>
-                  <td className={ui.nameCell}>{p.name}</td>
+                  <td className={ui.nameCell}>
+                    <a href={`/sponsors/${p.id}`}>{p.name}</a>
+                  </td>
                   <td>{p.sponsor.name}</td>
                   <td className={ui.mono}>
                     <a
@@ -207,9 +212,9 @@ export default async function DashboardPage() {
           </Table>
         )}
 
-        {user.isSuperAdmin && (
+        {canManageSponsors && (
           <Disclosure label="New project">
-            <form action={createProject} style={{ display: "contents" }}>
+            <form action={createProjectAction} style={{ display: "contents" }}>
               <Field label="Project name">
                 <Input name="name" placeholder="e.g. Anthropic Skill Up" required />
               </Field>

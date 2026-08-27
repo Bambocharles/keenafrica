@@ -7,6 +7,7 @@ const RESERVED_SLUGS = new Set([
   "admin",
   "teacher",
   "student",
+  "sponsor",
   "www",
   "api",
   "app",
@@ -49,6 +50,17 @@ export function middleware(req: NextRequest) {
   if (subdomain === "student") {
     const url = req.nextUrl.clone();
     url.pathname = `/student${pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  // Session 11 (Sponsor) — same rewrite shape as "admin"/"teacher"/"student"
+  // above. Deliberately its own top-level portal, not a {slug}. tenant path
+  // — a sponsor org spans multiple projects (each with its own {slug}.
+  // placeholder page below), so it isn't addressed by any single project's
+  // subdomain.
+  if (subdomain === "sponsor") {
+    const url = req.nextUrl.clone();
+    url.pathname = `/sponsor${pathname}`;
     return NextResponse.rewrite(url);
   }
 

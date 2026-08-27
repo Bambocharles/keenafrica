@@ -185,6 +185,18 @@ export async function uploadAsset(input: UploadAssetInput, actor: AuthzActor) {
  * than a parallel mechanism — see this file's header.
  */
 async function canAccessAssetAttachment(entityType: string, entityId: string, actor: AuthzActor): Promise<boolean> {
+  if (entityType === "sponsor_document") {
+    // A sponsor document attachment is visible to exactly whoever can see
+    // the ProjectDocument row itself — reuses project_documents_select's
+    // RLS-enforced ownership scoping (sponsor.manage or a project's own
+    // sponsor team, see the sponsor_core migration) rather than a second
+    // visibility rule for the same data.
+    const document = await withRls(actorRlsCtx(actor), (tx) =>
+      tx.projectDocument.findUnique({ where: { id: entityId }, select: { id: true } })
+    );
+    return !!document;
+  }
+
   if (entityType === "message") {
     // A message attachment is visible to exactly whoever can see the
     // message itself — reuses messages_select's RLS-enforced participant
