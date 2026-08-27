@@ -282,13 +282,27 @@ not a load-testing exercise.
   login volume ever grows enough for it to matter — not needed at
   current/anticipated scale.
 
-## Environment isolation — reviewed, unchanged
+## Environment isolation — one real gap closed
 
-Confirmed (not just read the docs, read the actual guard code): production
-cannot run demo-seed tasks even if `ALLOW_DEMO_SEED=true` is mistakenly set
-there — `prisma/seed/guard.ts`'s `assertDemoSeedAllowed()` checks
-`NODE_ENV === "production"` first and throws unconditionally. No staging
-environment exists (a prior, deliberate infra decision — see
+Confirmed production cannot run demo-seed tasks even if `ALLOW_DEMO_SEED=true`
+is mistakenly set there — `prisma/seed/guard.ts`'s `assertDemoSeedAllowed()`
+checks `NODE_ENV === "production"` first and throws unconditionally.
+
+**Closed a gap flagged (not fixed) by Session 15's live-production-
+verification handoff entry**: the guard used to check only `NODE_ENV`/
+`ALLOW_DEMO_SEED`, never `DATABASE_URL` itself — a developer with
+legitimate access to `PORTAL_DATABASE_URL_PROD` who ran `ALLOW_DEMO_SEED=
+true npm run demo:reset` locally with `NODE_ENV` unset (as most local
+shells are) was not blocked. Only the complete absence of any automated
+path that does this actually prevented it in practice. Fixed:
+`assertDemoSeedAllowed()` now also refuses when `DATABASE_URL` matches the
+`kf_portal_prod_*` role-naming convention (`README.md`/
+`docs/BACKUP_RESTORE.md` — both production Postgres roles share `_prod_`;
+no documented non-production role does). Purely additive — every
+previously-refused case is still refused; this only adds a new refusal
+path. Two new test cases in `prisma/seed/guard.test.ts`.
+
+No staging environment exists (a prior, deliberate infra decision — see
 `docs/ENVIRONMENT.md`); re-affirmed as out of this session's authority to
 change, same as Session 01 found.
 
