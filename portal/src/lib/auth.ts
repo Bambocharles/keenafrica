@@ -58,7 +58,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        if (!user) return null;
+        if (!user) {
+          // No actorId to attach (there's no account) — still recorded so
+          // the per-IP limit above actually accumulates for exactly the
+          // case it's documented to cover (email-enumeration/spraying
+          // against unknown addresses). Before this, an unknown-email
+          // attempt was silently un-audited and could never contribute to
+          // any rate limit, no matter how many were sent from one IP.
+          await recordAuditEvent({
+            actorId: null,
+            action: "login.failed",
+            entityType: "User",
+            entityId: null,
+            ipAddress,
+          });
+          return null;
+        }
 
         const valid = await compare(password, user.passwordHash);
         if (!valid) {
