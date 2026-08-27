@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import { PERMISSIONS, hasPermission } from "@/lib/authz";
 import { isFeatureEnabled, FEATURE_FLAGS } from "@/lib/feature-flags";
 import { listMyConversations } from "@/lib/messaging";
 import { Banner, Button, Card, EmptyState, SectionHeader } from "@/components/ui";
@@ -11,10 +12,14 @@ function formatDateTime(date: Date) {
 
 const TYPE_LABEL: Record<string, string> = { direct: "Direct", group: "Group", cohort_broadcast: "Cohort broadcast" };
 
-export default async function StudentMessagesPage() {
+export default async function AdminMessagesPage() {
   const session = await auth();
   if (!session?.user) redirect("/login");
   const actor = session.user;
+
+  if (!(actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.MESSAGES_ADMIN))) {
+    return <Banner>You do not have permission to use messaging (requires messages.admin).</Banner>;
+  }
 
   const messagingEnabled = await isFeatureEnabled(FEATURE_FLAGS.MESSAGING);
   if (!messagingEnabled) {
@@ -22,8 +27,8 @@ export default async function StudentMessagesPage() {
       <div style={{ display: "grid", gap: "16px" }}>
         <SectionHeader title="Messages" count={0} />
         <Banner>
-          Messaging is built but not yet turned on for your account — an administrator can enable the &quot;messaging&quot;
-          feature flag from the admin console.
+          Messaging is built but not yet turned on — toggle the &quot;messaging&quot; feature flag on the Feature Flags
+          page to enable it platform-wide.
         </Banner>
       </div>
     );
@@ -46,10 +51,7 @@ export default async function StudentMessagesPage() {
       />
 
       {conversations.length === 0 ? (
-        <EmptyState
-          title="No conversations yet"
-          hint="Message a teacher or a classmate you share a course with from &quot;New message&quot;."
-        />
+        <EmptyState title="No conversations yet" hint="Search for any user from &quot;New message&quot; to start a conversation." />
       ) : (
         <div style={{ display: "grid", gap: "10px" }}>
           {conversations.map((c) => {

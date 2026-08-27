@@ -1,51 +1,87 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { listMyCourses } from "@/lib/courses";
-import { Banner, EmptyState, SectionHeader } from "@/components/ui";
+import { isFeatureEnabled, FEATURE_FLAGS } from "@/lib/feature-flags";
+import { listMyConversations } from "@/lib/messaging";
+import { Banner, Button, Card, EmptyState, SectionHeader } from "@/components/ui";
+import ui from "@/components/ui/styles.module.css";
 
-/**
- * Entry point only — Session 09 (Messaging) owns the canonical
- * Conversation/Message tables and APIs, which do not exist yet. Per
- * CLAUDE_BUILD_RULES.md §2 ("do not invent a competing implementation"),
- * this screen does not build a parallel, portal-specific messaging system;
- * it reports the dependency and documents the contract Teacher expects to
- * consume once it lands (see docs/TEACHER.md).
- *
- * Required use cases per sessions/05-teacher.md: teacher -> individual
- * student, teacher -> selected group of students, teacher -> whole cohort.
- * The expected contract (sessions/09-messaging.md): a Conversation with a
- * participant list and a `type` ("direct" | "group" | "cohort_broadcast"),
- * created via something like `startConversation({ participantIds, type,
- * contextCohortId? }, actor)`, then `sendMessage(conversationId, body, actor)`
- * — server-side participant authorization, emitting MessageReceived
- * (already typed in src/lib/events.ts's DomainEventMap) for Notifications
- * to pick up.
- */
+function formatDateTime(date: Date) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+const TYPE_LABEL: Record<string, string> = { direct: "Direct", group: "Group", cohort_broadcast: "Cohort broadcast" };
+
 export default async function TeacherMessagesPage() {
   const session = await auth();
   if (!session?.user) redirect("/login");
   const actor = session.user;
-  const courses = await listMyCourses(actor);
+
+  const messagingEnabled = await isFeatureEnabled(FEATURE_FLAGS.MESSAGING);
+  if (!messagingEnabled) {
+    return (
+      <div style={{ display: "grid", gap: "16px" }}>
+        <SectionHeader title="Messages" count={0} />
+        <Banner>
+          Messaging is built but not yet turned on for your account — an administrator can enable the &quot;messaging&quot;
+          feature flag from the admin console&apos;s Feature Flags page.
+        </Banner>
+      </div>
+    );
+  }
+
+  const conversations = await listMyConversations(actor);
 
   return (
-    <div style={{ display: "grid", gap: "24px" }}>
-      <SectionHeader title="Messages" count={0} />
+    <div style={{ display: "grid", gap: "20px" }}>
+      <SectionHeader
+        title="Messages"
+        count={conversations.length}
+        action={
+          <a href="/messages/new">
+            <Button variant="primary" type="button">
+              New message
+            </Button>
+          </a>
+        }
+      />
 
-      <Banner>
-        Messaging is not available yet. Session 09 (Messaging) is expected to build one canonical Conversation/
-        Message system for the whole platform — Teacher will send to an individual student, a selected group, or a
-        whole cohort through that shared contract rather than a portal-specific inbox. This page is the wired entry
-        point (reachable from the "Messages" nav item) waiting on that dependency — reported BLOCKED rather than
-        building a parallel messaging table here, per CLAUDE_BUILD_RULES.md §2/§3.
-      </Banner>
-
-      {courses.length === 0 ? (
-        <EmptyState title="No courses assigned yet" />
-      ) : (
+      {conversations.length === 0 ? (
         <EmptyState
-          title="Your eligible recipients"
-          hint={`Once messaging exists, you'll be able to reach students across your ${courses.length} course(s) and their cohorts from here.`}
+          title="No conversations yet"
+          hint="Message an individual student, a selected group, or broadcast to a whole cohort from &quot;New message&quot;."
         />
+      ) : (
+        <div style={{ display: "grid", gap: "10px" }}>
+          {conversations.map((c) => {
+            const others = c.participants.filter((p) => p.userId !== actor.id);
+            const title = others.map((o) => o.name).join(", ") || "(just you)";
+            return (
+              <a key={c.id} href={`/messages/${c.id}`} style={{ textDecoration: "none", color: "inherit" }}>
+                <Card style={{ padding: "14px 16px", display: "grid", gap: "6px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <strong>{title}</strong>
+                      <span className={ui.roleTag}>{TYPE_LABEL[c.type] ?? c.type}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      {c.unreadCount > 0 && (
+                        <span className={ui.roleTag} style={{ background: "var(--accent)", color: "var(--accent-ink)" }}>
+                          {c.unreadCount} unread
+                        </span>
+                      )}
+                      <span className={ui.mono}>{c.lastMessageAt ? formatDateTime(c.lastMessageAt) : ""}</span>
+                    </div>
+                  </div>
+                  {c.lastMessage && (
+                    <p style={{ margin: 0, color: "var(--ink-soft)" }}>
+                      <strong>{c.lastMessage.senderId === actor.id ? "You" : c.lastMessage.senderName}:</strong> {c.lastMessage.body}
+                    </p>
+                  )}
+                </Card>
+              </a>
+            );
+          })}
+        </div>
       )}
     </div>
   );

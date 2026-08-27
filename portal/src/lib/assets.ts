@@ -8,10 +8,11 @@ import { getStorageDriver } from "@/lib/storage";
 /**
  * Asset/File service — Session 13 (Files & Content Assets),
  * PLATFORM_ARCHITECTURE.md §11. The ONE canonical file/upload system for the
- * whole platform: course resources today (src/lib/content.ts), message/
- * sponsor-document/certificate attachments once Sessions 09/11/14 land, all
- * as one Asset row + one AssetAttachment row. Do not build a parallel
- * TeacherFiles/StudentFiles/SponsorFiles table for a new consumer — add an
+ * whole platform: course resources (src/lib/content.ts), message
+ * attachments (src/lib/messaging.ts, Session 09), sponsor-document/
+ * certificate attachments once Sessions 11/14 land — all as one Asset row +
+ * one AssetAttachment row. Do not build a parallel TeacherFiles/
+ * StudentFiles/SponsorFiles table for a new consumer — add an
  * AssetEntityType value (migration) + a case in canAccessAssetAttachment()
  * below instead.
  *
@@ -178,12 +179,23 @@ export async function uploadAsset(input: UploadAssetInput, actor: AuthzActor) {
 }
 
 /**
- * Per-entityType visibility check for an AssetAttachment. Only
- * "lesson_resource" exists today. Sessions 09/11/14 add their own case
- * here (and their own AssetEntityType value) rather than a parallel
- * mechanism — see this file's header.
+ * Per-entityType visibility check for an AssetAttachment. "lesson_resource"
+ * (Session 04/13) and "message" (Session 09) exist today. Sessions 11/14
+ * add their own case here (and their own AssetEntityType value) rather
+ * than a parallel mechanism — see this file's header.
  */
 async function canAccessAssetAttachment(entityType: string, entityId: string, actor: AuthzActor): Promise<boolean> {
+  if (entityType === "message") {
+    // A message attachment is visible to exactly whoever can see the
+    // message itself — reuses messages_select's RLS-enforced participant
+    // scoping (see the messaging_core migration) rather than a second
+    // visibility rule for the same data.
+    const message = await withRls(actorRlsCtx(actor), (tx) =>
+      tx.message.findUnique({ where: { id: entityId }, select: { id: true } })
+    );
+    return !!message;
+  }
+
   if (entityType !== "lesson_resource") return false;
 
   const resource = await withRls(actorRlsCtx(actor), (tx) =>

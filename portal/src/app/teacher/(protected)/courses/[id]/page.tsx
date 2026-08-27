@@ -487,10 +487,12 @@ export default async function TeacherCourseDetailPage({
 
       <section>
         <SectionHeader title="Cohort messaging" count={0} />
-        <Banner>
-          Teacher → student/cohort messaging is not available yet — pending Session 09's Conversation/Message
-          contract. See the "Messages" nav item and docs/TEACHER.md for the exact contract this screen expects to
-          consume once it exists.
+        <Banner variant="success">
+          Message a student, a selected group, or broadcast to a cohort from the{" "}
+          <a href="/messages/new" className={ui.linkMono}>
+            Messages
+          </a>{" "}
+          nav item — see docs/MESSAGING.md for the Conversation/Message contract.
         </Banner>
       </section>
     </div>

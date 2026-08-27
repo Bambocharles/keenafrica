@@ -58,6 +58,16 @@ export const PERMISSIONS = {
   COURSES_CONTENT_WRITE: "courses.content.write",
   COURSES_CONTENT_PUBLISH: "courses.content.publish",
   TOPICS_MANAGE: "topics.manage",
+  // Added by Session 09 (Messaging). messages.send is necessary but not
+  // sufficient to start a conversation — src/lib/messaging.ts's
+  // assertCanMessage() additionally requires a real teacher/student
+  // relationship (a shared cohort, via Session 04's canonical
+  // CohortTeacher/Enrollment tables), the same "permission + ownership/
+  // relationship" shape as courses.content.write + cohort_teachers.
+  // messages.admin bypasses that relationship check entirely — the "Admin
+  // -> permitted users" required use case (sessions/09-messaging.md).
+  MESSAGES_SEND: "messages.send",
+  MESSAGES_ADMIN: "messages.admin",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
@@ -88,8 +98,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   // Ownership-scoped in practice: a TEACHER only gets to exercise these on
   // courses where they hold a cohort_teachers row (see courses.ts). Holding
   // the permission with no matching cohort assignment grants nothing.
-  TEACHER: [PERMISSIONS.COURSES_CONTENT_WRITE, PERMISSIONS.COURSES_CONTENT_PUBLISH],
-  STUDENT: [],
+  TEACHER: [PERMISSIONS.COURSES_CONTENT_WRITE, PERMISSIONS.COURSES_CONTENT_PUBLISH, PERMISSIONS.MESSAGES_SEND],
+  STUDENT: [PERMISSIONS.MESSAGES_SEND],
   SPONSOR_ADMIN: [],
   SPONSOR_USER: [],
 };

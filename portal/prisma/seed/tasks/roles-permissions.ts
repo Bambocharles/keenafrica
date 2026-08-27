@@ -33,6 +33,8 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.COURSES_CONTENT_WRITE]: "Create or edit module/lesson draft content (ownership-scoped).",
   [PERMISSIONS.COURSES_CONTENT_PUBLISH]: "Publish or unpublish module/lesson content (ownership-scoped).",
   [PERMISSIONS.TOPICS_MANAGE]: "Manage the topic/skill taxonomy.",
+  [PERMISSIONS.MESSAGES_SEND]: "Start/send messages within a permitted teacher/student relationship.",
+  [PERMISSIONS.MESSAGES_ADMIN]: "Message any user, bypassing the relationship check.",
 };
 
 /**
