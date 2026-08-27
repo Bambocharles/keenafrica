@@ -22,5 +22,10 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("@/lib/notifications");
+    // Session 14 (Certificates) — a pure LessonCompleted CONSUMER for its
+    // best-effort issuance backstop (see src/lib/certificates.ts's header),
+    // same "nothing else guarantees this module loads before the first
+    // mutating request" reasoning as notifications.ts above.
+    await import("@/lib/certificates");
   }
 }

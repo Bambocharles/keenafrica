@@ -113,10 +113,37 @@ export async function cleanupTestNotifications(userIds: string[]): Promise<void>
   await prisma.notification.deleteMany({ where: { recipientId: { in: userIds } } });
 }
 
+/**
+ * Deletes any Certificate rows for a set of student user ids, including
+ * their downloadable-file asset attachments — call this before
+ * cleanupTestUsers()/cleanupTestCourses() delete the User/Course/Enrollment
+ * rows certificates.ts's FKs reference (certificates_core migration's FKs
+ * are all ON DELETE NO ACTION, same convention as every other cleanup
+ * helper here).
+ */
+export async function cleanupTestCertificates(studentUserIds: string[]): Promise<void> {
+  if (studentUserIds.length === 0) return;
+  const certificates = await prisma.certificate.findMany({
+    where: { studentUserId: { in: studentUserIds } },
+    select: { id: true },
+  });
+  const certificateIds = certificates.map((c) => c.id);
+  const certAssetIds = (
+    await prisma.assetAttachment.findMany({
+      where: { entityType: "certificate", entityId: { in: certificateIds } },
+      select: { assetId: true },
+    })
+  ).map((a) => a.assetId);
+  await prisma.assetAttachment.deleteMany({ where: { entityType: "certificate", entityId: { in: certificateIds } } });
+  await prisma.certificate.deleteMany({ where: { id: { in: certificateIds } } });
+  await cleanupTestAssets(certAssetIds);
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
   await cleanupTestNotifications(userIds);
   await cleanupTestConversations(userIds);
+  await cleanupTestCertificates(userIds);
   const uploadedAssetIds = (
     await prisma.asset.findMany({ where: { uploaderId: { in: userIds } }, select: { id: true } })
   ).map((a) => a.id);
@@ -185,6 +212,22 @@ export async function cleanupTestCourses(courseIds: string[]): Promise<void> {
     })
   ).map((c) => c.id);
   await deleteConversationsByIds(broadcastConversationIds);
+  // Session 14 — certificates.enrollment_id/course_id FKs must go before
+  // the enrollments/courses themselves.
+  const courseCertificates = await prisma.certificate.findMany({
+    where: { courseId: { in: courseIds } },
+    select: { id: true },
+  });
+  const courseCertificateIds = courseCertificates.map((c) => c.id);
+  const certAssetIds = (
+    await prisma.assetAttachment.findMany({
+      where: { entityType: "certificate", entityId: { in: courseCertificateIds } },
+      select: { assetId: true },
+    })
+  ).map((a) => a.assetId);
+  await prisma.assetAttachment.deleteMany({ where: { entityType: "certificate", entityId: { in: courseCertificateIds } } });
+  await prisma.certificate.deleteMany({ where: { id: { in: courseCertificateIds } } });
+  await cleanupTestAssets(certAssetIds);
   await prisma.enrollment.deleteMany({ where: { cohort: { courseId: { in: courseIds } } } });
   await prisma.cohortTeacher.deleteMany({ where: { cohort: { courseId: { in: courseIds } } } });
   await prisma.cohort.deleteMany({ where: { courseId: { in: courseIds } } });

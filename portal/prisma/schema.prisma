@@ -127,10 +127,17 @@ enum AssetStatus {
 // 'sponsor_document' added by Session 11 (Sponsor) — same reasoning, same
 // split-migration requirement. Anchor row is ProjectDocument (see Sponsor
 // Core section below), mirroring Resource's role for 'lesson_resource'.
+//
+// 'certificate' added by Session 14 (Certificates) — same split-migration
+// requirement again. Anchor row is Certificate (see Certificates section
+// below); like 'message', a Certificate has no direct asset_id column —
+// the downloadable file is purely an AssetAttachment join, generated once
+// at issuance time (src/lib/certificates.ts's attachDownloadableCertificate).
 enum AssetEntityType {
   lesson_resource
   message
   sponsor_document
+  certificate
 }
 
 // Session 10 (Notifications). event-to-notification mapping — see
@@ -194,6 +201,9 @@ model User {
   lessonProgress LessonProgress[]
 
   notificationsReceived Notification[]
+
+  certificatesAsStudent Certificate[] @relation("CertificateStudent")
+  certificatesRevoked   Certificate[] @relation("CertificateRevoker")
 
   @@map("users")
 }
@@ -409,6 +419,7 @@ model Course {
   assessments           Assessment[]
   assessmentAssignments AssessmentAssignment[]
   lessonProgress        LessonProgress[]
+  certificates          Certificate[]
 
   @@index([createdBy])
   @@map("courses")
@@ -462,6 +473,8 @@ model Enrollment {
 
   cohort  Cohort @relation(fields: [cohortId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student User   @relation(fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  certificates Certificate[]
 
   @@unique([cohortId, studentUserId])
   @@index([studentUserId])
@@ -1236,4 +1249,50 @@ model ProjectDocument {
 
   @@index([projectId])
   @@map("project_documents")
+}
+
+// --- Certificates (Session 14) --------------------------------------------
+//
+// Certificate issuance is driven entirely by Progress's (Session 08) own
+// completion signal — enrollments.status = 'completed' — never recomputed
+// here from lesson/module counts (see src/lib/certificates.ts's
+// issueCertificateIfEligible). *_snapshot fields are copied at issuance and
+// never re-derived, so a later course rename/re-authoring cannot silently
+// change an already-issued certificate's displayed content (acceptance
+// criterion: "historical certificate record remains stable even if course
+// content changes"). The optional downloadable file (Owns: "optional
+// downloadable certificate through Asset service") attaches through the
+// existing generic AssetAttachment join (entity_type = 'certificate', see
+// the two follow-up migrations extending Session 13's Asset service) —
+// never a parallel file mechanism.
+enum CertificateStatus {
+  active
+  revoked
+}
+
+model Certificate {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentUserId       String            @map("student_user_id") @db.Uuid
+  courseId            String            @map("course_id") @db.Uuid
+  enrollmentId        String            @map("enrollment_id") @db.Uuid
+  certificateNumber   String            @unique @map("certificate_number")
+  status              CertificateStatus @default(active)
+  templateVersion     Int               @default(1) @map("template_version")
+  studentNameSnapshot String            @map("student_name_snapshot")
+  courseTitleSnapshot String            @map("course_title_snapshot")
+  completedAt         DateTime          @map("completed_at") @db.Timestamptz(6)
+  issuedAt            DateTime          @default(now()) @map("issued_at") @db.Timestamptz(6)
+  revokedAt           DateTime?         @map("revoked_at") @db.Timestamptz(6)
+  revokedBy           String?           @map("revoked_by") @db.Uuid
+  revokedReason       String?           @map("revoked_reason")
+
+  student    User       @relation("CertificateStudent", fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course     Course     @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  revoker    User?      @relation("CertificateRevoker", fields: [revokedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentUserId, courseId])
+  @@index([studentUserId])
+  @@index([courseId])
+  @@map("certificates")
 }
