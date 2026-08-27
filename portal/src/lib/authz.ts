@@ -68,6 +68,21 @@ export const PERMISSIONS = {
   // -> permitted users" required use case (sessions/09-messaging.md).
   MESSAGES_SEND: "messages.send",
   MESSAGES_ADMIN: "messages.admin",
+  // Added by Session 11 (Sponsor). sponsor.manage is the admin/staff "full
+  // sponsor-core management" key — sponsors/projects/milestones/metrics/
+  // documents/any project's membership (ADMIN/SUPER_ADMIN only, via
+  // ALL_PERMISSION_KEYS, same as courses.manage/flags.manage). The
+  // sponsor-portal side is ownership-scoped exactly like TEACHER's
+  // courses.content.write: sponsor.projects.read is necessary but not
+  // sufficient without a matching project_memberships row (see
+  // src/lib/sponsor.ts's requireProjectSponsorAccess) — mirrors
+  // isCourseTeacher/requireCourseContentAccess. sponsor.users.manage lets a
+  // SPONSOR_ADMIN invite/remove other sponsor-team members (role='sponsor_admin'
+  // ProjectMembership rows only, never a beneficiary row) on a project they
+  // themselves are already on.
+  SPONSOR_MANAGE: "sponsor.manage",
+  SPONSOR_PROJECTS_READ: "sponsor.projects.read",
+  SPONSOR_USERS_MANAGE: "sponsor.users.manage",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
@@ -100,8 +115,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   // the permission with no matching cohort assignment grants nothing.
   TEACHER: [PERMISSIONS.COURSES_CONTENT_WRITE, PERMISSIONS.COURSES_CONTENT_PUBLISH, PERMISSIONS.MESSAGES_SEND],
   STUDENT: [PERMISSIONS.MESSAGES_SEND],
-  SPONSOR_ADMIN: [],
-  SPONSOR_USER: [],
+  // Ownership-scoped in practice, same shape as TEACHER above: holding
+  // these with no matching project_memberships row (role='sponsor_admin')
+  // grants nothing — see src/lib/sponsor.ts.
+  SPONSOR_ADMIN: [PERMISSIONS.SPONSOR_PROJECTS_READ, PERMISSIONS.SPONSOR_USERS_MANAGE],
+  SPONSOR_USER: [PERMISSIONS.SPONSOR_PROJECTS_READ],
 };
 
 /**
@@ -155,6 +173,22 @@ export const STUDENT_PORTAL_ROLES: readonly RoleName[] = ["STUDENT"];
 export function canAccessStudentPortal(actor: AdminConsoleActor | null | undefined): boolean {
   if (!actor) return false;
   return actor.isSuperAdmin || actor.roles.some((r) => (STUDENT_PORTAL_ROLES as readonly string[]).includes(r));
+}
+
+/**
+ * Added by Session 11 (Sponsor). Coarse "can see the sponsor portal shell"
+ * gate, same shape as canAccessStudentPortal(). Grants nothing on its
+ * own — every page/action inside still enforces sponsor.projects.read PLUS
+ * a project_memberships ownership row per project (src/lib/sponsor.ts). A
+ * SPONSOR_ADMIN/SPONSOR_USER with zero project memberships reaches the
+ * shell and sees only empty states, same as a teacher with no cohort
+ * assignment.
+ */
+export const SPONSOR_PORTAL_ROLES: readonly RoleName[] = ["SPONSOR_ADMIN", "SPONSOR_USER"];
+
+export function canAccessSponsorPortal(actor: AdminConsoleActor | null | undefined): boolean {
+  if (!actor) return false;
+  return actor.isSuperAdmin || actor.roles.some((r) => (SPONSOR_PORTAL_ROLES as readonly string[]).includes(r));
 }
 
 /** The minimal shape any caller (session.user, a test fixture) needs. */

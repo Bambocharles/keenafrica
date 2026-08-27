@@ -197,3 +197,31 @@ export async function cleanupTestTopics(topicIds: string[]): Promise<void> {
   await prisma.lessonTopic.deleteMany({ where: { topicId: { in: topicIds } } });
   await prisma.topic.deleteMany({ where: { id: { in: topicIds } } });
 }
+
+/**
+ * Deletes a set of test-created projects and everything hanging off them
+ * (memberships, milestones, metrics, documents + their assets), in
+ * dependency order — call this BEFORE cleanupTestSponsors()/
+ * cleanupTestUsers() for any sponsor/user referenced (Session 11's
+ * sponsor_core migration's FKs are all ON DELETE NO ACTION, same
+ * convention as cleanupTestCourses above).
+ */
+export async function cleanupTestProjects(projectIds: string[]): Promise<void> {
+  if (projectIds.length === 0) return;
+  const documents = await prisma.projectDocument.findMany({ where: { projectId: { in: projectIds } }, select: { id: true, assetId: true } });
+  await prisma.assetAttachment.deleteMany({ where: { entityType: "sponsor_document", entityId: { in: documents.map((d) => d.id) } } });
+  await prisma.projectDocument.deleteMany({ where: { projectId: { in: projectIds } } });
+  await cleanupTestAssets(documents.map((d) => d.assetId));
+  await prisma.milestone.deleteMany({ where: { projectId: { in: projectIds } } });
+  await prisma.projectMetric.deleteMany({ where: { projectId: { in: projectIds } } });
+  await prisma.projectMembership.deleteMany({ where: { projectId: { in: projectIds } } });
+  await prisma.auditEvent.deleteMany({ where: { entityId: { in: projectIds } } });
+  await prisma.project.deleteMany({ where: { id: { in: projectIds } } });
+}
+
+/** Call after cleanupTestProjects() — sponsors are referenced by projects.projectId's FK. */
+export async function cleanupTestSponsors(sponsorIds: string[]): Promise<void> {
+  if (sponsorIds.length === 0) return;
+  await prisma.auditEvent.deleteMany({ where: { entityId: { in: sponsorIds } } });
+  await prisma.sponsor.deleteMany({ where: { id: { in: sponsorIds } } });
+}

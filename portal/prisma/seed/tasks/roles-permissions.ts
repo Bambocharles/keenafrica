@@ -35,6 +35,9 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.TOPICS_MANAGE]: "Manage the topic/skill taxonomy.",
   [PERMISSIONS.MESSAGES_SEND]: "Start/send messages within a permitted teacher/student relationship.",
   [PERMISSIONS.MESSAGES_ADMIN]: "Message any user, bypassing the relationship check.",
+  [PERMISSIONS.SPONSOR_MANAGE]: "Manage sponsors, projects, milestones, metrics, documents, and any project's membership.",
+  [PERMISSIONS.SPONSOR_PROJECTS_READ]: "View a sponsored project's status, milestones, metrics, and documents (ownership-scoped).",
+  [PERMISSIONS.SPONSOR_USERS_MANAGE]: "Invite or remove other sponsor-team users on a project (ownership-scoped).",
 };
 
 /**
