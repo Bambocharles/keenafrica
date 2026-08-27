@@ -24,6 +24,12 @@ export interface RlsContext {
    * else.
    */
   passwordResetLookup?: boolean;
+  /**
+   * Set ONLY by src/lib/rate-limit.ts (Session 16), for the pre-auth COUNT
+   * of recent login-failure audit_events rows a login attempt needs to
+   * evaluate before app.user_id exists. Never set this anywhere else.
+   */
+  rateLimitLookup?: boolean;
 }
 
 /**
@@ -41,6 +47,7 @@ export async function withRls<T>(
     await tx.$executeRaw`SELECT set_config('app.permissions', ${JSON.stringify(ctx.permissions ?? [])}, true)`;
     await tx.$executeRaw`SELECT set_config('app.auth_lookup', ${String(!!ctx.authLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.password_reset_lookup', ${String(!!ctx.passwordResetLookup)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.rate_limit_lookup', ${String(!!ctx.rateLimitLookup)}, true)`;
     return fn(tx);
   });
 }

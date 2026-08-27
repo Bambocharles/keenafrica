@@ -85,7 +85,10 @@ export const config = {
      * - /auth (Auth.js routes must pass through untouched regardless of
      *   Host header, or the admin-host rewrite would mangle
      *   /auth/callback/credentials into /admin/auth/callback/credentials)
+     * - /healthz (Session 16 — k8s probe target. kubelet's probe request
+     *   has no *.keenafrica.com Host header, so RESERVED_SLUGS/the tenant
+     *   rewrite above would 404 it before it ever reached the route.)
      */
-    "/((?!_next/static|_next/image|favicon.ico|auth).*)",
+    "/((?!_next/static|_next/image|favicon.ico|auth|healthz).*)",
   ],
 };

@@ -26,6 +26,24 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 512Mi }
+          # Session 16 (Production Hardening) — /healthz checks real DB
+          # connectivity (src/app/healthz/route.ts), not just process
+          # liveness. startupProbe gives a cold start (DB connection pool
+          # warm-up, Next.js standalone server boot) room before the
+          # tighter liveness/readiness periods kick in, so a slow-but-fine
+          # boot isn't mistaken for a hang.
+          startupProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            periodSeconds: 15
+            failureThreshold: 3
           envFrom:
             - secretRef: { name: portal-secrets }
           env:
