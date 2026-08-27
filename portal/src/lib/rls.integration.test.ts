@@ -31,6 +31,8 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       organizationIds?: string[];
       /** Organization Core (Session 17) — see src/lib/rls.ts's RlsContext.orgInvitationLookup. */
       orgInvitationLookup?: boolean;
+      /** Session 18 (B2B & B2C Onboarding) — see src/lib/rls.ts's RlsContext.selfRegistration. */
+      selfRegistration?: boolean;
     },
     fn: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<T>
   ): Promise<T> {
@@ -42,6 +44,7 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       await tx.$executeRaw`SELECT set_config('app.password_reset_lookup', 'false', true)`;
       await tx.$executeRaw`SELECT set_config('app.organization_ids', ${JSON.stringify(ctx.organizationIds ?? [])}, true)`;
       await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
       return fn(tx);
     });
   }
@@ -390,6 +393,57 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
 
       const cleanup = new PrismaClient();
       await cleanup.organizationMembership.delete({ where: { id: row.id } });
+      await cleanup.$disconnect();
+    });
+  });
+
+  describe("Self-Registration (Session 18)", () => {
+    it("users_write: a plain unauthenticated/no-permission context cannot insert a new users row", async () => {
+      await expect(
+        asContext({}, (tx) =>
+          tx.user.create({ data: { email: `rls-reg-blocked-${randomUUID()}@example.com`, name: "Blocked", passwordHash: "x" } })
+        )
+      ).rejects.toThrow();
+    });
+
+    it("users_write/users_select: app.self_registration authorizes exactly one pre-auth INSERT (and its own RETURNING)", async () => {
+      const email = `rls-reg-${randomUUID()}@example.com`;
+      const created = await asContext({ selfRegistration: true }, (tx) =>
+        tx.user.create({ data: { email, name: "Self Registered", passwordHash: "x" }, select: { id: true, email: true } })
+      );
+      expect(created.email.toLowerCase()).toBe(email.toLowerCase());
+
+      // The flag doesn't linger: a plain follow-up context still can't read
+      // this brand-new row (no session/permissions yet, same as any other
+      // user's row).
+      const asNobody = await asContext({}, (tx) => tx.user.findMany({ where: { id: created.id } }));
+      expect(asNobody).toHaveLength(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.user.delete({ where: { id: created.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("user_roles_write: app.self_registration authorizes attaching exactly one role to the row just created; a plain context cannot self-assign roles.manage-gated rows", async () => {
+      const setup = new PrismaClient();
+      const teacherRole = await setup.role.findUniqueOrThrow({ where: { name: "TEACHER" } });
+      const newUser = await setup.user.create({
+        data: { email: `rls-reg-role-${randomUUID()}@example.com`, name: "Self Registered", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      await expect(
+        asContext({ userId: newUser.id }, (tx) => tx.userRole.create({ data: { userId: newUser.id, roleId: teacherRole.id } }))
+      ).rejects.toThrow();
+
+      const created = await asContext({ selfRegistration: true }, (tx) =>
+        tx.userRole.create({ data: { userId: newUser.id, roleId: teacherRole.id } })
+      );
+      expect(created.roleId).toBe(teacherRole.id);
+
+      const cleanup = new PrismaClient();
+      await cleanup.userRole.deleteMany({ where: { userId: newUser.id } });
+      await cleanup.user.delete({ where: { id: newUser.id } });
       await cleanup.$disconnect();
     });
   });

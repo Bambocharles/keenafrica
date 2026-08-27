@@ -81,6 +81,10 @@ export default async function StudentLoginPage({
             Log in
           </button>
         </form>
+
+        <p className={styles.subtitle} style={{ marginTop: "16px", marginBottom: 0 }}>
+          New here? <a href="/register">Create an account</a>
+        </p>
       </div>
     </div>
   );
