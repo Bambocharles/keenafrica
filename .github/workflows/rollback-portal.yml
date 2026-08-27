@@ -1,0 +1,45 @@
+name: Rollback Portal
+
+# Session 16 (Production Hardening). Manual, deliberate rollback of the
+# running portal deployment to a previously-built image — deploy-portal.yml
+# never had a rollback counterpart; the only prior option was an operator
+# running kubectl by hand against production. Re-points the deployment at
+# an already-built GHCR image (from a prior deploy-portal.yml run); it does
+# NOT rebuild, and deliberately does NOT touch the database — Prisma's
+# migrate deploy has no automatic "down" migration, so a rollback that also
+# tried to reverse schema changes would need a hand-written, per-incident
+# reverse migration anyway. See portal/docs/PRODUCTION_HARDENING.md's
+# rollback runbook for the full procedure and its compatibility caveat
+# (this is only safe when every migration between the target and the
+# current revision was additive, which is true of every migration in this
+# repo to date).
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: >-
+          Git SHA of the previously-deployed image to roll back to. Find one
+          via `kubectl rollout history -n keen-prod deployment/portal`
+          (Session 16 added a change-cause annotation carrying the image tag
+          for each revision) or `git log --oneline` on main.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  rollback-portal-prod:
+    runs-on: [self-hosted, keenafrica-vm]
+    environment: production
+    steps:
+      - name: Roll back to the specified image
+        env:
+          KUBECONFIG: /home/keen/.kube/config
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/bambocharles/keenafrica-portal:${{ inputs.image_tag }}"
+          echo "Rolling back deployment/portal to $IMAGE"
+          kubectl set image -n keen-prod deployment/portal portal="$IMAGE"
+          kubectl annotate deployment/portal -n keen-prod \
+            kubernetes.io/change-cause="ROLLBACK to $IMAGE" --overwrite
+          kubectl rollout status -n keen-prod deployment/portal --timeout=120s

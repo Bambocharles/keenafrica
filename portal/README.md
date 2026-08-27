@@ -140,3 +140,17 @@ Actions → Deploy Portal → Run workflow.
   `ALLOW_DEMO_SEED=true npm run seed:demo`; reset with
   `ALLOW_DEMO_SEED=true npm run demo:reset`. Every mutation goes through
   the real `src/lib/*.ts` API, never a raw insert.
+
+## Production Hardening (Session 16)
+
+- **Full checklist review + the gaps that were actually missing** —
+  `docs/PRODUCTION_HARDENING.md`. New: login brute-force rate limiting
+  (`src/lib/rate-limit.ts`, backed by the existing `audit_events` table),
+  app-level security headers (`next.config.js`), a DB-checking `/healthz`
+  route with real k8s liveness/readiness/startup probes
+  (`k8s/portal-prod.yaml`), a documented + mechanically-verified rollback
+  path (`.github/workflows/rollback-portal.yml`), a step-by-step secret
+  rotation procedure, and a dependency-CVE fix (`next` bumped to patch
+  `postcss`/`sharp` advisories). Backups/RLS/session-revocation/audit
+  logging/environment isolation were already correct from Sessions 01–02
+  and were re-verified, not rebuilt.

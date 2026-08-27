@@ -48,6 +48,15 @@ jobs:
           KUBECONFIG: /home/keen/.kube/config
         run: |
           kubectl set image -n keen-prod deployment/portal portal=${{ steps.image.outputs.image }}
+          # Session 16 (Production Hardening) — `kubectl set image` doesn't
+          # record a change-cause the way `kubectl apply`/`--record` would,
+          # so `kubectl rollout history` was otherwise just a list of blank
+          # revisions with no way to tell which one is which. This makes
+          # the image tag (== the git SHA that built it) visible directly
+          # in `kubectl rollout history -n keen-prod deployment/portal` —
+          # see portal/docs/PRODUCTION_HARDENING.md's rollback runbook.
+          kubectl annotate deployment/portal -n keen-prod \
+            kubernetes.io/change-cause="${{ steps.image.outputs.image }}" --overwrite
           kubectl rollout status -n keen-prod deployment/portal --timeout=120s
 
       - name: Prune old local images

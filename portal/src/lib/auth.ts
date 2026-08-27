@@ -4,6 +4,7 @@ import { compare } from "bcryptjs";
 import { withRls } from "@/lib/rls";
 import { createSession, resolveSessionAuthz } from "@/lib/sessions";
 import { recordAuditEvent } from "@/lib/audit";
+import { isLoginRateLimited } from "@/lib/rate-limit";
 
 // basePath is "/auth", not the default "/api/auth" — a Cloudflare Worker
 // intercepts keenafrica.com/api/* (and *.keenafrica.com/api/*) at the edge
@@ -36,13 +37,40 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
+        const ipAddress = request.headers.get("x-forwarded-for");
+
         const user = await withRls({ authLookup: true }, (tx) =>
           tx.user.findUnique({ where: { email } })
         );
+
+        // Checked before the password compare (skip the bcrypt cost on a
+        // blocked attempt) and before any user-specific branching below —
+        // an unknown email still counts against the per-IP limit. See
+        // src/lib/rate-limit.ts for the thresholds/reasoning.
+        if (await isLoginRateLimited({ userId: user?.id, ipAddress })) {
+          await recordAuditEvent({
+            actorId: user?.id ?? null,
+            action: "login.rate_limited",
+            entityType: "User",
+            entityId: user?.id ?? null,
+            ipAddress,
+          });
+          return null;
+        }
+
         if (!user) return null;
 
         const valid = await compare(password, user.passwordHash);
-        if (!valid) return null;
+        if (!valid) {
+          await recordAuditEvent({
+            actorId: user.id,
+            action: "login.failed",
+            entityType: "User",
+            entityId: user.id,
+            ipAddress,
+          });
+          return null;
+        }
 
         // Deny login without distinguishing it from a bad password in the
         // response — a suspended account shouldn't be discoverable by an
@@ -53,6 +81,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             action: "login.denied_suspended",
             entityType: "User",
             entityId: user.id,
+            ipAddress,
           });
           return null;
         }
@@ -60,7 +89,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const session = await createSession({
           userId: user.id,
           userAgent: request.headers.get("user-agent"),
-          ipAddress: request.headers.get("x-forwarded-for"),
+          ipAddress,
         });
 
         await recordAuditEvent({

@@ -78,8 +78,12 @@ see Known limitations below.
      "$PORTAL_DATABASE_URL_PROD"
    ```
 5. Spot-check: row counts on `users`/`sponsors`/`projects`, and
-   `SELECT count(*) FROM pg_policies;` (should be 20 as of this migration
-   set) to confirm RLS came back enabled.
+   `SELECT count(*) FROM pg_policies;` — compare against the same query run
+   on a known-good environment (e.g. local dev on the same migration set)
+   rather than a hardcoded number here, since it grows with every session
+   that adds an RLS policy (145 as of Session 16's
+   `production_hardening_rate_limit` migration — already stale by the time
+   you read this if a later session added more).
 6. Resume application traffic.
 
 ## Verifying this still works
