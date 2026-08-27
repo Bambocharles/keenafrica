@@ -130,3 +130,13 @@ Actions → Deploy Portal → Run workflow.
   `docs/MESSAGING.md` (`src/lib/messaging.ts`,
   `src/app/{admin,teacher,student}/(protected)/messages/**`). Gated
   behind the pre-existing `messaging` feature flag (default off).
+
+## Demo & Test Environment (Session 15)
+
+- **The canonical, resettable demo/test universe** spanning every module
+  (identity, courses/cohorts/assessments, progress/certificates,
+  messaging, sponsor data) — `docs/DEMO_DATA.md`
+  (`prisma/seed/tasks/demo/**`, `prisma/seed/reset-demo.ts`). Seed with
+  `ALLOW_DEMO_SEED=true npm run seed:demo`; reset with
+  `ALLOW_DEMO_SEED=true npm run demo:reset`. Every mutation goes through
+  the real `src/lib/*.ts` API, never a raw insert.
