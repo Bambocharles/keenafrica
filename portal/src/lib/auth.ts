@@ -148,6 +148,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       token.isSuperAdmin = snapshot.isSuperAdmin;
       token.roles = snapshot.roles;
       token.permissions = snapshot.permissions;
+      token.organizationIds = snapshot.organizationIds;
       return token;
     },
     session: ({ session, token }) => {
@@ -156,6 +157,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.isSuperAdmin = Boolean(token.isSuperAdmin);
         session.user.roles = token.roles ?? [];
         session.user.permissions = token.permissions ?? [];
+        session.user.organizationIds = token.organizationIds ?? [];
         session.user.sessionId = token.sessionId as string;
       }
       return session;

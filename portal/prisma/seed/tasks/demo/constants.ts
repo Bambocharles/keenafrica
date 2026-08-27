@@ -29,6 +29,11 @@ export const DEMO_SPONSOR_NAMES = [
   "Nile Skills Alliance",
 ] as const;
 
+export const DEMO_ORGANIZATION_NAMES = [
+  "Baobab Learning Hub",
+  "Sahel Community School",
+] as const;
+
 export const DEMO_TOPIC_NAMES = [
   "Computer Basics",
   "Internet Safety",

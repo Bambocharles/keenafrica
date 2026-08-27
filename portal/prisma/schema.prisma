@@ -157,6 +157,162 @@ enum NotificationType {
   project_milestone_updated
 }
 
+// --- Organization Core (Session 17) --------------------------------------
+// A fourth pillar alongside Platform/Education/Sponsor Core
+// (PLATFORM_ARCHITECTURE.md §14): a general membership/tenant boundary for
+// teachers/students (school, church, company, NGO, training center, or an
+// individual's personal B2C space) — deliberately separate from Sponsor
+// (a funding/project relationship, unrelated concept, never merged).
+//
+// User -> OrganizationMembership -> Organization is the only relationship
+// path; organizationId is NEVER added to User (PLATFORM_CONTEXT.md's
+// Organization/Tenant model rule — a person may belong to zero, one, or
+// many organizations).
+//
+// Global roles (src/lib/authz.ts's Role/Permission) answer "what can this
+// person do on Keen Africa"; OrganizationMembership.role answers "what can
+// this person do inside THIS organization" — two different questions, never
+// collapsed into one enum, same separation Sponsor Core already draws
+// between the global SPONSOR_ADMIN/SPONSOR_USER Role and
+// ProjectMembership.role='sponsor_admin'.
+//
+// Membership is always gated — either an OrganizationInvitation (email,
+// works before the invitee even has an account — Session 18 links it at
+// registration) or a self-service join request that starts at status
+// 'pending' and requires an org_admin's approval. Nobody can grant
+// themselves 'active' membership by supplying an organization id/name from
+// the client — see src/lib/organizations.ts and the migration's RLS policy
+// comments for the exact enforcement.
+//
+// See docs/ORGANIZATION_CORE.md for the full contract.
+
+enum OrganizationType {
+  school
+  church
+  company
+  ngo
+  training_center
+  government
+  university
+  community
+  personal
+  other
+}
+
+enum OrganizationStatus {
+  pending
+  active
+  suspended
+  archived
+}
+
+enum OrganizationMembershipRole {
+  org_admin
+  org_member
+}
+
+// INVITED: an org_admin added a known existing user directly, awaiting
+// their acceptance. PENDING: the user requested to join, awaiting an
+// org_admin's approval. ACTIVE: full member. SUSPENDED: temporarily
+// blocked, never deleted. REMOVED: no longer a member (rejected join
+// request, admin removal, or self-service "leave") — kept for history
+// rather than deleted, same "lifecycle states over destructive delete"
+// convention as User.status/Session.revokedAt.
+enum OrganizationMembershipStatus {
+  invited
+  pending
+  active
+  suspended
+  removed
+}
+
+enum OrganizationInvitationStatus {
+  pending
+  accepted
+  revoked
+  expired
+}
+
+// status defaults to 'active' (not 'pending') — a self-service-created
+// organization (Session 18) must be immediately usable by its creator, same
+// as a B2C individual account. `verifiedAt` is the separate, optional
+// platform-verification signal (PLATFORM_DATA_MODEL.md lists status and
+// verification as distinct fields) — an org_admin's own reach into their
+// org never depends on it; only future features that specifically require
+// verification would gate on it.
+model Organization {
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  slug         String             @unique
+  type         OrganizationType   @default(other)
+  status       OrganizationStatus @default(active)
+  verifiedAt   DateTime?          @map("verified_at") @db.Timestamptz(6)
+  description  String?
+  logoUrl      String?            @map("logo_url")
+  contactEmail String?            @map("contact_email")
+  contactPhone String?            @map("contact_phone")
+  createdBy    String             @map("created_by") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  creator     User                      @relation("OrganizationCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  memberships OrganizationMembership[]
+  invitations OrganizationInvitation[]
+
+  @@index([createdBy])
+  @@map("organizations")
+}
+
+// The ONLY path from User to Organization — see this section's header
+// comment. @@unique([organizationId, userId]) means a user has at most one
+// membership row per organization; its `status`/`role` carry the full
+// lifecycle rather than deleting and recreating the row.
+model OrganizationMembership {
+  id             String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String                        @map("organization_id") @db.Uuid
+  userId         String                        @map("user_id") @db.Uuid
+  role           OrganizationMembershipRole    @default(org_member)
+  status         OrganizationMembershipStatus  @default(invited)
+  invitedBy      String?                       @map("invited_by") @db.Uuid
+  joinedAt       DateTime?                     @map("joined_at") @db.Timestamptz(6)
+  createdAt      DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User         @relation("OrganizationMembershipUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  inviter      User?        @relation("OrganizationMembershipInviter", fields: [invitedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("organization_memberships")
+}
+
+// Email-based invitation — works even before the invitee has a platform
+// account (Session 18 links it at registration completion). tokenHash-only
+// at rest, same single-use/hashed-at-rest shape as PasswordResetToken; the
+// raw token is returned once, by src/lib/organizations.ts's
+// inviteToOrganization, and never persisted.
+model OrganizationInvitation {
+  id             String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String                        @map("organization_id") @db.Uuid
+  email          String                        @db.Citext
+  role           OrganizationMembershipRole    @default(org_member)
+  tokenHash      String                        @unique @map("token_hash")
+  status         OrganizationInvitationStatus  @default(pending)
+  invitedBy      String                        @map("invited_by") @db.Uuid
+  expiresAt      DateTime                      @map("expires_at") @db.Timestamptz(6)
+  acceptedAt     DateTime?                     @map("accepted_at") @db.Timestamptz(6)
+  createdAt      DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  inviter      User         @relation("OrganizationInvitationInviter", fields: [invitedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("organization_invitations")
+}
+
 model User {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String     @unique @db.Citext
@@ -204,6 +360,11 @@ model User {
 
   certificatesAsStudent Certificate[] @relation("CertificateStudent")
   certificatesRevoked   Certificate[] @relation("CertificateRevoker")
+
+  organizationsCreated           Organization[]             @relation("OrganizationCreator")
+  organizationMemberships        OrganizationMembership[]   @relation("OrganizationMembershipUser")
+  organizationMembershipsInvited OrganizationMembership[]    @relation("OrganizationMembershipInviter")
+  organizationInvitationsSent    OrganizationInvitation[]    @relation("OrganizationInvitationInviter")
 
   @@map("users")
 }

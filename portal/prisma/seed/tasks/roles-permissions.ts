@@ -39,6 +39,7 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.SPONSOR_PROJECTS_READ]: "View a sponsored project's status, milestones, metrics, and documents (ownership-scoped).",
   [PERMISSIONS.SPONSOR_USERS_MANAGE]: "Invite or remove other sponsor-team users on a project (ownership-scoped).",
   [PERMISSIONS.CERTIFICATES_MANAGE]: "Verify, view, and revoke any student's issued certificates.",
+  [PERMISSIONS.ORGANIZATIONS_MANAGE]: "Manage any organization, its membership, and its invitations, across every tenant.",
 };
 
 /**

@@ -23,7 +23,15 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
   const client = new PrismaClient({ datasourceUrl: RLS_TEST_URL });
 
   async function asContext<T>(
-    ctx: { userId?: string; isSuperAdmin?: boolean; permissions?: string[] },
+    ctx: {
+      userId?: string;
+      isSuperAdmin?: boolean;
+      permissions?: string[];
+      /** Organization Core (Session 17) — see src/lib/rls.ts's RlsContext.organizationIds. */
+      organizationIds?: string[];
+      /** Organization Core (Session 17) — see src/lib/rls.ts's RlsContext.orgInvitationLookup. */
+      orgInvitationLookup?: boolean;
+    },
     fn: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<T>
   ): Promise<T> {
     return client.$transaction(async (tx) => {
@@ -32,6 +40,8 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       await tx.$executeRaw`SELECT set_config('app.permissions', ${JSON.stringify(ctx.permissions ?? [])}, true)`;
       await tx.$executeRaw`SELECT set_config('app.auth_lookup', 'false', true)`;
       await tx.$executeRaw`SELECT set_config('app.password_reset_lookup', 'false', true)`;
+      await tx.$executeRaw`SELECT set_config('app.organization_ids', ${JSON.stringify(ctx.organizationIds ?? [])}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
       return fn(tx);
     });
   }
@@ -193,5 +203,194 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
     await expect(
       asContext({ isSuperAdmin: true }, (tx) => tx.auditEvent.delete({ where: { id: event.id } }))
     ).rejects.toThrow();
+  });
+
+  describe("Organization Core (Session 17)", () => {
+    let orgA: { id: string };
+    let orgB: { id: string };
+    let userC: { id: string };
+
+    beforeAll(async () => {
+      const setup = new PrismaClient();
+      userC = await setup.user.create({
+        data: { email: `rls-test-c-${randomUUID()}@example.com`, name: "RLS Test C", passwordHash: "x" },
+        select: { id: true },
+      });
+      // userA founds orgA and is its org_admin; userB founds orgB and is
+      // its org_admin — same shape createOrganization() itself produces,
+      // written directly via the superuser fixture client so these RLS
+      // tests aren't themselves dependent on the app-layer function under
+      // test elsewhere (organizations.test.ts).
+      orgA = await setup.organization.create({ data: { name: "RLS Org A", slug: `rls-org-a-${randomUUID()}`, createdBy: userA.id } });
+      await setup.organizationMembership.create({
+        data: { organizationId: orgA.id, userId: userA.id, role: "org_admin", status: "active", joinedAt: new Date() },
+      });
+      orgB = await setup.organization.create({ data: { name: "RLS Org B", slug: `rls-org-b-${randomUUID()}`, createdBy: userB.id } });
+      await setup.organizationMembership.create({
+        data: { organizationId: orgB.id, userId: userB.id, role: "org_admin", status: "active", joinedAt: new Date() },
+      });
+      await setup.$disconnect();
+    });
+
+    afterAll(async () => {
+      const setup = new PrismaClient();
+      await setup.organizationInvitation.deleteMany({ where: { organizationId: { in: [orgA.id, orgB.id] } } });
+      await setup.organizationMembership.deleteMany({ where: { organizationId: { in: [orgA.id, orgB.id] } } });
+      await setup.auditEvent.deleteMany({ where: { entityId: { in: [orgA.id, orgB.id] } } });
+      await setup.organization.deleteMany({ where: { id: { in: [orgA.id, orgB.id] } } });
+      await setup.user.deleteMany({ where: { id: userC.id } });
+      await setup.$disconnect();
+    });
+
+    it("organizations_select: an unauthenticated context sees no organizations", async () => {
+      const rows = await asContext({}, (tx) => tx.organization.findMany({ where: { id: { in: [orgA.id, orgB.id] } } }));
+      expect(rows).toHaveLength(0);
+    });
+
+    it("organizations_select: any authenticated user sees a non-archived organization's profile, membership or not", async () => {
+      const rows = await asContext({ userId: userC.id }, (tx) => tx.organization.findMany({ where: { id: orgA.id } }));
+      expect(rows.map((r) => r.id)).toEqual([orgA.id]);
+    });
+
+    it("organizations_write: created_by must equal the acting user — cannot attribute a new org to someone else", async () => {
+      await expect(
+        asContext({ userId: userC.id }, (tx) =>
+          tx.organization.create({ data: { name: "Spoofed", slug: `spoof-${randomUUID()}`, createdBy: userA.id } })
+        )
+      ).rejects.toThrow();
+
+      const own = await asContext({ userId: userC.id }, (tx) =>
+        tx.organization.create({ data: { name: "Owned by C", slug: `owned-by-c-${randomUUID()}`, createdBy: userC.id } })
+      );
+      expect(own.createdBy).toBe(userC.id);
+
+      const cleanup = new PrismaClient();
+      await cleanup.organization.delete({ where: { id: own.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("organizations_update: an org_admin of orgA cannot update orgB's settings", async () => {
+      await expect(
+        asContext({ userId: userA.id, organizationIds: [orgA.id] }, (tx) =>
+          tx.organization.update({ where: { id: orgB.id }, data: { description: "hijacked" } })
+        )
+      ).rejects.toThrow(); // RLS hides the target row from the UPDATE's WHERE clause -> Prisma P2025
+
+      const updated = await asContext({ userId: userA.id, organizationIds: [orgA.id] }, (tx) =>
+        tx.organization.update({ where: { id: orgA.id }, data: { description: "updated by its own org_admin" } })
+      );
+      expect(updated.description).toBe("updated by its own org_admin");
+    });
+
+    it("organization_memberships_write: a user may self-insert a 'pending' join request but NOT an 'active' row for themselves", async () => {
+      await expect(
+        asContext({ userId: userC.id }, (tx) =>
+          tx.organizationMembership.create({ data: { organizationId: orgA.id, userId: userC.id, role: "org_member", status: "active" } })
+        )
+      ).rejects.toThrow(); // no branch of organization_memberships_write authorizes a self-granted 'active' row
+
+      const pending = await asContext({ userId: userC.id }, (tx) =>
+        tx.organizationMembership.create({ data: { organizationId: orgA.id, userId: userC.id, role: "org_member", status: "pending" } })
+      );
+      expect(pending.status).toBe("pending");
+
+      const cleanup = new PrismaClient();
+      await cleanup.organizationMembership.delete({ where: { id: pending.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("organization_memberships_select: an org_admin sees every status row in THEIR org (via the SECURITY DEFINER helper), a non-member sees none of it", async () => {
+      const setup = new PrismaClient();
+      const pendingRow = await setup.organizationMembership.create({
+        data: { organizationId: orgA.id, userId: userC.id, role: "org_member", status: "pending" },
+      });
+      await setup.$disconnect();
+
+      const asOrgAdmin = await asContext({ userId: userA.id, organizationIds: [orgA.id] }, (tx) =>
+        tx.organizationMembership.findMany({ where: { id: pendingRow.id } })
+      );
+      expect(asOrgAdmin.map((r) => r.id)).toEqual([pendingRow.id]);
+
+      // userB is org_admin of orgB only — must not see orgA's pending row.
+      const asOtherOrgAdmin = await asContext({ userId: userB.id, organizationIds: [orgB.id] }, (tx) =>
+        tx.organizationMembership.findMany({ where: { id: pendingRow.id } })
+      );
+      expect(asOtherOrgAdmin).toHaveLength(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.organizationMembership.delete({ where: { id: pendingRow.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("organization_memberships_select: a plain active member sees the ACTIVE roster of their org via app.organization_ids, not other orgs'", async () => {
+      const setup = new PrismaClient();
+      const activeRow = await setup.organizationMembership.create({
+        data: { organizationId: orgA.id, userId: userC.id, role: "org_member", status: "active", joinedAt: new Date() },
+      });
+      await setup.$disconnect();
+
+      const sameOrgMember = await asContext({ userId: userC.id, organizationIds: [orgA.id] }, (tx) =>
+        // userA's own founding membership row in orgA, visible to a fellow active member via the roster branch.
+        tx.organizationMembership.findMany({ where: { organizationId: orgA.id, userId: userA.id } })
+      );
+      expect(sameOrgMember.length).toBeGreaterThan(0);
+
+      const notAMemberOfB = await asContext({ userId: userC.id, organizationIds: [orgA.id] }, (tx) =>
+        tx.organizationMembership.findMany({ where: { organizationId: orgB.id, userId: userB.id } })
+      );
+      expect(notAMemberOfB).toHaveLength(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.organizationMembership.delete({ where: { id: activeRow.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("organization_invitations: an org_admin can create/select an invitation for their own org; a non-admin cannot create one at all", async () => {
+      await expect(
+        asContext({ userId: userC.id }, (tx) =>
+          tx.organizationInvitation.create({
+            data: { organizationId: orgA.id, email: "nobody@example.com", tokenHash: randomUUID(), expiresAt: new Date(Date.now() + 60_000), invitedBy: userC.id },
+          })
+        )
+      ).rejects.toThrow();
+
+      const invitation = await asContext({ userId: userA.id, organizationIds: [orgA.id] }, (tx) =>
+        tx.organizationInvitation.create({
+          data: { organizationId: orgA.id, email: "invitee@example.com", tokenHash: randomUUID(), expiresAt: new Date(Date.now() + 60_000), invitedBy: userA.id },
+        })
+      );
+
+      // userB (org_admin of orgB only) must not see orgA's invitation.
+      const asOtherOrgAdmin = await asContext({ userId: userB.id, organizationIds: [orgB.id] }, (tx) =>
+        tx.organizationInvitation.findMany({ where: { id: invitation.id } })
+      );
+      expect(asOtherOrgAdmin).toHaveLength(0);
+
+      // The pre-auth token-lookup flag (no app.user_id at all) can still find it, mirroring password_reset_lookup.
+      const viaTokenLookup = await asContext({ orgInvitationLookup: true }, (tx) =>
+        tx.organizationInvitation.findMany({ where: { id: invitation.id } })
+      );
+      expect(viaTokenLookup.map((r) => r.id)).toEqual([invitation.id]);
+
+      const cleanup = new PrismaClient();
+      await cleanup.organizationInvitation.delete({ where: { id: invitation.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("organization_memberships: no DELETE policy exists — removal must go through status='removed', never a real row delete, even for super_admin", async () => {
+      const setup = new PrismaClient();
+      const row = await setup.organizationMembership.create({
+        data: { organizationId: orgA.id, userId: userC.id, role: "org_member", status: "active", joinedAt: new Date() },
+      });
+      await setup.$disconnect();
+
+      await expect(
+        asContext({ isSuperAdmin: true }, (tx) => tx.organizationMembership.delete({ where: { id: row.id } }))
+      ).rejects.toThrow();
+
+      const cleanup = new PrismaClient();
+      await cleanup.organizationMembership.delete({ where: { id: row.id } });
+      await cleanup.$disconnect();
+    });
   });
 });

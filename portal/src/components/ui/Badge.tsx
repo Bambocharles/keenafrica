@@ -21,7 +21,12 @@ type Status =
   | "achieved"
   | "missed"
   // Added by Session 14 (Certificates) for Certificate.status.
-  | "revoked";
+  | "revoked"
+  // Added by Session 17 (Organization Core) for Organization.status /
+  // OrganizationMembership.status / OrganizationInvitation.status.
+  | "pending"
+  | "invited"
+  | "removed";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -43,6 +48,9 @@ const LABEL: Record<Status, string> = {
   achieved: "Achieved",
   missed: "Missed",
   revoked: "Revoked",
+  pending: "Pending",
+  invited: "Invited",
+  removed: "Removed",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -66,6 +74,9 @@ export function StatusBadge({ status }: { status: Status }) {
     achieved: styles["badge-active"],
     missed: styles["badge-suspended"],
     revoked: styles["badge-suspended"],
+    pending: styles["badge-paused"],
+    invited: styles["badge-draft"],
+    removed: styles["badge-suspended"],
   }[status];
 
   return (

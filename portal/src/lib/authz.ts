@@ -92,6 +92,20 @@ export const PERMISSIONS = {
   // certificates_write/update's RLS policy, only this module's own narrow
   // system context can, which is never exposed to a real actor's request.
   CERTIFICATES_MANAGE: "certificates.manage",
+  // Added by Session 17 (Organization Core). The global "manage every
+  // organization" key (ADMIN/SUPER_ADMIN, via ALL_PERMISSION_KEYS) — a
+  // Platform Admin's cross-tenant reach, deliberately separate from an
+  // Organization Admin's reach (an OrganizationMembership row with
+  // role='org_admin', scoped to ONE organization by
+  // src/lib/organizations.ts's requireOrgPermission). Holding this is
+  // necessary and sufficient for any organization; holding org_admin
+  // membership is necessary and sufficient for exactly that one
+  // organization — the same "global permission vs. ownership row" shape
+  // courses.manage/sponsor.manage already use. No TEACHER/STUDENT/
+  // SPONSOR_* role holds this by default (see DEFAULT_ROLE_PERMISSIONS) —
+  // organization-scoped capability comes entirely from org_admin
+  // membership, never from a global Role.
+  ORGANIZATIONS_MANAGE: "organizations.manage",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 

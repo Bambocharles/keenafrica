@@ -17,6 +17,7 @@ import { createDemoCourses, publishDemoCourses } from "./content";
 import { seedStudentActivity } from "./activity";
 import { seedMessaging } from "./messaging";
 import { seedSponsorData } from "./sponsor";
+import { seedOrganizations } from "./organizations";
 
 /** Marks roughly half of each user's own notifications read — a real read/unread mix, via the real self-scoped markNotificationRead(), not a raw prisma update. */
 async function markSomeNotificationsRead(userIds: string[]): Promise<void> {
@@ -57,6 +58,9 @@ export async function runDemoSeed(): Promise<void> {
 
   console.log("[demo] seeding sponsor data (sponsors, projects, milestones, metrics, documents, beneficiaries)...");
   await seedSponsorData(adminActor, identities.sponsorUsers, identities.students);
+
+  console.log("[demo] seeding organizations (Session 17) — memberships across every lifecycle status...");
+  await seedOrganizations(identities.teachers, identities.students);
 
   console.log("[demo] marking a portion of notifications read for a realistic read/unread mix...");
   const allUserIds = [
