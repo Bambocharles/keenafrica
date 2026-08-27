@@ -14,6 +14,7 @@ const TITLES: Array<[prefix: string, title: string]> = [
   ["/saved", "Saved Resources"],
   ["/certificates", "Certificates"],
   ["/messages", "Messages"],
+  ["/notifications", "Notifications"],
   ["/profile", "Profile"],
 ];
 

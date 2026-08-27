@@ -11,6 +11,10 @@ const DEFAULT_FLAGS: Array<{ key: string; description: string }> = [
   { key: FEATURE_FLAGS.ADAPTIVE_RECOMMENDATIONS, description: "Adaptive learning recommendations" },
   { key: FEATURE_FLAGS.AI_TUTORING, description: "AI tutoring assistant" },
   { key: FEATURE_FLAGS.UTME_FEATURES, description: "Future UTME-specific features" },
+  { key: FEATURE_FLAGS.NOTIFICATIONS_EMAIL, description: "Email delivery for notifications (dev-stub provider until Session 02's blocker resolves)" },
+  { key: FEATURE_FLAGS.NOTIFICATIONS_PUSH, description: "Push delivery for notifications (reserved — no provider implemented yet)" },
+  { key: FEATURE_FLAGS.NOTIFICATIONS_SMS, description: "SMS delivery for notifications (reserved — no provider implemented yet)" },
+  { key: FEATURE_FLAGS.NOTIFICATIONS_WHATSAPP, description: "WhatsApp delivery for notifications (reserved — no provider implemented yet)" },
 ];
 
 export const featureFlagsTask: SeedTask = {

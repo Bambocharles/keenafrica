@@ -8,6 +8,7 @@ const TITLES: Array<[prefix: string, title: string]> = [
   ["/courses", "My Courses"],
   ["/messages", "Messages"],
   ["/assessments", "Assessments"],
+  ["/notifications", "Notifications"],
   ["/profile", "Profile"],
 ];
 

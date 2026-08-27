@@ -7,3 +7,4 @@ export { EmptyState } from "./EmptyState";
 export { SectionHeader } from "./SectionHeader";
 export { Disclosure } from "./Disclosure";
 export { Banner } from "./Banner";
+export { NotificationBell } from "./NotificationBell";

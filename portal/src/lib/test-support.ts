@@ -107,8 +107,15 @@ export async function cleanupTestConversations(userIds: string[]): Promise<void>
   await deleteConversationsByIds(conversationIds);
 }
 
+/** Deletes any Notification rows addressed to a set of test users — call before cleanupTestUsers() deletes the User rows notifications.recipient_id references (ON DELETE NO ACTION, same convention as every other cleanup helper here). */
+export async function cleanupTestNotifications(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.notification.deleteMany({ where: { recipientId: { in: userIds } } });
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
+  await cleanupTestNotifications(userIds);
   await cleanupTestConversations(userIds);
   const uploadedAssetIds = (
     await prisma.asset.findMany({ where: { uploaderId: { in: userIds } }, select: { id: true } })

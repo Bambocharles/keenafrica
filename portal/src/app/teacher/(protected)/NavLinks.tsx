@@ -17,6 +17,7 @@ export function NavLinks() {
     { href: "/courses", icon: "🎓", label: "My Courses" },
     { href: "/messages", icon: "✉", label: "Messages" },
     { href: "/assessments", icon: "✓", label: "Assessments" },
+    { href: "/notifications", icon: "🔔", label: "Notifications" },
     { href: "/profile", icon: "◉", label: "Profile" },
   ];
 

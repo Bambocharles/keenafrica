@@ -20,6 +20,7 @@ const ITEMS: NavItem[] = [
   { href: "/saved", icon: "☆", label: "Saved" },
   { href: "/certificates", icon: "🏅", label: "Certificates" },
   { href: "/messages", icon: "✉", label: "Messages" },
+  { href: "/notifications", icon: "🔔", label: "Notifications" },
   { href: "/profile", icon: "◉", label: "Profile" },
 ];
 
