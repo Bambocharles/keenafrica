@@ -185,26 +185,3 @@ Console before the corrected value was set.
   in on the correct subdomain — this session verified account existence
   and authentication, not a full re-run of every permission-boundary test
   already covered by each owning session's own test suite.
-
-## Removing or rotating these accounts later
-
-1. **Suspend or delete** each of the seven accounts from the admin
-   console's `/users/[id]` page (site owner or another real ADMIN/
-   SUPER_ADMIN — the QA accounts themselves should not be used to remove
-   each other).
-2. **Delete the QA organization** — `QA Test Org (Session 22)` — via the
-   admin console's organization management (`organizations.manage`,
-   Session 17).
-3. **Delete the credential vault**:
-   `kubectl -n keen-prod delete secret portal-qa-accounts`
-4. **Remove the SUPER_ADMIN bootstrap secrets** from the `production`
-   GitHub Environment (`SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD`/
-   `SUPER_ADMIN_NAME`) if they are not being kept for a legitimate future
-   re-run of `seed-portal.yml` for a *different* purpose — note that
-   re-running that workflow with different values only ever affects the
-   one account keyed to whatever email is set at the time; it will not
-   touch this QA super-admin account unless the email is reused.
-5. To **rotate** rather than remove: use the same admin-triggered
-   "generate password reset link" (or STUDENT's self-service one) real-
-   email flow used throughout this session — the mailbox owner reads the
-   real email and redeems it, no code or seed changes needed either way.
