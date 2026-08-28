@@ -1,4 +1,3 @@
-import { prisma } from "@/lib/db";
 import { withRls } from "@/lib/rls";
 import {
   AuthorizationError,
@@ -32,6 +31,21 @@ import { isActiveOrganizationMember } from "@/lib/organizations";
  * every course did before this session — see docs on the
  * organization_aware_education migration for the full RLS contract.
  */
+
+/**
+ * System-level context for lookups that must run independent of the
+ * caller's own RLS visibility, after the caller has already been
+ * authorized by requirePermission() — same convention as
+ * organizations.ts's SYSTEM_CTX (isActiveOrganizationMember, etc.). Used
+ * below by assignTeacherToCohort()/enrollStudent() to check whether an
+ * arbitrary TARGET user (not the actor) holds a given role: the actor's
+ * own RLS-scoped context has no reason to include visibility into another
+ * user's user_roles row, so a plain (unscoped) prisma call here would
+ * silently return zero rows under real RLS enforcement (production's
+ * kf_portal_prod_app role does not bypass RLS — only the local dev
+ * superuser connection does, which is why this was not caught locally).
+ */
+const SYSTEM_CTX = { isSuperAdmin: true } as const;
 
 export function actorRlsCtx(actor: AuthzActor) {
   return {
@@ -298,9 +312,11 @@ async function assertTargetIsOrgMemberIfScoped(cohortId: string, targetUserId: s
 export async function assignTeacherToCohort(cohortId: string, teacherUserId: string, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.COURSES_MANAGE);
 
-  const holdsTeacherRole = await prisma.userRole.findFirst({
-    where: { userId: teacherUserId, role: { name: "TEACHER" } },
-  });
+  const holdsTeacherRole = await withRls(SYSTEM_CTX, (tx) =>
+    tx.userRole.findFirst({
+      where: { userId: teacherUserId, role: { name: "TEACHER" } },
+    })
+  );
   if (!holdsTeacherRole) throw new Error("Target user does not hold the TEACHER role");
   await assertTargetIsOrgMemberIfScoped(cohortId, teacherUserId, actor);
 
@@ -343,9 +359,11 @@ export async function removeTeacherFromCohort(cohortId: string, teacherUserId: s
 export async function enrollStudent(cohortId: string, studentUserId: string, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.COURSES_MANAGE);
 
-  const holdsStudentRole = await prisma.userRole.findFirst({
-    where: { userId: studentUserId, role: { name: "STUDENT" } },
-  });
+  const holdsStudentRole = await withRls(SYSTEM_CTX, (tx) =>
+    tx.userRole.findFirst({
+      where: { userId: studentUserId, role: { name: "STUDENT" } },
+    })
+  );
   if (!holdsStudentRole) throw new Error("Target user does not hold the STUDENT role");
   await assertTargetIsOrgMemberIfScoped(cohortId, studentUserId, actor);
 
