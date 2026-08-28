@@ -75,10 +75,14 @@ export async function createQuestion(courseId: string, input: CreateQuestionInpu
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Question prompt is required");
 
-  const question = await withRls(actorRlsCtx(actor), (tx) =>
-    tx.question.create({
+  const question = await withRls(actorRlsCtx(actor), async (tx) => {
+    // Organization-Aware Education (Session 21): organizationId is
+    // denormalized from the course at creation, immutable once set.
+    const course = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { organizationId: true } });
+    return tx.question.create({
       data: {
         courseId,
+        organizationId: course.organizationId,
         type: input.type,
         prompt,
         explanation: input.explanation?.trim() ?? "",
@@ -91,8 +95,8 @@ export async function createQuestion(courseId: string, input: CreateQuestionInpu
           : undefined,
       },
       include: { options: { orderBy: { order: "asc" } } },
-    })
-  );
+    });
+  });
 
   await recordAuditEvent({ actorId: actor.id, action: "question.created", entityType: "Question", entityId: question.id, metadata: { courseId } });
 

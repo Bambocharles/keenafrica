@@ -308,7 +308,7 @@ export async function orgActorFromUser(userId: string) {
 export async function steppedUpActorFromUser(
   userId: string,
   opts: { org?: boolean } = {}
-): Promise<AuthzActor & { organizationIds?: string[] }> {
+): Promise<AuthzActor> {
   const actor = opts.org ? await orgActorFromUser(userId) : await actorFromUser(userId);
   const session = await createSession({ userId });
   await markSessionSteppedUp(session.id, userId);

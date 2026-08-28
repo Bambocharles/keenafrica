@@ -60,7 +60,8 @@ export async function runDemoSeed(): Promise<void> {
   await seedSponsorData(adminActor, identities.sponsorUsers, identities.students);
 
   console.log("[demo] seeding organizations (Session 17) — memberships across every lifecycle status...");
-  await seedOrganizations(identities.teachers, identities.students);
+  console.log("[demo] seeding one organization-scoped course (Session 21)...");
+  await seedOrganizations(adminActor, identities.teachers, identities.students);
 
   console.log("[demo] marking a portion of notifications read for a realistic read/unread mix...");
   const allUserIds = [

@@ -114,6 +114,28 @@ async function countActiveOrgAdmins(organizationId: string): Promise<number> {
   );
 }
 
+/**
+ * Organization-Aware Education (Session 21). True when userId currently
+ * holds an ACTIVE OrganizationMembership (any role) in organizationId.
+ * Runs under SYSTEM_CTX (same convention as countActiveOrgAdmins above) —
+ * this is a system-level integrity check, not scoped to any particular
+ * caller's own visibility (organization_memberships_select would otherwise
+ * hide another user's row from a plain actor). Used by
+ * src/lib/courses.ts's assignTeacherToCohort()/enrollStudent() (write-time
+ * integrity: never create a cohort_teachers/enrollments row for an
+ * organization-scoped cohort naming a non-member) and
+ * src/lib/messaging.ts's cross-organization messaging guard.
+ */
+export async function isActiveOrganizationMember(organizationId: string, userId: string): Promise<boolean> {
+  const membership = await withRls(SYSTEM_CTX, (tx) =>
+    tx.organizationMembership.findUnique({
+      where: { organizationId_userId: { organizationId, userId } },
+      select: { status: true },
+    })
+  );
+  return membership?.status === "active";
+}
+
 // --- Organization ---------------------------------------------------------
 
 const RESERVED_SLUGS = new Set(["admin", "teacher", "student", "sponsor", "www", "api", "app", "auth", "static", "assets"]);

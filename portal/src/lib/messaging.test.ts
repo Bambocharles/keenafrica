@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { prisma } from "@/lib/db";
 import { AuthorizationError } from "@/lib/authz";
 import { assignTeacherToCohort, createCohort, createCourse, enrollStudent } from "@/lib/courses";
 import { onDomainEvent, type DomainEventMap } from "@/lib/events";
@@ -13,10 +14,19 @@ import {
   sendMessage,
   startConversation,
 } from "@/lib/messaging";
-import { actorFromUser, cleanupTestCourses, cleanupTestUsers, createTestUser } from "@/lib/test-support";
+import { approveJoinRequest, createOrganization, listOrganizationMembers, requestToJoinOrganization } from "@/lib/organizations";
+import {
+  actorFromUser,
+  cleanupTestCourses,
+  cleanupTestOrganizations,
+  cleanupTestUsers,
+  createTestUser,
+  orgActorFromUser,
+} from "@/lib/test-support";
 
 const createdUserIds: string[] = [];
 const createdCourseIds: string[] = [];
+const createdOrgIds: string[] = [];
 
 async function user(opts?: Parameters<typeof createTestUser>[0]) {
   const u = await createTestUser(opts);
@@ -24,8 +34,23 @@ async function user(opts?: Parameters<typeof createTestUser>[0]) {
   return u;
 }
 
+let orgSlugCounter = 0;
+function uniqueOrgSlug(): string {
+  orgSlugCounter += 1;
+  return `msg-org-test-${Date.now()}-${orgSlugCounter}`;
+}
+
+/** Session 21 — approves userId into orgId, ending in an ACTIVE org_member row. */
+async function makeActiveOrgMember(orgId: string, founderId: string, userId: string) {
+  await requestToJoinOrganization(orgId, await orgActorFromUser(userId));
+  const pending = await listOrganizationMembers(orgId, await orgActorFromUser(founderId));
+  const row = pending.find((m) => m.userId === userId)!;
+  await approveJoinRequest(row.membershipId, await orgActorFromUser(founderId));
+}
+
 afterAll(async () => {
   await cleanupTestCourses(createdCourseIds);
+  await cleanupTestOrganizations(createdOrgIds);
   await cleanupTestUsers(createdUserIds);
 });
 
@@ -266,5 +291,97 @@ describe("eligible-recipient listings", () => {
     const { teachers, classmates } = await listMessageableForStudent(s1Actor);
     expect(teachers.map((t) => t.id)).toEqual([teacherUser.id]);
     expect(classmates.map((c) => c.id)).toEqual([s2User.id]);
+  });
+});
+
+describe("Organization-Aware Education (Session 21) — cross-organization messaging guard", () => {
+  /**
+   * An ORGANIZATION-scoped course/cohort where the teacher and student
+   * share the cohort but belong to DIFFERENT organizations. courses.ts's
+   * assignTeacherToCohort()/enrollStudent() would themselves reject
+   * creating such a mismatched pair (assertTargetIsOrgMemberIfScoped) — so
+   * this fixture goes around them with a raw prisma write, exactly the
+   * "bypassed/legacy row" scenario messaging.ts's own explicit check
+   * (independent of that integrity check, and independent of RLS) exists
+   * to still catch. See src/lib/organization-aware-education-rls.
+   * integration.test.ts for the equivalent proof at the RLS layer.
+   */
+  async function setupCrossOrgMismatch() {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const founderA = await user();
+    const founderB = await user();
+    const orgA = await createOrganization({ name: "Msg Org A", slug: uniqueOrgSlug() }, await orgActorFromUser(founderA.id));
+    const orgB = await createOrganization({ name: "Msg Org B", slug: uniqueOrgSlug() }, await orgActorFromUser(founderB.id));
+    createdOrgIds.push(orgA.id, orgB.id);
+
+    const course = await createCourse({ title: `Cross-Org Course ${Date.now()}`, organizationId: orgA.id }, adminActor);
+    createdCourseIds.push(course.id);
+    const cohort = await createCohort(course.id, { name: "Cross-Org Cohort" }, adminActor);
+
+    const teacherUser = await user({ roles: ["TEACHER"] });
+    await makeActiveOrgMember(orgA.id, founderA.id, teacherUser.id);
+    await prisma.cohortTeacher.create({ data: { cohortId: cohort.id, teacherUserId: teacherUser.id } });
+    const teacherActor = await orgActorFromUser(teacherUser.id);
+
+    const studentUser = await user({ roles: ["STUDENT"] });
+    await makeActiveOrgMember(orgB.id, founderB.id, studentUser.id);
+    await prisma.enrollment.create({ data: { cohortId: cohort.id, studentUserId: studentUser.id, status: "active" } });
+    const studentActor = await orgActorFromUser(studentUser.id);
+
+    return { orgA, orgB, teacherUser, teacherActor, studentUser, studentActor };
+  }
+
+  it("assertCanMessage rejects a teacher (Org A) and student (Org B) who share a cohort row but no organization membership", async () => {
+    const { teacherActor, studentUser, studentActor, teacherUser } = await setupCrossOrgMismatch();
+    await expect(assertCanMessage(teacherActor, studentUser.id)).rejects.toThrow(AuthorizationError);
+    await expect(assertCanMessage(studentActor, teacherUser.id)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("startConversation rejects the same cross-organization pairing end to end", async () => {
+    const { teacherActor, studentUser } = await setupCrossOrgMismatch();
+    await expect(
+      startConversation({ type: "direct", participantIds: [studentUser.id], body: "hi" }, teacherActor)
+    ).rejects.toThrow(AuthorizationError);
+  });
+
+  it("assertCanMessage ALLOWS a teacher and student who share an organization-scoped cohort AND the same organization", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const founder = await user();
+    const org = await createOrganization({ name: "Msg Org Same", slug: uniqueOrgSlug() }, await orgActorFromUser(founder.id));
+    createdOrgIds.push(org.id);
+
+    const course = await createCourse({ title: `Same-Org Course ${Date.now()}`, organizationId: org.id }, adminActor);
+    createdCourseIds.push(course.id);
+    const cohort = await createCohort(course.id, { name: "Same-Org Cohort" }, adminActor);
+
+    const teacherUser = await user({ roles: ["TEACHER"] });
+    await makeActiveOrgMember(org.id, founder.id, teacherUser.id);
+    await assignTeacherToCohort(cohort.id, teacherUser.id, adminActor);
+    const teacherActor = await orgActorFromUser(teacherUser.id);
+
+    const studentUser = await user({ roles: ["STUDENT"] });
+    await makeActiveOrgMember(org.id, founder.id, studentUser.id);
+    await enrollStudent(cohort.id, studentUser.id, adminActor);
+    const studentActor = await orgActorFromUser(studentUser.id);
+
+    await expect(assertCanMessage(teacherActor, studentUser.id)).resolves.toBeUndefined();
+  });
+
+  it("REGRESSION: a PLATFORM-scoped cohort's messaging is unaffected even when both parties belong to DIFFERENT organizations elsewhere", async () => {
+    const { teacherActor, s1User, s1Actor, teacherUser } = await setup();
+    const founderA = await user();
+    const founderB = await user();
+    const orgA = await createOrganization({ name: "Unrelated Org A", slug: uniqueOrgSlug() }, await orgActorFromUser(founderA.id));
+    const orgB = await createOrganization({ name: "Unrelated Org B", slug: uniqueOrgSlug() }, await orgActorFromUser(founderB.id));
+    createdOrgIds.push(orgA.id, orgB.id);
+    await makeActiveOrgMember(orgA.id, founderA.id, teacherUser.id);
+    await makeActiveOrgMember(orgB.id, founderB.id, s1User.id);
+
+    const teacherOrgActor = await orgActorFromUser(teacherUser.id);
+    const studentOrgActor = await orgActorFromUser(s1User.id);
+    await expect(assertCanMessage(teacherOrgActor, s1User.id)).resolves.toBeUndefined();
+    await expect(assertCanMessage(studentOrgActor, teacherActor.id)).resolves.toBeUndefined();
   });
 });

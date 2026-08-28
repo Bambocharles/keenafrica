@@ -10,6 +10,7 @@ import {
 } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
 import { emitDomainEvent } from "@/lib/events";
+import { isActiveOrganizationMember } from "@/lib/organizations";
 
 /**
  * Education Core (Session 04) — Course, Cohort, CohortTeacher, Enrollment.
@@ -22,10 +23,23 @@ import { emitDomainEvent } from "@/lib/events";
  * RLS policies in the education_core migration, which enforce the exact
  * same ownership shape at the database level — the checks here are the
  * application-layer mirror, not a substitute for it.
+ *
+ * Organization-Aware Education (Session 21) — a Course may additionally be
+ * ORGANIZATION-scoped (see CreateCourseInput.organizationId below); Cohort/
+ * Assessment/Question denormalize organizationId from their course at
+ * creation (immutable once set, same convention as lessons.courseId). A
+ * PLATFORM course (organizationId null, the default) behaves exactly as
+ * every course did before this session — see docs on the
+ * organization_aware_education migration for the full RLS contract.
  */
 
 export function actorRlsCtx(actor: AuthzActor) {
-  return { userId: actor.id, isSuperAdmin: actor.isSuperAdmin, permissions: [...actor.permissions] };
+  return {
+    userId: actor.id,
+    isSuperAdmin: actor.isSuperAdmin,
+    permissions: [...actor.permissions],
+    organizationIds: actor.organizationIds ? [...actor.organizationIds] : [],
+  };
 }
 
 /** True when actor holds a cohort_teachers row for any cohort of this course. */
@@ -75,16 +89,36 @@ export async function assertCanManageOrTeachCourse(courseId: string, actor: Auth
 export interface CreateCourseInput {
   title: string;
   description?: string;
+  /**
+   * Organization-Aware Education (Session 21). Omitted/undefined (the
+   * default) creates a PLATFORM-scoped course — every pre-Session-21
+   * caller and test is unaffected. Supplying an organizationId creates an
+   * ORGANIZATION-scoped course instead, visible only to that
+   * organization's members plus courses.manage/super_admin (unchanged).
+   * Still gated by courses.create only — this session does not grant
+   * org_admin a course-creation capability of its own (see this session's
+   * handoff "Known limitations").
+   */
+  organizationId?: string;
 }
 
 export async function createCourse(input: CreateCourseInput, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.COURSES_CREATE);
 
-  const course = await withRls(actorRlsCtx(actor), (tx) =>
-    tx.course.create({
-      data: { title: input.title, description: input.description ?? "", createdBy: actor.id },
-    })
-  );
+  const course = await withRls(actorRlsCtx(actor), async (tx) => {
+    if (input.organizationId) {
+      const organization = await tx.organization.findUnique({ where: { id: input.organizationId }, select: { id: true } });
+      if (!organization) throw new Error("Organization not found");
+    }
+    return tx.course.create({
+      data: {
+        title: input.title,
+        description: input.description ?? "",
+        createdBy: actor.id,
+        ...(input.organizationId ? { scope: "organization", organizationId: input.organizationId } : {}),
+      },
+    });
+  });
 
   await recordAuditEvent({
     actorId: actor.id,
@@ -203,11 +237,15 @@ export interface CreateCohortInput {
 export async function createCohort(courseId: string, input: CreateCohortInput, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.COURSES_MANAGE);
 
-  const cohort = await withRls(actorRlsCtx(actor), (tx) =>
-    tx.cohort.create({
-      data: { courseId, name: input.name, startsAt: input.startsAt, endsAt: input.endsAt },
-    })
-  );
+  const cohort = await withRls(actorRlsCtx(actor), async (tx) => {
+    // Organization-Aware Education (Session 21): organizationId is
+    // denormalized from the course at creation, immutable once set — see
+    // this module's header comment.
+    const course = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { organizationId: true } });
+    return tx.cohort.create({
+      data: { courseId, name: input.name, startsAt: input.startsAt, endsAt: input.endsAt, organizationId: course.organizationId },
+    });
+  });
 
   await recordAuditEvent({ actorId: actor.id, action: "cohort.created", entityType: "Cohort", entityId: cohort.id, metadata: { courseId } });
 
@@ -233,6 +271,29 @@ export async function listCohortsForCourse(courseId: string, actor: AuthzActor) 
 
 // --- CohortTeacher ------------------------------------------------------
 
+/**
+ * Organization-Aware Education (Session 21). If cohortId's course is
+ * ORGANIZATION-scoped, targetUserId must currently hold an ACTIVE
+ * OrganizationMembership in that organization. Without this, a
+ * courses.manage holder (unrestricted here on purpose — a Platform Admin's
+ * cross-tenant reach is unchanged) could create a cohort_teachers/
+ * enrollments row that the RLS policies this session added would then make
+ * invisible to that target user and to any of their fellow non-member
+ * teachers/students — a silently useless assignment rather than a real
+ * authorization boundary. No-op for a PLATFORM-scoped cohort (every
+ * pre-Session-21 assignment path is unaffected). Throws AuthorizationError
+ * on failure.
+ */
+async function assertTargetIsOrgMemberIfScoped(cohortId: string, targetUserId: string, actor: AuthzActor): Promise<void> {
+  const cohort = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.cohort.findUniqueOrThrow({ where: { id: cohortId }, select: { organizationId: true } })
+  );
+  if (!cohort.organizationId) return;
+  if (!(await isActiveOrganizationMember(cohort.organizationId, targetUserId))) {
+    throw new AuthorizationError("Target user is not an active member of this course's organization");
+  }
+}
+
 /** Assigns a user holding the TEACHER role to a cohort. Requires courses.manage. */
 export async function assignTeacherToCohort(cohortId: string, teacherUserId: string, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.COURSES_MANAGE);
@@ -241,6 +302,7 @@ export async function assignTeacherToCohort(cohortId: string, teacherUserId: str
     where: { userId: teacherUserId, role: { name: "TEACHER" } },
   });
   if (!holdsTeacherRole) throw new Error("Target user does not hold the TEACHER role");
+  await assertTargetIsOrgMemberIfScoped(cohortId, teacherUserId, actor);
 
   await withRls(actorRlsCtx(actor), (tx) =>
     tx.cohortTeacher.upsert({
@@ -285,6 +347,7 @@ export async function enrollStudent(cohortId: string, studentUserId: string, act
     where: { userId: studentUserId, role: { name: "STUDENT" } },
   });
   if (!holdsStudentRole) throw new Error("Target user does not hold the STUDENT role");
+  await assertTargetIsOrgMemberIfScoped(cohortId, studentUserId, actor);
 
   const enrollment = await withRls(actorRlsCtx(actor), async (tx) => {
     const existing = await tx.enrollment.findUnique({
