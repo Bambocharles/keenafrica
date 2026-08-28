@@ -265,6 +265,39 @@ export async function revokeAllUserSessionsAsSystem(
   );
 }
 
+/**
+ * For use ONLY by auth.ts's `events.signOut` — revokes exactly the one
+ * session that just signed out. Before this (QA — Session 23), signOut()
+ * only cleared the client-side cookie; the underlying Session row stayed
+ * valid (unrevoked) until its natural 30-day expiry, so a copied/stolen
+ * cookie kept working after the legitimate user "logged out" — caught live
+ * in Session 23's E2E pass by capturing a session cookie, signing out, and
+ * replaying the old cookie value directly (same class of gap as Session
+ * 16's authorize() missing-audit-write bug: only a real HTTP round trip
+ * surfaced it, not the unit suite). Deliberately narrow — revokes only the
+ * session that owns this id, never every session for the user (that's
+ * revokeAllUserSessionsAsSystem's job, already used for password
+ * reset/change); logging out of one device must not silently sign a user
+ * out everywhere else too.
+ */
+export async function revokeSessionAsSystem(sessionId: string, userId: string): Promise<void> {
+  const result = await withRls({ userId }, (tx) =>
+    tx.session.updateMany({
+      where: { id: sessionId, userId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedBy: userId },
+    })
+  );
+  if (result.count > 0) {
+    await recordAuditEvent({
+      actorId: userId,
+      action: "session.revoked",
+      entityType: "Session",
+      entityId: sessionId,
+      metadata: { reason: "sign_out" },
+    });
+  }
+}
+
 // --- Step-up authentication (Session 20) -----------------------------------
 //
 // "Step-up" is a short-lived freshness marker on this SAME sessions row
