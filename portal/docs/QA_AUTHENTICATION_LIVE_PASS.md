@@ -54,9 +54,13 @@ else). Two new regression tests in `src/lib/sessions.test.ts`. Full suite
 re-run after the fix: **537/537 passing** (535 baseline + 2 new), `tsc
 --noEmit` clean, `npm run build` clean.
 
-**Not yet deployed** — this fix exists only in this session's working tree
-(uncommitted, same as several prior sessions leave for the next
-merge/deploy decision). See "Deploy status" below.
+**Deployed and re-verified live in real production** (PR #38, merge
+commit `94eac33`, `deploy-portal.yml` run `33180864558`, both pods
+confirmed running image `94eac33`). Repeated the exact repro above against
+real production post-deploy: fresh login as QA ADMIN → confirmed `200` on
+`/security` → real sign-out → replayed the same pre-signout cookie against
+`/security` → now correctly `307` → `/login`. The gap is closed in
+production, not just in the working tree.
 
 ### 2. [Fixed] A revoked session was mislabeled "Suspended" instead of "Revoked" on the Security page
 
@@ -234,15 +238,13 @@ security next.
 
 ## Deploy status
 
-**None of this session's code changes have been deployed.** They exist
-only in this session's working tree, uncommitted, same convention several
-prior sessions have left for the next explicit merge/deploy decision
-(`src/components/security/SecurityPanel.tsx`, `src/lib/auth.ts`,
-`src/lib/sessions.ts`, `src/lib/sessions.test.ts`). Production is
-currently still running the **pre-fix** code — bug #1 (logout doesn't
-revoke) is live in production right now until this is merged and
-deployed. Whoever has merge authority should treat that as the priority
-item.
+**Merged and deployed.** PR #38 merged to `main` (commit `94eac33`),
+`deploy-portal.yml` run `33180864558` completed successfully, both
+`keen-prod` pods confirmed running image `94eac33`. Bug #1 (logout doesn't
+revoke) is **fixed in production**, re-verified live post-deploy by
+repeating the exact cookie-capture/sign-out/replay repro against real
+production (see finding #1 above) — the pre-signout cookie is now
+correctly rejected on the very next request.
 
 ## QA account state changes this session
 
