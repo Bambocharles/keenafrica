@@ -218,6 +218,24 @@ describeIfConfigured("Education Core Row-Level Security (enforced by a non-super
     await cleanup.$disconnect();
   });
 
+  it("users_select: a teacher can read the User row of a student actively enrolled in a cohort they teach (session 26 fix — reproduces the production bug where listEnrollmentsForCohort()/getCourseProgressForCohort()'s `include: { student }` threw 'Field student is required to return data, got null instead' under real RLS, since a plain TEACHER holds no users.read/users.create/users.update/users.suspend permission)", async () => {
+    const row = await asContext({ userId: teacher.id }, (tx) => tx.user.findUnique({ where: { id: student.id } }));
+    expect(row?.id).toBe(student.id);
+  });
+
+  it("users_select: a student can read the User row of a teacher of a cohort they're actively enrolled in", async () => {
+    const row = await asContext({ userId: student.id }, (tx) => tx.user.findUnique({ where: { id: teacher.id } }));
+    expect(row?.id).toBe(teacher.id);
+  });
+
+  it("users_select: an outsider teacher/student with no shared cohort still sees neither row (this is a narrow relationship-scoped grant, not a general widening)", async () => {
+    const outsiderSeesStudent = await asContext({ userId: outsiderTeacher.id }, (tx) => tx.user.findUnique({ where: { id: student.id } }));
+    expect(outsiderSeesStudent).toBeNull();
+
+    const outsiderSeesTeacher = await asContext({ userId: outsiderStudent.id }, (tx) => tx.user.findUnique({ where: { id: teacher.id } }));
+    expect(outsiderSeesTeacher).toBeNull();
+  });
+
   it("user_roles_select: reproduces the production bug this session found in src/lib/courses.ts (assignTeacherToCohort/enrollStudent's 'does the target hold this role' check ran with NO RLS context at all, silently returning zero rows under real RLS — see courses.ts's SYSTEM_CTX comment for the fix)", async () => {
     const setup = new PrismaClient();
     const teacherRole = await setup.role.findUniqueOrThrow({ where: { name: "TEACHER" } });
