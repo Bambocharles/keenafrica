@@ -26,7 +26,15 @@ export default async function ProtectedTeacherLayout({
   // enforces its own ownership-scoped check against courses.ts/content.ts —
   // holding the TEACHER role alone grants nothing without a cohort_teachers
   // row on the specific course being acted on.
-  if (!session?.user || !canAccessTeacherPortal(session.user)) {
+  if (!session?.user) {
+    redirect("/login");
+  }
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // admin console layout.
+  if (session.user.mfaPending) {
+    redirect("/mfa");
+  }
+  if (!canAccessTeacherPortal(session.user)) {
     redirect("/login");
   }
   const user = session.user;

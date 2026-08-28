@@ -219,6 +219,18 @@ export interface AuthzActor {
   id: string;
   isSuperAdmin: boolean;
   permissions: readonly string[];
+  /**
+   * MFA & Account Security (Session 20) — the DB-backed sessions.id this
+   * request's session corresponds to (src/lib/sessions.ts), needed by
+   * src/lib/mfa.ts's requireStepUp()/verifyStepUp() to read/write that
+   * row's step_up_verified_at. Always session.user.sessionId in a real
+   * request (already resolved server-side by auth.ts's jwt/session
+   * callbacks — see src/types/next-auth.d.ts — never client-suppliable).
+   * Optional because non-request actors (system contexts, some test
+   * fixtures) have no session row at all; requireStepUp() throws if it's
+   * missing, the same fail-closed shape as a missing permission.
+   */
+  sessionId?: string;
 }
 
 export class AuthorizationError extends Error {

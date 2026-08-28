@@ -9,6 +9,7 @@ import { recordAuditEvent } from "@/lib/audit";
 import { isLoginRateLimited } from "@/lib/rate-limit";
 import { resolveGoogleSignIn, type GoogleSignInRejectionReason } from "@/lib/oauth-identity";
 import type { RegisterableRole } from "@/lib/registration";
+import { shouldRequireLoginMfa } from "@/lib/mfa";
 
 // Mirrors registration.ts's REGISTERABLE_ROLES/"the subdomain IS the
 // platform-role choice" convention (Session 18) for the one case Google
@@ -141,10 +142,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
+        // MFA & Account Security (Session 20) — decided once, here, from
+        // src/lib/mfa.ts's shouldRequireLoginMfa() (already-enrolled TOTP,
+        // or the account's role is covered by the MFA policy). Session 02's
+        // login.succeeded below still fires immediately: the PRIMARY factor
+        // did succeed. Whether this session can do anything beyond the MFA
+        // challenge itself is enforced downstream, server-side, by
+        // resolveSessionAuthz() zeroing roles/permissions while mfaRequired
+        // is true and mfaVerifiedAt isn't set yet — never by this audit
+        // event or by which page the client happens to be redirected to.
+        const mfaRequired = await shouldRequireLoginMfa(user.id);
+
         const session = await createSession({
           userId: user.id,
           userAgent: request.headers.get("user-agent"),
           ipAddress,
+          mfaRequired,
         });
 
         await recordAuditEvent({
@@ -152,7 +165,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           action: "login.succeeded",
           entityType: "User",
           entityId: user.id,
-          metadata: { sessionId: session.id },
+          metadata: { sessionId: session.id, mfaRequired },
         });
 
         return {
@@ -245,6 +258,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       token.roles = snapshot.roles;
       token.permissions = snapshot.permissions;
       token.organizationIds = snapshot.organizationIds;
+      token.mfaPending = snapshot.mfaPending;
       return token;
     },
     session: ({ session, token }) => {
@@ -255,6 +269,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.permissions = token.permissions ?? [];
         session.user.organizationIds = token.organizationIds ?? [];
         session.user.sessionId = token.sessionId as string;
+        session.user.mfaPending = Boolean(token.mfaPending);
       }
       return session;
     },

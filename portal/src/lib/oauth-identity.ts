@@ -4,6 +4,7 @@ import { createSession } from "@/lib/sessions";
 import { recordAuditEvent } from "@/lib/audit";
 import { registerUserViaProvider, type RegisterableRole } from "@/lib/registration";
 import { OAUTH_LINK_INTENT_COOKIE, verifyLinkIntentValue } from "@/lib/oauth-link-intent";
+import { shouldRequireLoginMfa } from "@/lib/mfa";
 
 /**
  * Session 19 (Federated Auth) — the entire Google account-linking rule in
@@ -76,13 +77,14 @@ async function signInAsExisting(
     return { outcome: "rejected", reason: "account_suspended" };
   }
 
-  const session = await createSession({ userId: user.id, ipAddress });
+  const mfaRequired = await shouldRequireLoginMfa(user.id);
+  const session = await createSession({ userId: user.id, ipAddress, mfaRequired });
   await recordAuditEvent({
     actorId: user.id,
     action: "login.succeeded",
     entityType: "User",
     entityId: user.id,
-    metadata: { sessionId: session.id, provider: "google" },
+    metadata: { sessionId: session.id, provider: "google", mfaRequired },
   });
   return { outcome: "ok", userId: user.id, email: user.email, name: user.name, sessionId: session.id };
 }
@@ -198,7 +200,12 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
     })
   );
 
-  const session = await createSession({ userId: registered.userId, ipAddress: input.ipAddress });
+  // A brand-new self-registered account can never hold SUPER_ADMIN (see
+  // registration.ts's REGISTERABLE_ROLES) and has no TOTP enrolled yet, so
+  // this is always false in practice — computed the same way regardless,
+  // rather than assuming, so this stays correct if that ever changes.
+  const mfaRequired = await shouldRequireLoginMfa(registered.userId);
+  const session = await createSession({ userId: registered.userId, ipAddress: input.ipAddress, mfaRequired });
   await recordAuditEvent({
     actorId: registered.userId,
     action: "login.succeeded",

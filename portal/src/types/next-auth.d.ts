@@ -11,6 +11,8 @@ declare module "next-auth" {
       organizationIds: string[];
       /** The DB-backed sessions.id this login corresponds to — see src/lib/sessions.ts. */
       sessionId: string;
+      /** MFA & Account Security (Session 20) — true until this session's second factor is verified. See src/lib/mfa.ts. */
+      mfaPending: boolean;
     } & DefaultSession["user"];
   }
 
@@ -28,6 +30,7 @@ declare module "next-auth/jwt" {
     permissions?: string[];
     organizationIds?: string[];
     sessionId?: string;
+    mfaPending?: boolean;
   }
 }
 
@@ -42,5 +45,6 @@ declare module "@auth/core/jwt" {
     permissions?: string[];
     organizationIds?: string[];
     sessionId?: string;
+    mfaPending?: boolean;
   }
 }

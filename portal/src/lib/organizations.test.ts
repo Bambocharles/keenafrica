@@ -28,6 +28,7 @@ import {
   cleanupTestUsers,
   createTestUser,
   orgActorFromUser,
+  steppedUpActorFromUser,
 } from "@/lib/test-support";
 
 const createdUserIds: string[] = [];
@@ -228,9 +229,30 @@ describe("membership lifecycle", () => {
     await requestToJoinOrganization(org.id, await orgActorFromUser(second.id));
     const pending = (await listOrganizationMembers(org.id, founderActor)).find((m) => m.userId === second.id)!;
     await approveJoinRequest(pending.membershipId, founderActor);
-    await changeMemberRole(pending.membershipId, "org_admin", founderActor);
+    // Session 20 — granting org_admin requires a fresh step-up proof.
+    const steppedUpFounderActor = await steppedUpActorFromUser(founder.id, { org: true });
+    await changeMemberRole(pending.membershipId, "org_admin", steppedUpFounderActor);
 
     await expect(suspendMembership(pending.membershipId, founderActor)).resolves.toBeUndefined();
+  });
+
+  it("Session 20 — granting org_admin without a fresh step-up proof is rejected", async () => {
+    const founder = await user();
+    const org = await makeOrg(founder);
+    const founderActor = await orgActorFromUser(founder.id);
+    const second = await user();
+    await requestToJoinOrganization(org.id, await orgActorFromUser(second.id));
+    const pending = (await listOrganizationMembers(org.id, founderActor)).find((m) => m.userId === second.id)!;
+    await approveJoinRequest(pending.membershipId, founderActor);
+
+    // founderActor (orgActorFromUser) carries no sessionId at all — the
+    // same "not stepped up" state as a real actor whose step-up window has
+    // expired (see src/lib/mfa.test.ts for the full requireStepUp() suite).
+    await expect(changeMemberRole(pending.membershipId, "org_admin", founderActor)).rejects.toThrow(
+      "Step-up authentication required"
+    );
+    const row = (await listOrganizationMembers(org.id, founderActor)).find((m) => m.userId === second.id)!;
+    expect(row.role).toBe("org_member");
   });
 });
 

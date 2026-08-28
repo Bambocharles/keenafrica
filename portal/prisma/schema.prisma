@@ -374,6 +374,9 @@ model User {
 
   identities UserIdentity[] @relation("UserIdentities")
 
+  totpCredential TotpCredential?
+  recoveryCodes  RecoveryCode[]
+
   @@map("users")
 }
 
@@ -467,11 +470,74 @@ model Session {
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
   revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
   revokedBy String?   @map("revoked_by") @db.Uuid
+  // MFA & Account Security (Session 20). Decided once, at createSession()
+  // time, from src/lib/mfa.ts's shouldRequireLoginMfa() (the user already
+  // has TOTP enabled, OR their role/org is covered by the MFA policy hook)
+  // — never re-derived from client input. mfaVerifiedAt stays null for the
+  // life of the session until the second factor (or a recovery code) is
+  // confirmed; resolveSessionAuthz() (src/lib/sessions.ts) zeroes out
+  // roles/permissions/isSuperAdmin on every request until then, so a
+  // pending session can reach nothing but the MFA challenge itself no
+  // matter which route it's pointed at. Reuses this same Session row/
+  // revocation model — NOT a second session table.
+  mfaRequired Boolean @default(false) @map("mfa_required")
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
+  // Step-up authentication (Session 20) — a short-lived "this session just
+  // re-proved its current factor" freshness marker, set by
+  // src/lib/mfa.ts's verifyStepUp() (or automatically the moment
+  // mfaVerifiedAt above is set, since completing login MFA IS a fresh
+  // factor proof). src/lib/mfa.ts's requireStepUp() checks this is within
+  // STEP_UP_WINDOW_MS before letting a sensitive action proceed — see
+  // docs/MFA_ACCOUNT_SECURITY.md for the full list of gated actions.
+  stepUpVerifiedAt DateTime? @map("step_up_verified_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([userId])
   @@map("sessions")
+}
+
+// MFA & Account Security (Session 20). One row per user (at most one
+// authenticator secret enrolled at a time — re-enrollment, gated by
+// requireStepUp() once a credential is already enabled, replaces this row
+// rather than accumulating old ones — the documented "lost device/replace
+// authenticator" path). enabledAt is null between "secret generated,
+// awaiting confirmation" and "user entered a valid code" — an unconfirmed
+// row grants no login capability and shouldRequireLoginMfa() ignores it.
+// secretCiphertext is AES-256-GCM at rest (src/lib/mfa-crypto.ts, keyed off
+// AUTH_SECRET) — RLS's isSuperAdmin bypass is unchanged platform-wide
+// (docs/IDENTITY_SECURITY.md), so encrypting the secret itself is the real
+// backstop against a raw table read ever yielding a usable TOTP seed.
+model TotpCredential {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @unique @map("user_id") @db.Uuid
+  secretCiphertext  String    @map("secret_ciphertext")
+  enabledAt         DateTime? @map("enabled_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("totp_credentials")
+}
+
+// MFA & Account Security (Session 20). Single-use, SHA-256-hashed-at-rest
+// recovery codes — same hashed-token shape as PasswordResetToken. Generated
+// in a fresh batch of RECOVERY_CODE_COUNT (src/lib/mfa.ts) whenever TOTP is
+// confirmed or regenerated; using one (login, or step-up) sets usedAt
+// immediately in the same transaction as the check, so it can never be
+// replayed even under concurrent use.
+model RecoveryCode {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("recovery_codes")
 }
 
 // Single-use, time-limited, hashed-at-rest password reset tokens. The raw

@@ -74,8 +74,9 @@ export default async function SponsorProfilePage({
       </Card>
 
       <Banner variant="success">
-        Email changes and password resets are handled by an administrator (see the admin console's user directory) —
-        not built here to avoid a parallel identity flow (see Session 02/03).
+        Change your password, change your email, or set up two-factor authentication from{" "}
+        <a href="/security">Security</a> — those changes go through Session 20&apos;s step-up-authenticated flow, not
+        this profile form, to avoid a parallel identity flow (see Session 02/03/20).
       </Banner>
     </div>
   );

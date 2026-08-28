@@ -26,6 +26,15 @@ export default async function LoginPage({
   searchParams: Promise<{ error?: string; reset?: string }>;
 }) {
   const session = await auth();
+  // MFA & Account Security (Session 20) — an mfaPending session already
+  // authenticated its primary factor (password/Google) but hasn't cleared
+  // the MFA challenge yet; canAccessAdminConsole() below would be false for
+  // it too (roles/permissions/isSuperAdmin are all zeroed while pending —
+  // see resolveSessionAuthz()), which would otherwise just re-render this
+  // login form instead of sending them on to finish signing in.
+  if (session?.user?.mfaPending) {
+    redirect("/mfa");
+  }
   if (canAccessAdminConsole(session?.user)) {
     // Relative to this subdomain - middleware prepends "/admin" on the
     // fresh request this redirect triggers. An absolute "/admin/..." path

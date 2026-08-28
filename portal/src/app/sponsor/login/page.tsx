@@ -26,6 +26,11 @@ export default async function SponsorLoginPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const session = await auth();
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // admin login page.
+  if (session?.user?.mfaPending) {
+    redirect("/mfa");
+  }
   if (canAccessSponsorPortal(session?.user)) {
     // Relative to this subdomain - middleware prepends "/sponsor" on the
     // fresh request this redirect triggers (mirrors the teacher/admin login

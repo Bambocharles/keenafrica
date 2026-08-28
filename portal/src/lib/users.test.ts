@@ -1,9 +1,13 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { compare } from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { AuthorizationError } from "@/lib/authz";
 import { createSession, resolveSessionAuthz } from "@/lib/sessions";
+import { StepUpRequiredError } from "@/lib/mfa";
 import {
   assignRole,
+  changeOwnEmail,
+  changeOwnPassword,
   createUser,
   getOwnProfile,
   getUserById,
@@ -13,7 +17,7 @@ import {
   suspendUser,
   updateUserProfile,
 } from "@/lib/users";
-import { actorFromUser, cleanupTestUsers, createTestUser } from "@/lib/test-support";
+import { actorFromUser, cleanupTestUsers, createTestUser, steppedUpActorFromUser } from "@/lib/test-support";
 
 const createdUserIds: string[] = [];
 async function user(opts?: Parameters<typeof createTestUser>[0]) {
@@ -229,6 +233,106 @@ describe("assignRole / removeRole — authorization boundary + audit", () => {
 
     const roles = await prisma.userRole.findMany({ where: { userId: target.id } });
     expect(roles).toHaveLength(1);
+  });
+});
+
+describe("assignRole — privileged-role step-up (Session 20)", () => {
+  it("granting SUPER_ADMIN without a fresh step-up proof is rejected, and the role is NOT assigned", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id); // no sessionId — never stepped up
+    const target = await user();
+
+    await expect(assignRole(target.id, "SUPER_ADMIN", adminActor)).rejects.toThrow(StepUpRequiredError);
+
+    const roles = await prisma.userRole.findMany({ where: { userId: target.id }, include: { role: true } });
+    expect(roles.map((r) => r.role.name)).not.toContain("SUPER_ADMIN");
+  });
+
+  it("granting ADMIN without step-up is also rejected (not just SUPER_ADMIN)", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const target = await user();
+
+    await expect(assignRole(target.id, "ADMIN", adminActor)).rejects.toThrow(StepUpRequiredError);
+  });
+
+  it("granting SUPER_ADMIN WITH a fresh step-up proof succeeds", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const steppedUpAdmin = await steppedUpActorFromUser(admin.id);
+    const target = await user();
+
+    await assignRole(target.id, "SUPER_ADMIN", steppedUpAdmin);
+
+    const roles = await prisma.userRole.findMany({ where: { userId: target.id }, include: { role: true } });
+    expect(roles.map((r) => r.role.name)).toContain("SUPER_ADMIN");
+  });
+
+  it("granting a non-privileged role (TEACHER) needs no step-up", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const target = await user();
+
+    await expect(assignRole(target.id, "TEACHER", adminActor)).resolves.not.toThrow();
+  });
+});
+
+describe("changeOwnPassword / changeOwnEmail — self-service, step-up gated (Session 20)", () => {
+  it("changeOwnPassword without step-up is rejected", async () => {
+    const u = await user();
+    const actor = await actorFromUser(u.id);
+    await expect(changeOwnPassword(actor, "BrandNewPass123!")).rejects.toThrow(StepUpRequiredError);
+  });
+
+  it("changeOwnPassword with step-up updates the hash and revokes other sessions", async () => {
+    const u = await user();
+    const otherSession = await createSession({ userId: u.id });
+    const steppedUp = await steppedUpActorFromUser(u.id);
+
+    await changeOwnPassword(steppedUp, "BrandNewPass123!");
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id }, select: { passwordHash: true } });
+    expect(await compare("BrandNewPass123!", row.passwordHash!)).toBe(true);
+
+    const revoked = await prisma.session.findUniqueOrThrow({ where: { id: otherSession.id } });
+    expect(revoked.revokedAt).not.toBeNull();
+
+    const audit = await prisma.auditEvent.findFirst({ where: { action: "user.password_changed", entityId: u.id } });
+    expect(audit).not.toBeNull();
+  });
+
+  it("changeOwnPassword rejects a weak password", async () => {
+    const u = await user();
+    const steppedUp = await steppedUpActorFromUser(u.id);
+    await expect(changeOwnPassword(steppedUp, "short")).rejects.toThrow("weak_password");
+  });
+
+  it("changeOwnEmail without step-up is rejected", async () => {
+    const u = await user();
+    const actor = await actorFromUser(u.id);
+    await expect(changeOwnEmail(actor, `new-${Date.now()}@example.com`)).rejects.toThrow(StepUpRequiredError);
+  });
+
+  it("changeOwnEmail with step-up updates the email and is audited", async () => {
+    const u = await user();
+    const steppedUp = await steppedUpActorFromUser(u.id);
+    const newEmail = `changed-${Date.now()}@example.com`;
+
+    await changeOwnEmail(steppedUp, newEmail);
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id }, select: { email: true } });
+    expect(row.email.toLowerCase()).toBe(newEmail.toLowerCase());
+
+    const audit = await prisma.auditEvent.findFirst({ where: { action: "user.email_changed", entityId: u.id } });
+    expect(audit).not.toBeNull();
+  });
+
+  it("changeOwnEmail rejects an email already in use by another account", async () => {
+    const taken = await user();
+    const u = await user();
+    const steppedUp = await steppedUpActorFromUser(u.id);
+
+    const takenRow = await prisma.user.findUniqueOrThrow({ where: { id: taken.id }, select: { email: true } });
+    await expect(changeOwnEmail(steppedUp, takenRow.email)).rejects.toThrow("email_taken");
   });
 });
 
