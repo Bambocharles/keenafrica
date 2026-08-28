@@ -1,0 +1,61 @@
+{
+  "edition_date": "2026-08-28",
+  "edition_title": "Keen Africa Opportunity Digest: September 2026 Edition",
+  "edition_intro": "You are not waiting for permission to build; you are looking for the door that's already open. Below are seven verified, currently open opportunities across scholarships, grants, conferences, competitions, and free certifications, all fair game for ambitious young Nigerians right now. Read the deadlines closely, some close within days, and move.",
+  "posts": [
+    {
+      "slug": "2026-08-28-mastercard-foundation-scholars-program-at-university-of-cape",
+      "category": "scholarships",
+      "title": "Mastercard Foundation Scholars Program at University of Cape Town (2027 Intake)",
+      "summary": "Fully funded undergraduate study at one of Africa's top universities, covering tuition, accommodation, flights, and a living stipend for African students facing financial barriers.",
+      "deadline": "30 September 2026",
+      "eligibility": "African citizens (Nigerians included) with an admission offer to UCT, strong academics, and demonstrated financial need or leadership potential",
+      "apply_url": "https://www.uct.ac.za/mastercardfdn/apply-mastercard-foundation-scholars-program"
+    },
+    {
+      "slug": "2026-08-28-google-africa-applied-ai-lab-2026",
+      "category": "grants",
+      "title": "Google Africa Applied AI Lab 2026",
+      "summary": "Direct access to early Google DeepMind models, technical mentorship, and potential funding for African AI founders and researchers building Africa-focused solutions.",
+      "deadline": "31 August 2026",
+      "eligibility": "African AI founders (pre-seed to Series C+) and researchers building AI products for African challenges",
+      "apply_url": "https://labs.google/aifuturesfund/africaailab"
+    },
+    {
+      "slug": "2026-08-28-au-eu-youth-action-lab-grants-2026",
+      "category": "grants",
+      "title": "AU-EU Youth Action Lab Grants 2026",
+      "summary": "Non-dilutive grants of 30,000 to 50,000 euros for youth-led organizations in Nigeria and eleven other African countries running mission-driven projects.",
+      "deadline": "23 September 2026",
+      "eligibility": "Youth-led organizations (led by people aged 18 to 35) registered in Nigeria or one of 11 other focus countries",
+      "apply_url": "https://aueuyouth.com/grants/"
+    },
+    {
+      "slug": "2026-08-28-aws-community-day-west-africa-2026",
+      "category": "conferences",
+      "title": "AWS Community Day West Africa 2026",
+      "summary": "Two days of free, high-level cloud and security sessions in Lagos and online, built for the region's developer and cloud community.",
+      "deadline": "16 October 2026",
+      "eligibility": "Open to developers, cloud practitioners, and students across West Africa; free registration required",
+      "apply_url": "https://awsusergroupwestafrica.com/"
+    },
+    {
+      "slug": "2026-08-28-protego-blue-innovation-hackathon-nigeria",
+      "category": "competitions",
+      "title": "PROTEGO Blue Innovation Hackathon Nigeria",
+      "summary": "A coastal innovation challenge offering USD 500 to 1,500 in pilot grants and a fully funded trip to a Nigerian coastal hotspot for the top five teams.",
+      "deadline": "30 August 2026",
+      "eligibility": "Nigerian innovators with ideas addressing coastal or ocean-linked challenges; no prior hackathon experience required",
+      "apply_url": "https://projectprotego.org/protego-blue-innovation-hackathon-nigeria"
+    },
+    {
+      "slug": "2026-08-28-aws-re-start-nigeria",
+      "category": "certifications",
+      "title": "AWS re/Start Nigeria",
+      "summary": "A free, full-time 12-week cloud computing bootcamp in Lagos that prepares participants for the AWS Certified Cloud Practitioner exam at no cost.",
+      "deadline": "Rolling",
+      "eligibility": "Unemployed or underemployed young Nigerians; no prior tech background required, full-time availability needed",
+      "apply_url": "https://lonadek.com/restart-your-career-with-aws/"
+    }
+  ]
+}
