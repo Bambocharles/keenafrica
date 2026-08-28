@@ -8,6 +8,7 @@ import {
   revokeAllUserSessions,
   revokeAllUserSessionsAsSystem,
   revokeSession,
+  revokeSessionAsSystem,
 } from "@/lib/sessions";
 import { actorFromUser, cleanupTestUsers, createTestUser } from "@/lib/test-support";
 
@@ -190,5 +191,40 @@ describe("revokeAllUserSessions / revokeAllUserSessionsAsSystem", () => {
 
     const count = await revokeAllUserSessionsAsSystem(u.id, u.id);
     expect(count).toBe(1);
+  });
+});
+
+describe("revokeSessionAsSystem — QA (Session 23) fix for signOut()", () => {
+  it("revokes exactly the one session it's given, leaving the user's other sessions untouched", async () => {
+    const u = await user();
+    const target = await createSession({ userId: u.id });
+    const other = await createSession({ userId: u.id });
+
+    await revokeSessionAsSystem(target.id, u.id);
+
+    const targetRow = await prisma.session.findUniqueOrThrow({ where: { id: target.id } });
+    const otherRow = await prisma.session.findUniqueOrThrow({ where: { id: other.id } });
+    expect(targetRow.revokedAt).not.toBeNull();
+    expect(otherRow.revokedAt).toBeNull();
+
+    // The exact scenario this was written for: a session cookie captured
+    // before sign-out must be rejected by resolveSessionAuthz() (the
+    // per-request check every subsequent call to auth() runs) immediately
+    // afterward — live-verified in Session 23's E2E pass by replaying a
+    // real pre-signout cookie, which still worked until this fix existed.
+    expect(await resolveSessionAuthz(target.id, u.id)).toBeNull();
+  });
+
+  it("is idempotent and a no-op for a session belonging to a different user", async () => {
+    const u = await user();
+    const stranger = await user();
+    const session = await createSession({ userId: u.id });
+
+    await revokeSessionAsSystem(session.id, stranger.id);
+    const row = await prisma.session.findUniqueOrThrow({ where: { id: session.id } });
+    expect(row.revokedAt).toBeNull(); // untouched — wrong userId matched nothing
+
+    await revokeSessionAsSystem(session.id, u.id);
+    await expect(revokeSessionAsSystem(session.id, u.id)).resolves.not.toThrow();
   });
 });

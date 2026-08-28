@@ -260,7 +260,7 @@ export async function SecurityPanel({
                   <td className={ui.mono}>{formatDateTime(s.expiresAt)}</td>
                   <td className={ui.mono}>{s.ipAddress ?? "—"}</td>
                   <td>
-                    {s.revokedAt ? <StatusBadge status="suspended" /> : <StatusBadge status="active" />}
+                    {s.revokedAt ? <StatusBadge status="revoked" /> : <StatusBadge status="active" />}
                     {s.id === actor.sessionId && !s.revokedAt ? " (this device)" : ""}
                   </td>
                   <td>

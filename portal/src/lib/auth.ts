@@ -4,7 +4,7 @@ import Google from "next-auth/providers/google";
 import { headers } from "next/headers";
 import { compare } from "bcryptjs";
 import { withRls } from "@/lib/rls";
-import { createSession, resolveSessionAuthz } from "@/lib/sessions";
+import { createSession, resolveSessionAuthz, revokeSessionAsSystem } from "@/lib/sessions";
 import { recordAuditEvent } from "@/lib/audit";
 import { isLoginRateLimited } from "@/lib/rate-limit";
 import { resolveGoogleSignIn, type GoogleSignInRejectionReason } from "@/lib/oauth-identity";
@@ -272,6 +272,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.mfaPending = Boolean(token.mfaPending);
       }
       return session;
+    },
+  },
+  events: {
+    // QA (Session 23) — without this, signOut() only cleared the
+    // client-side cookie; the DB Session row stayed unrevoked until its
+    // natural 30-day expiry, so a copied/stolen session cookie kept working
+    // after the legitimate user "logged out" (live-verified: captured a
+    // cookie, signed out, replayed the old cookie value — it still granted
+    // full access). Revokes only THIS session, never every session for the
+    // user — see revokeSessionAsSystem()'s own docstring.
+    signOut: async (message) => {
+      const token = "token" in message ? message.token : null;
+      const sessionId = token?.sessionId as string | undefined;
+      const userId = token?.sub as string | undefined;
+      if (sessionId && userId) {
+        await revokeSessionAsSystem(sessionId, userId);
+      }
     },
   },
 });
