@@ -55,7 +55,7 @@ describe("resetPassword", () => {
     expect(outcome).toBe("ok");
 
     const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
-    expect(await compare("BrandNewPassword123!", row.passwordHash)).toBe(true);
+    expect(await compare("BrandNewPassword123!", row.passwordHash!)).toBe(true);
 
     const sessionRow = await prisma.session.findUniqueOrThrow({ where: { id: session.id } });
     expect(sessionRow.revokedAt).not.toBeNull();
@@ -74,7 +74,7 @@ describe("resetPassword", () => {
     expect(await resetPassword(token!, "SecondReset123!")).toBe("invalid_or_expired");
 
     const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
-    expect(await compare("FirstReset123!", row.passwordHash)).toBe(true);
+    expect(await compare("FirstReset123!", row.passwordHash!)).toBe(true);
   });
 
   it("an expired token is rejected even though it was never used", async () => {

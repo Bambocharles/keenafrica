@@ -5,6 +5,12 @@ Canonical identity/authz foundation for every portal. Extends the existing
 
 ## Identity model
 
+- **Federated identity (Session 19)** — Google OAuth is additive to the
+  Credentials provider below, not a replacement. `UserIdentity` links a
+  `User` to a provider's stable account id (never email alone); `User.
+  passwordHash` is nullable (a Google-only account has none). See
+  `docs/FEDERATED_AUTH.md` for the full contract, the account-linking rule,
+  and `src/lib/oauth-identity.ts`.
 - `User.isSuperAdmin` (unchanged) remains the root bypass, baked into every
   table's RLS policies. It is not replaced by the role/permission system
   below — it's the escape hatch beneath it.
@@ -155,6 +161,15 @@ variant for callers (like `suspendUser()`) that have already authorized
 their own broader action — see its docstring before reusing it anywhere
 else.
 
+**Provider-agnostic by construction (Session 19)** — `Session` carries no
+`provider` column. A Google-originated session is created via the exact
+same `createSession()` and re-validated via the exact same
+`resolveSessionAuthz()` as a password-originated one; `revokeSession()`/
+`revokeAllUserSessions()` work identically regardless of how the session
+began. Provenance (which provider authenticated a login) lives only in the
+audit event's `metadata`, never in the session model itself — see
+`docs/FEDERATED_AUTH.md`.
+
 ## Password reset
 
 `src/lib/password-reset.ts`: `requestPasswordReset(email)` /
@@ -174,7 +189,10 @@ altered or removed by any role through the application. Current emitters:
 `login.succeeded`, `login.denied_suspended`, `session.revoked`,
 `session.revoked_all`, `user.created`, `user.profile_updated`,
 `user.suspended`, `user.reinstated`, `role.assigned`, `role.removed`,
-`password_reset.requested`, `password_reset.completed`.
+`password_reset.requested`, `password_reset.completed`. Session 19
+(Federated Auth) adds `oauth_identity.linked` and reuses
+`login.succeeded`/`login.failed` for Google sign-ins (with
+`metadata: { provider: "google", ... }`) — see `docs/FEDERATED_AUTH.md`.
 
 ## Domain events
 
@@ -203,11 +221,11 @@ admin's live password.
 
 ## Known limitations
 
-- **No transactional email provider exists in this infra** — see
-  `src/lib/mailer.ts`. `requestPasswordReset()` returns the raw token but
-  delivering it is a dev-console-log stub. Wiring a real provider (choice
-  of provider, API key, sender domain/DKIM) is an infra decision outside
-  this session's authority — see Blockers in the Session 02 handoff.
+- **Transactional email is wired as of Session 19** (Resend, via
+  `src/lib/mailer.ts`'s `sendMail()` — see `docs/FEDERATED_AUTH.md`).
+  `requestPasswordReset()`'s delivery now goes through a real provider in
+  production; the dev-console-log stub remains for local development and
+  any environment without `RESEND_API_KEY`/`MAIL_FROM_ADDRESS` configured.
 - **No password-reset or "manage my sessions" UI pages.** The backend
   contract (`src/lib/password-reset.ts`, `src/lib/sessions.ts`'s
   `listSessions`/`revokeSession`) is complete and tested; wiring it into a

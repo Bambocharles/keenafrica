@@ -33,7 +33,7 @@ describe("registerUser", () => {
     expect(row.status).toBe("active");
     expect(row.isSuperAdmin).toBe(false);
     expect(row.passwordHash).not.toBe("correct-horse-1");
-    expect(await compare("correct-horse-1", row.passwordHash)).toBe(true);
+    expect(await compare("correct-horse-1", row.passwordHash!)).toBe(true);
 
     const roles = await prisma.userRole.findMany({ where: { userId: outcome.userId }, include: { role: true } });
     expect(roles.map((r) => r.role.name)).toEqual(["TEACHER"]);

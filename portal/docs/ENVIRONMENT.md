@@ -46,6 +46,8 @@ repo/environment secrets. Never commit real values.
 | `STORAGE_DRIVER` | no (default `local`) | Selects the Asset/File service's storage backend (`src/lib/storage.ts`). Only `local` (disk) is implemented today — see `docs/ASSETS.md`'s Known limitations for why this isn't production-ready as-is. |
 | `ASSET_STORAGE_LOCAL_ROOT` | no (default `<repo>/var/asset-storage`) | Where the local-disk storage driver writes uploaded file bytes. Outside `public/`; never served directly, only through the authorized `assets/[id]/download` routes. |
 | `ASSET_MAX_SIZE_BYTES` | no (default 26214400 / 25 MiB) | Upload size cap enforced by `src/lib/assets.ts`'s `uploadAsset()`. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | yes, for Google sign-in | OAuth client credentials for the Google provider (`src/lib/auth.ts`) — see `docs/FEDERATED_AUTH.md`. Register `https://<subdomain>.<root-domain>/auth/callback/google` as an authorized redirect URI per environment in Google Cloud Console. Without these set, Google sign-in fails at the provider level; password login is unaffected. |
+| `RESEND_API_KEY` / `MAIL_FROM_ADDRESS` | yes, in production | Transactional email (`src/lib/mailer.ts`'s `sendMail()`) — see `docs/FEDERATED_AUTH.md`. Unset (or outside production) keeps the dev-console-log stub; production throws immediately if either is missing. |
 
 ## Secrets handling
 

@@ -4,6 +4,18 @@ import { auth, signIn } from "@/lib/auth";
 import { canAccessStudentPortal } from "@/lib/authz";
 import styles from "./login.module.css";
 
+// Session 19 (Federated Auth) — matches the codes src/lib/auth.ts's signIn
+// callback redirects to on a rejected Google sign-in
+// (GOOGLE_REJECTION_ERROR_CODES).
+const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
+  google_no_email: "Your Google account has no email address to sign in with.",
+  google_email_exists:
+    "An account with this email already exists. Sign in with your password, then connect Google from your profile.",
+  google_no_account: "Could not sign you in with Google right now — try again shortly.",
+  google_conflicting_link: "This Google account is already connected to a different account.",
+  google_account_suspended: "This account has been suspended.",
+};
+
 export default async function StudentLoginPage({
   searchParams,
 }: {
@@ -39,6 +51,11 @@ export default async function StudentLoginPage({
     }
   }
 
+  async function googleLogin() {
+    "use server";
+    await signIn("google", { redirectTo: "/dashboard" });
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.card}>
@@ -46,7 +63,12 @@ export default async function StudentLoginPage({
         <h1 className={styles.title}>Keen Africa Student</h1>
         <p className={styles.subtitle}>Sign in to continue learning</p>
 
-        {error && (
+        {error && error !== "1" && GOOGLE_ERROR_MESSAGES[error] && (
+          <div className={styles.error} role="alert">
+            {GOOGLE_ERROR_MESSAGES[error]}
+          </div>
+        )}
+        {error === "1" && (
           <div className={styles.error} role="alert">
             Invalid email or password. Check both and try again.
           </div>
@@ -79,6 +101,14 @@ export default async function StudentLoginPage({
           </div>
           <button type="submit" className={styles.submit}>
             Log in
+          </button>
+        </form>
+
+        <div className={styles.divider}>or</div>
+
+        <form action={googleLogin}>
+          <button type="submit" className={styles.oauth}>
+            Continue with Google
           </button>
         </form>
 

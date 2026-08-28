@@ -1,18 +1,21 @@
 /**
- * Transactional email is NOT built by this session — there is no SMTP/
- * provider credential anywhere in this infra yet (see docs/ENVIRONMENT.md's
- * env var table: no MAIL_* / SMTP_* / provider API key exists). Sending a
- * password reset link requires one.
+ * Transactional email (Session 19 — Federated Auth & Email). Chosen
+ * provider: Resend (https://resend.com), driven with a plain fetch() call
+ * against its REST API — no SDK dependency needed for a single "send one
+ * email" call, so nothing was added to package.json for this. Configured
+ * via RESEND_API_KEY/MAIL_FROM_ADDRESS (see docs/ENVIRONMENT.md); both are
+ * ordinary env vars, not secrets baked into this file — actual values live
+ * in the same k8s Secret (`portal-secrets`) every other credential does.
  *
- * This is a dev-only stub so the reset flow is runnable/testable end to
- * end today. Wiring a real provider (choice of provider, API key, sender
- * domain/DKIM setup) is an infra decision outside Identity & Security's
- * authority to make unilaterally — see status/project-status.md's Session
- * 02 handoff, "Blockers".
+ * Every existing caller (password reset, Session 18's org invitations, this
+ * session's own account-linking notices) already goes through sendMail()
+ * with zero call-site changes — this file is the only thing that changed.
  *
- * Contract for whoever picks this up: implement sendMail() against a real
- * provider behind this same signature; every caller (password-reset today,
- * future invite/notification flows) already goes through it.
+ * Local dev (and any environment without RESEND_API_KEY/MAIL_FROM_ADDRESS
+ * configured) keeps the original console-log stub so `npm run dev` never
+ * needs a real provider account; production requires both env vars and
+ * throws immediately if either is missing, exactly like the previous
+ * always-throws-in-production stub did.
  */
 export interface MailMessage {
   to: string;
@@ -20,13 +23,42 @@ export interface MailMessage {
   text: string;
 }
 
+const RESEND_API_URL = "https://api.resend.com/emails";
+
 export async function sendMail(message: MailMessage): Promise<void> {
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "No transactional email provider is configured — sendMail() is a dev-only stub. " +
-        "See src/lib/mailer.ts."
-    );
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.MAIL_FROM_ADDRESS;
+
+  if (!apiKey || !from) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "No transactional email provider is configured — set RESEND_API_KEY and " +
+          "MAIL_FROM_ADDRESS. See src/lib/mailer.ts."
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[mailer:dev-stub] to=${message.to} subject=${JSON.stringify(message.subject)}\n${message.text}`);
+    return;
   }
-  // eslint-disable-next-line no-console
-  console.log(`[mailer:dev-stub] to=${message.to} subject=${JSON.stringify(message.subject)}\n${message.text}`);
+
+  const response = await fetch(RESEND_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: message.to,
+      subject: message.subject,
+      text: message.text,
+    }),
+  });
+
+  if (!response.ok) {
+    // Never include the API key in the thrown error — only the provider's
+    // own response body, which does not echo request headers back.
+    const body = await response.text().catch(() => "");
+    throw new Error(`sendMail: Resend API request failed (${response.status}): ${body}`);
+  }
 }
