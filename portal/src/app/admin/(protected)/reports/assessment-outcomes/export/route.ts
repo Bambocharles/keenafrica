@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { hasPermission, PERMISSIONS } from "@/lib/authz";
 import { getAdminAssessmentOutcomesReport, toCsv, type AssessmentOutcomeRow } from "@/lib/reporting";
+import { StepUpRequiredError, requireStepUp } from "@/lib/mfa";
 
 /** Route Handlers aren't wrapped by their segment's layout guard — re-check auth here (same convention as Session 13's asset downloads). */
 export async function GET(req: Request) {
@@ -10,6 +11,21 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
+
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // completion report's export route.
+  try {
+    await requireStepUp(session.user);
+  } catch (err) {
+    if (err instanceof StepUpRequiredError) {
+      return Response.redirect(
+        new URL(`/step-up?returnTo=${encodeURIComponent(`/reports/assessment-outcomes/export${url.search}`)}`, url),
+        302
+      );
+    }
+    throw err;
+  }
+
   const courseId = url.searchParams.get("courseId")?.trim() || undefined;
   const from = url.searchParams.get("from") ? new Date(url.searchParams.get("from")!) : undefined;
   const to = url.searchParams.get("to") ? new Date(url.searchParams.get("to")!) : undefined;

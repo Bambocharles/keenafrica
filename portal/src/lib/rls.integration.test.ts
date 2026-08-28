@@ -35,6 +35,8 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       selfRegistration?: boolean;
       /** Session 19 (Federated Auth) — see src/lib/rls.ts's RlsContext.oauthLookup. */
       oauthLookup?: boolean;
+      /** Session 20 (MFA & Account Security) — see src/lib/rls.ts's RlsContext.mfaLoginLookup. */
+      mfaLoginLookup?: boolean;
     },
     fn: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<T>
   ): Promise<T> {
@@ -48,6 +50,7 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
       await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
       await tx.$executeRaw`SELECT set_config('app.oauth_lookup', ${String(!!ctx.oauthLookup)}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.mfa_login_lookup', ${String(!!ctx.mfaLoginLookup)}, true)`;
       return fn(tx);
     });
   }
@@ -530,6 +533,160 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
 
       const cleanup = new PrismaClient();
       await cleanup.userIdentity.delete({ where: { id: created.id } });
+      await cleanup.user.deleteMany({ where: { id: { in: [self.id, other.id] } } });
+      await cleanup.$disconnect();
+    });
+  });
+
+  describe("MFA & Account Security (Session 20)", () => {
+    it("totp_credentials/recovery_codes: a plain context (no app.user_id) can neither read nor write either table", async () => {
+      const setup = new PrismaClient();
+      const target = await setup.user.create({
+        data: { email: `rls-mfa-plain-${randomUUID()}@example.com`, name: "Plain", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      await expect(
+        asContext({}, (tx) => tx.totpCredential.create({ data: { userId: target.id, secretCiphertext: "x" } }))
+      ).rejects.toThrow();
+      await expect(
+        asContext({}, (tx) => tx.recoveryCode.create({ data: { userId: target.id, codeHash: "x" } }))
+      ).rejects.toThrow();
+
+      expect(await asContext({}, (tx) => tx.totpCredential.findMany({ where: { userId: target.id } }))).toHaveLength(0);
+      expect(await asContext({}, (tx) => tx.recoveryCode.findMany({ where: { userId: target.id } }))).toHaveLength(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.user.delete({ where: { id: target.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("totp_credentials/recovery_codes: a real app.user_id may read/write their OWN rows, never someone else's", async () => {
+      const setup = new PrismaClient();
+      const self = await setup.user.create({
+        data: { email: `rls-mfa-self-${randomUUID()}@example.com`, name: "Self", passwordHash: "x" },
+      });
+      const other = await setup.user.create({
+        data: { email: `rls-mfa-other-${randomUUID()}@example.com`, name: "Other", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      // Cannot create a credential/recovery code FOR someone else.
+      await expect(
+        asContext({ userId: self.id }, (tx) => tx.totpCredential.create({ data: { userId: other.id, secretCiphertext: "x" } }))
+      ).rejects.toThrow();
+      await expect(
+        asContext({ userId: self.id }, (tx) => tx.recoveryCode.create({ data: { userId: other.id, codeHash: "x" } }))
+      ).rejects.toThrow();
+
+      // Can create/read/update/delete their own.
+      const credential = await asContext({ userId: self.id }, (tx) =>
+        tx.totpCredential.create({ data: { userId: self.id, secretCiphertext: "x" }, select: { id: true, userId: true } })
+      );
+      expect(credential.userId).toBe(self.id);
+
+      const readBySelf = await asContext({ userId: self.id }, (tx) => tx.totpCredential.findMany({ where: { userId: self.id } }));
+      expect(readBySelf).toHaveLength(1);
+
+      // Someone else's own context (userId: other.id) sees nothing of self's row.
+      const readByOther = await asContext({ userId: other.id }, (tx) => tx.totpCredential.findMany({ where: { userId: self.id } }));
+      expect(readByOther).toHaveLength(0);
+
+      await asContext({ userId: self.id }, (tx) =>
+        tx.totpCredential.update({ where: { userId: self.id }, data: { enabledAt: new Date() } })
+      );
+
+      const code = await asContext({ userId: self.id }, (tx) =>
+        tx.recoveryCode.create({ data: { userId: self.id, codeHash: "abc" }, select: { id: true } })
+      );
+      await asContext({ userId: self.id }, (tx) => tx.recoveryCode.update({ where: { id: code.id }, data: { usedAt: new Date() } }));
+
+      await asContext({ userId: self.id }, (tx) => tx.recoveryCode.delete({ where: { id: code.id } }));
+      await asContext({ userId: self.id }, (tx) => tx.totpCredential.delete({ where: { userId: self.id } }));
+
+      const cleanup = new PrismaClient();
+      await cleanup.user.deleteMany({ where: { id: { in: [self.id, other.id] } } });
+      await cleanup.$disconnect();
+    });
+
+    it("app.mfa_login_lookup authorizes exactly the narrow pre-full-session read/write completeLoginMfa() needs", async () => {
+      const setup = new PrismaClient();
+      const target = await setup.user.create({
+        data: { email: `rls-mfa-loginlookup-${randomUUID()}@example.com`, name: "Pending Login", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      // Without the flag, a bare userId context (mid-pending-login, same
+      // shape resolveSessionAuthz()'s zeroed snapshot leaves app.user_id in)
+      // can still read/write its OWN totp_credentials/recovery_codes rows —
+      // that's the ordinary self-ownership branch, not what this flag is
+      // for. The flag's actual job (see the migration's policy comment) is
+      // narrowing WHICH pre-auth queries are allowed at all; verify it does
+      // grant the same access a real self-context would, so completeLoginMfa()
+      // isn't accidentally broken by relying on it.
+      const credential = await asContext({ userId: target.id, mfaLoginLookup: true }, (tx) =>
+        tx.totpCredential.create({
+          data: { userId: target.id, secretCiphertext: "x", enabledAt: new Date() },
+          select: { id: true, userId: true },
+        })
+      );
+      expect(credential.userId).toBe(target.id);
+
+      const found = await asContext({ userId: target.id, mfaLoginLookup: true }, (tx) =>
+        tx.totpCredential.findUnique({ where: { userId: target.id } })
+      );
+      expect(found?.userId).toBe(target.id);
+
+      const code = await asContext({ userId: target.id, mfaLoginLookup: true }, (tx) =>
+        tx.recoveryCode.create({ data: { userId: target.id, codeHash: "xyz" }, select: { id: true } })
+      );
+      await asContext({ userId: target.id, mfaLoginLookup: true }, (tx) =>
+        tx.recoveryCode.update({ where: { id: code.id }, data: { usedAt: new Date() } })
+      );
+      const consumed = await asContext({ userId: target.id, mfaLoginLookup: true }, (tx) =>
+        tx.recoveryCode.findUnique({ where: { id: code.id } })
+      );
+      expect(consumed?.usedAt).not.toBeNull();
+
+      const cleanup = new PrismaClient();
+      await cleanup.recoveryCode.delete({ where: { id: code.id } });
+      await cleanup.totpCredential.delete({ where: { userId: target.id } });
+      await cleanup.user.delete({ where: { id: target.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("sessions_update: self may write the new mfa_required/mfa_verified_at/step_up_verified_at columns on their OWN session, never someone else's", async () => {
+      const setup = new PrismaClient();
+      const self = await setup.user.create({
+        data: { email: `rls-mfa-session-self-${randomUUID()}@example.com`, name: "Self", passwordHash: "x" },
+      });
+      const other = await setup.user.create({
+        data: { email: `rls-mfa-session-other-${randomUUID()}@example.com`, name: "Other", passwordHash: "x" },
+      });
+      const selfSession = await setup.session.create({
+        data: { userId: self.id, expiresAt: new Date(Date.now() + 3600_000), mfaRequired: true },
+        select: { id: true },
+      });
+      await setup.$disconnect();
+
+      await asContext({ userId: self.id }, (tx) =>
+        tx.session.update({ where: { id: selfSession.id }, data: { stepUpVerifiedAt: new Date(), mfaVerifiedAt: new Date() } })
+      );
+      const row = await asContext({ userId: self.id }, (tx) => tx.session.findUnique({ where: { id: selfSession.id } }));
+      expect(row?.stepUpVerifiedAt).not.toBeNull();
+      expect(row?.mfaVerifiedAt).not.toBeNull();
+
+      // Someone else's context cannot touch self's session row at all —
+      // updateMany matches zero rows rather than throwing (no WHERE-clause
+      // row is visible to them), which is exactly what
+      // sessions.ts's markSessionSteppedUp()/isStepUpFresh() rely on.
+      const otherAttempt = await asContext({ userId: other.id }, (tx) =>
+        tx.session.updateMany({ where: { id: selfSession.id }, data: { stepUpVerifiedAt: new Date() } })
+      );
+      expect(otherAttempt.count).toBe(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.session.delete({ where: { id: selfSession.id } });
       await cleanup.user.deleteMany({ where: { id: { in: [self.id, other.id] } } });
       await cleanup.$disconnect();
     });

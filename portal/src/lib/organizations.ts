@@ -8,6 +8,7 @@ import {
 } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
 import { emitDomainEvent } from "@/lib/events";
+import { requireStepUp } from "@/lib/mfa";
 
 /**
  * Organization Core (Session 17) — a general-purpose membership/tenant
@@ -475,7 +476,21 @@ export async function removeMembership(membershipId: string, actor: OrgActor) {
   emitDomainEvent("OrganizationMembershipChanged", { organizationId: membership.organizationId, membershipId, userId: membership.userId, actorId: actor.id });
 }
 
-/** org_admin/manage changes a member's org-scoped role. Refuses to demote the org's last active org_admin. */
+/**
+ * org_admin/manage changes a member's org-scoped role. Refuses to demote
+ * the org's last active org_admin.
+ *
+ * MFA & Account Security (Session 20) — granting org_admin is this
+ * platform's closest equivalent to "change organization owner"
+ * (sessions/20-mfa-account-security.md's sensitive-action list; this repo
+ * has no separate single-owner field on Organization — see
+ * schema.prisma's Organization model — org_admin membership IS the
+ * organization-scoped ownership role, per ORGANIZATION_CORE.md), so
+ * elevating someone TO org_admin requires a fresh step-up proof from the
+ * actor granting it. Demoting away from org_admin is not gated the same
+ * way — reducing another admin's access is not the privilege-escalation
+ * direction this control exists for.
+ */
 export async function changeMemberRole(membershipId: string, newRole: OrgRole, actor: OrgActor) {
   const membership = await requireMembershipInOrg(membershipId, actor);
   await requireOrgPermission(membership.organizationId, actor, "org_admin");
@@ -483,6 +498,9 @@ export async function changeMemberRole(membershipId: string, newRole: OrgRole, a
   if (membership.role === newRole) return;
   if (membership.role === "org_admin" && newRole === "org_member" && (await countActiveOrgAdmins(membership.organizationId)) <= 1) {
     throw new Error("Cannot demote the organization's last active admin");
+  }
+  if (newRole === "org_admin") {
+    await requireStepUp(actor);
   }
 
   await withRls(actorRlsCtx(actor), (tx) => tx.organizationMembership.update({ where: { id: membershipId }, data: { role: newRole } }));

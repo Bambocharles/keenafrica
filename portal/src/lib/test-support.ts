@@ -3,6 +3,7 @@ import { hash } from "bcryptjs";
 import { prisma } from "@/lib/db";
 import type { AuthzActor, RoleName } from "@/lib/authz";
 import { getStorageDriver } from "@/lib/storage";
+import { createSession, markSessionSteppedUp } from "@/lib/sessions";
 
 /**
  * Shared fixtures for the integration test suites (sessions/users/password-
@@ -153,6 +154,8 @@ export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   await prisma.bookmark.deleteMany({ where: { studentUserId: { in: userIds } } });
   await prisma.session.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.passwordResetToken.deleteMany({ where: { userId: { in: userIds } } });
+  await prisma.recoveryCode.deleteMany({ where: { userId: { in: userIds } } });
+  await prisma.totpCredential.deleteMany({ where: { userId: { in: userIds } } });
   await prisma.auditEvent.deleteMany({
     where: { OR: [{ actorId: { in: userIds } }, { entityId: { in: userIds } }] },
   });
@@ -289,4 +292,25 @@ export async function orgActorFromUser(userId: string) {
   const actor = await actorFromUser(userId);
   const memberships = await prisma.organizationMembership.findMany({ where: { userId, status: "active" }, select: { organizationId: true } });
   return { ...actor, organizationIds: memberships.map((m) => m.organizationId) };
+}
+
+/**
+ * MFA & Account Security (Session 20) — an actor with a REAL, already
+ * stepped-up Session row, for tests exercising a function gated by
+ * src/lib/mfa.ts's requireStepUp() (assignRole() for SUPER_ADMIN/ADMIN,
+ * changeMemberRole() granting org_admin, changeOwnPassword/
+ * changeOwnEmail, disableMfa, regenerateRecoveryCodes, ...). Plain
+ * actorFromUser()/orgActorFromUser() carry no sessionId at all, which
+ * requireStepUp() correctly treats as "not stepped up" — this is the
+ * fixture for the positive case; call requireStepUp() against a
+ * sessionId-less actor directly to test the negative case.
+ */
+export async function steppedUpActorFromUser(
+  userId: string,
+  opts: { org?: boolean } = {}
+): Promise<AuthzActor & { organizationIds?: string[] }> {
+  const actor = opts.org ? await orgActorFromUser(userId) : await actorFromUser(userId);
+  const session = await createSession({ userId });
+  await markSessionSteppedUp(session.id, userId);
+  return { ...actor, sessionId: session.id };
 }

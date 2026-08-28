@@ -22,7 +22,15 @@ export default async function ProtectedStudentLayout({ children }: { children: R
   // inside still enforces its own ownership scoping via
   // assertActiveEnrollment/self-scoped queries, so reaching this layout
   // alone grants no data access.
-  if (!session?.user || !canAccessStudentPortal(session.user)) {
+  if (!session?.user) {
+    redirect("/login");
+  }
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // admin console layout.
+  if (session.user.mfaPending) {
+    redirect("/mfa");
+  }
+  if (!canAccessStudentPortal(session.user)) {
     redirect("/login");
   }
   const user = session.user;

@@ -12,6 +12,16 @@ export interface CreateSessionInput {
   userAgent?: string | null;
   ipAddress?: string | null;
   ttlMs?: number;
+  /**
+   * MFA & Account Security (Session 20) — decided by the caller (auth.ts's
+   * authorize()/signIn callback) via src/lib/mfa.ts's
+   * shouldRequireLoginMfa() BEFORE this call, never re-derived here. When
+   * true, resolveSessionAuthz() zeroes out roles/permissions/isSuperAdmin
+   * for this session until mfa_verified_at is set (src/lib/mfa.ts's
+   * completeLoginMfa()). Defaults false — every pre-Session-20 call site
+   * (tests included) is unaffected.
+   */
+  mfaRequired?: boolean;
 }
 
 /**
@@ -29,6 +39,7 @@ export async function createSession(input: CreateSessionInput): Promise<{ id: st
         userAgent: input.userAgent ?? null,
         ipAddress: input.ipAddress ?? null,
         expiresAt,
+        mfaRequired: input.mfaRequired ?? false,
       },
       select: { id: true, expiresAt: true },
     })
@@ -43,6 +54,18 @@ export interface AuthzSnapshot {
   permissions: string[];
   /** Organization Core (Session 17) — organization ids the user holds an ACTIVE membership in. */
   organizationIds: string[];
+  /**
+   * MFA & Account Security (Session 20) — true when this session still
+   * requires a second factor before it's fully authorized. While true,
+   * isSuperAdmin/roles/permissions/organizationIds above are all zeroed
+   * out (not merely hidden by the UI) — see this function's body. A
+   * pending session can pass every OTHER check (valid, unexpired,
+   * unrevoked, account not suspended) yet still carry zero real
+   * capability, so every requirePermission()/canAccess*Portal() call
+   * anywhere in the app fails closed until src/lib/mfa.ts's
+   * completeLoginMfa() clears it.
+   */
+  mfaPending: boolean;
 }
 
 /**
@@ -63,7 +86,7 @@ export async function resolveSessionAuthz(
   return withRls({ userId }, async (tx) => {
     const session = await tx.session.findFirst({
       where: { id: sessionId, userId },
-      select: { revokedAt: true, expiresAt: true },
+      select: { revokedAt: true, expiresAt: true, mfaRequired: true, mfaVerifiedAt: true },
     });
     if (!session || session.revokedAt || session.expiresAt.getTime() <= Date.now()) {
       return null;
@@ -75,6 +98,26 @@ export async function resolveSessionAuthz(
     });
     if (!user || user.status === "suspended") {
       return null;
+    }
+
+    // MFA & Account Security (Session 20) — a session that still owes its
+    // second factor is valid (not revoked/expired, account not suspended)
+    // but carries NO capability at all until mfa_verified_at is set. This
+    // is the actual enforcement point: every requirePermission()/
+    // canAccess*Portal() check downstream sees isSuperAdmin=false and empty
+    // roles/permissions, so there is no route or Server Action anywhere in
+    // the app a pending session can reach beyond the MFA challenge itself —
+    // enforced here, server-side, on every request, not left to page-level
+    // redirects to get right.
+    if (session.mfaRequired && !session.mfaVerifiedAt) {
+      return {
+        isSuperAdmin: false,
+        status: user.status,
+        roles: [],
+        permissions: [],
+        organizationIds: [],
+        mfaPending: true,
+      };
     }
 
     const userRoles = await tx.userRole.findMany({
@@ -106,7 +149,14 @@ export async function resolveSessionAuthz(
     });
     const organizationIds = orgMemberships.map((m) => m.organizationId);
 
-    return { isSuperAdmin: user.isSuperAdmin, status: user.status, roles, permissions, organizationIds };
+    return {
+      isSuperAdmin: user.isSuperAdmin,
+      status: user.status,
+      roles,
+      permissions,
+      organizationIds,
+      mfaPending: false,
+    };
   });
 }
 
@@ -213,6 +263,61 @@ export async function revokeAllUserSessionsAsSystem(
     { userId: causedByUserId, permissions: [PERMISSIONS.SESSIONS_REVOKE] },
     causedByUserId
   );
+}
+
+// --- Step-up authentication (Session 20) -----------------------------------
+//
+// "Step-up" is a short-lived freshness marker on this SAME sessions row
+// (step_up_verified_at) — not a new token/cookie/session concept. Always
+// self-scoped: a caller only ever reads/writes their own current session's
+// freshness, via the sessionId already resolved server-side onto
+// session.user.sessionId (src/types/next-auth.d.ts) — never a
+// client-suppliable id. src/lib/mfa.ts's requireStepUp()/verifyStepUp() are
+// the actual gate other lib functions call; these two are just the
+// narrow read/write primitives against the sessions table, kept here so
+// every access to a Session row's columns stays in one file.
+
+/** How long a step-up proof stays fresh before a sensitive action requires re-verification. */
+export const STEP_UP_WINDOW_MS = 10 * 60 * 1000;
+
+/** True iff this session (still valid, unrevoked, unexpired) proved its current factor within STEP_UP_WINDOW_MS. */
+export async function isStepUpFresh(sessionId: string, userId: string): Promise<boolean> {
+  const session = await withRls({ userId }, (tx) =>
+    tx.session.findFirst({
+      where: { id: sessionId, userId, revokedAt: null },
+      select: { stepUpVerifiedAt: true, expiresAt: true },
+    })
+  );
+  if (!session || session.expiresAt.getTime() <= Date.now() || !session.stepUpVerifiedAt) {
+    return false;
+  }
+  return Date.now() - session.stepUpVerifiedAt.getTime() < STEP_UP_WINDOW_MS;
+}
+
+/**
+ * Marks this session as having just re-proven its current factor. Called
+ * only after src/lib/mfa.ts has already independently verified a
+ * password/TOTP/recovery-code credential — never call this without a
+ * verification having just succeeded.
+ */
+export async function markSessionSteppedUp(
+  sessionId: string,
+  userId: string,
+  opts: { alsoMfaVerified?: boolean } = {}
+): Promise<void> {
+  const now = new Date();
+  const result = await withRls({ userId }, (tx) =>
+    tx.session.updateMany({
+      where: { id: sessionId, userId, revokedAt: null },
+      data: {
+        stepUpVerifiedAt: now,
+        ...(opts.alsoMfaVerified ? { mfaVerifiedAt: now } : {}),
+      },
+    })
+  );
+  if (result.count === 0) {
+    throw new Error("Session not found or no longer active");
+  }
 }
 
 /** Exposed for the seed/tests that need to reason about default TTL. */

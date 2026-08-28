@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { hash } from "bcryptjs";
 import { withRls } from "@/lib/rls";
 import {
@@ -11,6 +12,15 @@ import {
 import { recordAuditEvent } from "@/lib/audit";
 import { revokeAllUserSessionsAsSystem } from "@/lib/sessions";
 import { emitDomainEvent } from "@/lib/events";
+import { requireStepUp } from "@/lib/mfa";
+
+const MIN_PASSWORD_LENGTH = 8; // matches registration.ts's weak_password threshold.
+const BCRYPT_COST = 12; // matches registration.ts/password-reset.ts.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isUniqueViolation(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+}
 
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 20;
@@ -101,6 +111,71 @@ export async function updateUserProfile(
 }
 
 /**
+ * MFA & Account Security (Session 20) — self-service "change my password"
+ * for an already-authenticated user. Distinct from Session 02's
+ * requestPasswordReset()/resetPassword() (the pre-auth "forgot password"
+ * token flow, unaffected — still the only path for someone who's actually
+ * locked out) and from the admin console's triggerPasswordResetAction
+ * (an admin acting on SOMEONE ELSE's account). Always requires a fresh
+ * step-up proof — the whole point of this action is changing the account's
+ * primary credential, so it never accepts the caller's word alone.
+ * Revokes every other session, same as a token-based reset — an
+ * already-authenticated attacker's stolen session shouldn't survive their
+ * victim changing the password out from under them.
+ */
+export async function changeOwnPassword(actor: AuthzActor, newPassword: string): Promise<void> {
+  await requireStepUp(actor);
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new Error("weak_password");
+  }
+
+  const passwordHash = await hash(newPassword, BCRYPT_COST);
+  await withRls(actorRlsCtx(actor), (tx) =>
+    tx.user.update({ where: { id: actor.id }, data: { passwordHash } })
+  );
+
+  await revokeAllUserSessionsAsSystem(actor.id, actor.id);
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "user.password_changed",
+    entityType: "User",
+    entityId: actor.id,
+  });
+}
+
+/**
+ * MFA & Account Security (Session 20) — self-service "change my email."
+ * Same step-up requirement and reasoning as changeOwnPassword() above. No
+ * confirmation-email verification step (this codebase has never built one
+ * — self-registration doesn't verify email either, see registration.ts) —
+ * flagged as a known limitation, not silently assumed away.
+ */
+export async function changeOwnEmail(actor: AuthzActor, newEmail: string): Promise<void> {
+  await requireStepUp(actor);
+  const email = newEmail.trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) {
+    throw new Error("invalid_input");
+  }
+
+  try {
+    await withRls(actorRlsCtx(actor), (tx) => tx.user.update({ where: { id: actor.id }, data: { email } }));
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new Error("email_taken");
+    }
+    throw err;
+  }
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "user.email_changed",
+    entityType: "User",
+    entityId: actor.id,
+  });
+}
+
+/**
  * Suspension is intentionally NOT self-servable, even by an admin acting
  * on their own account — always requires users.suspend explicitly, never
  * the self-ownership bypass other user-facing actions get. Revokes every
@@ -147,9 +222,24 @@ export async function reinstateUser(targetUserId: string, actor: AuthzActor) {
   });
 }
 
+/**
+ * MFA & Account Security (Session 20) — SUPER_ADMIN/ADMIN are the
+ * platform's privileged global roles; granting either is a sensitive
+ * action ("assign privileged roles" — sessions/20-mfa-account-security.md)
+ * and requires a fresh step-up proof from the actor doing the granting,
+ * regardless of what permission they already hold. TEACHER, STUDENT,
+ * SPONSOR_ADMIN, SPONSOR_USER, and TROUBLESHOOTER are not gated here —
+ * assigning those is routine admin work, not a privilege escalation in the
+ * same sense.
+ */
+const PRIVILEGED_ROLES: readonly RoleName[] = ["SUPER_ADMIN", "ADMIN"];
+
 /** Requires roles.manage — assigns an existing role to a user (idempotent). */
 export async function assignRole(targetUserId: string, roleName: RoleName, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.ROLES_MANAGE);
+  if (PRIVILEGED_ROLES.includes(roleName)) {
+    await requireStepUp(actor);
+  }
 
   await withRls(actorRlsCtx(actor), async (tx) => {
     const role = await tx.role.findUnique({ where: { name: roleName } });

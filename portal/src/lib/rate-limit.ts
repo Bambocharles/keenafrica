@@ -31,7 +31,8 @@ const LOGIN_FAILURE_ACTIONS = ["login.failed", "login.denied_suspended"];
 export const LOGIN_ACCOUNT_WINDOW = { windowMs: 15 * 60 * 1000, maxAttempts: 10 };
 export const LOGIN_IP_WINDOW = { windowMs: 15 * 60 * 1000, maxAttempts: 30 };
 
-async function countRecentAuditEvents(opts: {
+/** Exported for src/lib/mfa.ts's isMfaAttemptRateLimited() — same "count recent audit_events" mechanism, different action set. */
+export async function countRecentAuditEvents(opts: {
   actions: string[];
   actorId?: string | null;
   ipAddress?: string | null;
@@ -86,4 +87,25 @@ export async function isLoginRateLimited(check: LoginRateLimitCheck): Promise<bo
   ]);
 
   return accountCount >= LOGIN_ACCOUNT_WINDOW.maxAttempts || ipCount >= LOGIN_IP_WINDOW.maxAttempts;
+}
+
+/**
+ * MFA & Account Security (Session 20) — same mechanism as the login limiter
+ * above (count recent audit_events, no new table), applied to
+ * mfa.login_failed/step_up.failed instead of login.failed/
+ * login.denied_suspended. Per-account only: unlike a login attempt, an MFA/
+ * step-up challenge always already has a real, authenticated actorId (the
+ * account either passed its primary factor already, or is stepping up an
+ * existing session) — there's no "unknown email" case to also rate-limit
+ * by IP for.
+ */
+export const MFA_ATTEMPT_WINDOW = { windowMs: 15 * 60 * 1000, maxAttempts: 8 };
+
+export async function isMfaAttemptRateLimited(userId: string): Promise<boolean> {
+  const count = await countRecentAuditEvents({
+    actions: ["mfa.login_failed", "step_up.failed"],
+    actorId: userId,
+    sinceMs: MFA_ATTEMPT_WINDOW.windowMs,
+  });
+  return count >= MFA_ATTEMPT_WINDOW.maxAttempts;
 }

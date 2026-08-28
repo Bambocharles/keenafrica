@@ -20,6 +20,7 @@ export function NavLinks() {
     { href: "/notifications", icon: "🔔", label: "Notifications" },
     { href: "/organization", icon: "🏫", label: "Organization" },
     { href: "/profile", icon: "◉", label: "Profile" },
+    { href: "/security", icon: "🔒", label: "Security" },
   ];
 
   return (

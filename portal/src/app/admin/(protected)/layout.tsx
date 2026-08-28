@@ -27,7 +27,18 @@ export default async function ProtectedAdminLayout({
   // requirePermission()/requireOwnResourceOrPermission(), so a
   // TROUBLESHOOTER (say) reaching this layout does not imply it can do
   // anything beyond its actual, narrower permission set.
-  if (!session?.user || !canAccessAdminConsole(session.user)) {
+  if (!session?.user) {
+    redirect("/login");
+  }
+  // MFA & Account Security (Session 20) — a still-pending session already
+  // carries a valid, unrevoked JWT (so `session.user` exists) but
+  // resolveSessionAuthz() zeroed out roles/permissions/isSuperAdmin for it,
+  // so canAccessAdminConsole() below would already correctly deny it —
+  // this just sends it to the right place instead of bouncing to /login.
+  if (session.user.mfaPending) {
+    redirect("/mfa");
+  }
+  if (!canAccessAdminConsole(session.user)) {
     redirect("/login");
   }
   const user = session.user;

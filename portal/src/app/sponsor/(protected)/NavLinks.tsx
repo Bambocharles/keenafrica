@@ -17,6 +17,7 @@ export function NavLinks() {
     { href: "/projects", icon: "◈", label: "Projects" },
     { href: "/notifications", icon: "🔔", label: "Notifications" },
     { href: "/profile", icon: "◉", label: "Profile" },
+    { href: "/security", icon: "🔒", label: "Security" },
   ];
 
   return (

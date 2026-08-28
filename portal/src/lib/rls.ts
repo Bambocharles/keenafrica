@@ -71,6 +71,19 @@ export interface RlsContext {
    * user_identities_write's own "user_id = app.user_id" branch.
    */
   oauthLookup?: boolean;
+  /**
+   * MFA & Account Security (Session 20). Set ONLY by
+   * src/lib/mfa.ts's completeLoginMfa(), for the narrow pre-full-session
+   * read/write of "totp_credentials"/"recovery_codes" a login-time MFA
+   * challenge needs — the caller already has a real (but MFA-pending)
+   * app.user_id from resolveSessionAuthz()'s zeroed snapshot, same
+   * "possession-proof, not yet fully authorized" shape as
+   * app.password_reset_lookup/app.oauth_lookup. Never set anywhere else. A
+   * self-service enroll/disable/regenerate action needs no flag: it runs
+   * under a real, fully-verified app.user_id, covered by each table's own
+   * "user_id = app.user_id" branch.
+   */
+  mfaLoginLookup?: boolean;
 }
 
 /**
@@ -93,6 +106,7 @@ export async function withRls<T>(
     await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.oauth_lookup', ${String(!!ctx.oauthLookup)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.mfa_login_lookup', ${String(!!ctx.mfaLoginLookup)}, true)`;
     return fn(tx);
   });
 }

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { AuthorizationError } from "@/lib/authz";
+import { StepUpRequiredError } from "@/lib/mfa";
 import { sendMail } from "@/lib/mailer";
 import {
   acceptOrganizationMembershipInvite,
@@ -60,10 +61,23 @@ function target(formData: FormData, fallback: string): string {
 async function run(formData: FormData, fallback: string, fn: () => Promise<unknown>): Promise<never> {
   const redirectTo = target(formData, fallback);
   let error: string | null = null;
+  let needsStepUp = false;
   try {
     await fn();
   } catch (err) {
-    error = err instanceof AuthorizationError ? "not_authorized" : "action_failed";
+    if (err instanceof StepUpRequiredError) {
+      needsStepUp = true;
+    } else {
+      error = err instanceof AuthorizationError ? "not_authorized" : "action_failed";
+    }
+  }
+  // MFA & Account Security (Session 20) — e.g. changeMemberRoleSelfAction
+  // granting org_admin. Send the caller to re-prove their current factor;
+  // on success the step-up page returns them to this same page (not a
+  // re-submitted mutation — they re-click the action once, now with a
+  // fresh step-up proof in place).
+  if (needsStepUp) {
+    redirect(`/step-up?returnTo=${encodeURIComponent(redirectTo)}`);
   }
   revalidatePath(redirectTo.split("?")[0]);
   redirect(error ? `${redirectTo}${redirectTo.includes("?") ? "&" : "?"}error=${error}` : redirectTo);

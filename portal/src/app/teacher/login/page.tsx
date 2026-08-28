@@ -22,6 +22,11 @@ export default async function TeacherLoginPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const session = await auth();
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // admin login page.
+  if (session?.user?.mfaPending) {
+    redirect("/mfa");
+  }
   if (canAccessTeacherPortal(session?.user)) {
     // Relative to this subdomain - middleware prepends "/teacher" on the
     // fresh request this redirect triggers (mirrors the admin login page).

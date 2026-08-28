@@ -22,6 +22,11 @@ export default async function StudentLoginPage({
   searchParams: Promise<{ error?: string; reset?: string }>;
 }) {
   const session = await auth();
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // admin login page.
+  if (session?.user?.mfaPending) {
+    redirect("/mfa");
+  }
   if (canAccessStudentPortal(session?.user)) {
     // Relative to this subdomain — middleware prepends "/student" on the
     // fresh request this redirect triggers (see src/middleware.ts and the

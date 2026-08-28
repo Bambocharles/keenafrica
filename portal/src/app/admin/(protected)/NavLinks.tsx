@@ -43,6 +43,7 @@ export function NavLinks({
     ...(showAudit ? [{ href: "/audit", icon: "☰", label: "Audit Log" }] : []),
     { href: "/flags", icon: "⚑", label: "Feature Flags" },
     { href: "/notifications", icon: "🔔", label: "Notifications" },
+    { href: "/security", icon: "🔒", label: "Security" },
   ];
 
   return (

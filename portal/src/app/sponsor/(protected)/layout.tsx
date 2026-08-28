@@ -26,7 +26,15 @@ export default async function ProtectedSponsorLayout({
   // enforces its own ownership-scoped check against sponsor.ts — holding
   // SPONSOR_ADMIN/SPONSOR_USER alone grants nothing without a
   // project_memberships row on the specific project being viewed.
-  if (!session?.user || !canAccessSponsorPortal(session.user)) {
+  if (!session?.user) {
+    redirect("/login");
+  }
+  // MFA & Account Security (Session 20) — see the matching comment on the
+  // admin console layout.
+  if (session.user.mfaPending) {
+    redirect("/mfa");
+  }
+  if (!canAccessSponsorPortal(session.user)) {
     redirect("/login");
   }
   const user = session.user;
