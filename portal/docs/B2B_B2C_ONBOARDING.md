@@ -112,28 +112,28 @@ Every mutation reuses Session 17's `organizations.ts` functions verbatim —
 this session added zero new mutation logic to that module beyond the
 read-only `searchJoinableOrganizations`.
 
-## Email delivery — stubbed, contract fully defined (BLOCKED on Session 19)
+## Email delivery — live as of Session 19
 
-No transactional email provider exists in this infra yet (Session 19's
-job — the same gap already documented for password reset in
-`docs/IDENTITY_SECURITY.md`). `inviteMemberSelfAction`
-(`src/lib/onboarding-actions.ts`) calls `src/lib/mailer.ts`'s `sendMail()`
-exactly as-is: dev-console-logs outside production, **throws in
-production** (`sendMail()`'s own documented contract). The action wraps
-that call in a `try/catch` and swallows the failure — same established
-pattern as `src/app/admin/(protected)/users/[id]/actions.ts`'s
+`src/lib/mailer.ts`'s `sendMail()` now sends through a real provider
+(Resend) in production — see `docs/FEDERATED_AUTH.md`. `inviteMemberSelfAction`
+(`src/lib/onboarding-actions.ts`) calls it exactly as-is, with **zero
+call-site changes** needed once the provider was wired: dev-console-logs
+outside production (or when unconfigured), sends for real otherwise. The
+action still wraps that call in a `try/catch`, same established pattern as
+`src/app/admin/(protected)/users/[id]/actions.ts`'s
 `triggerPasswordResetAction` and `src/app/student/(protected)/profile/
-actions.ts`'s `requestOwnPasswordResetAction`.
+actions.ts`'s `requestOwnPasswordResetAction` — a delivery failure (e.g. a
+misconfigured sender domain) still doesn't block the invite itself, since
+the cookie fallback below covers it regardless.
 
 Either way, the invite link is **also** stashed in a short-lived (60s),
 `httpOnly`+`Secure`-in-production cookie
 (`org_invite_link_<invitationId or membershipId>`) so the org_admin who
 triggered the invite can see and relay it manually — shown once on
-`OrganizationManage` via `?inviteLinkKey=...`. This is the exact same
-"contract fully defined, live delivery stubbed" shape Session 02 already
-established for password reset; **BLOCKED specifically on live email
-delivery**, not on the invite flow itself, per this session's own
-instructions.
+`OrganizationManage` via `?inviteLinkKey=...`. This fallback was kept even
+after Session 19 wired real delivery, as a resilience path for a delivery
+failure (e.g. Resend outage/misconfiguration), not because delivery is
+still unavailable.
 
 `platformRole` (`TEACHER`/`STUDENT`) on the invite form is **UI-only** —
 never persisted (`OrganizationInvitation` has no platform-role column). It
@@ -141,11 +141,6 @@ only picks which subdomain's `/register` (new account) or `/login`
 (existing account) the constructed link points at, since the org admin
 knows which role they're inviting someone as but `OrganizationInvitation`
 only ever tracks the *org*-scoped role offered.
-
-**What Session 19 needs to do**: implement `sendMail()` against a real
-provider behind its existing signature. Every caller here (and password
-reset) already goes through it — zero call-site changes needed once a
-provider is wired up.
 
 ## Account status during onboarding
 
@@ -201,9 +196,8 @@ under a live registration → pending-join scenario, which it does.
 
 ## Blockers
 
-- **Live email delivery** — blocked on Session 19's transactional email
-  provider. The contract (`sendMail()`) is fully defined and every caller
-  (invitations here, password reset already) is wired to it; only the
-  underlying implementation is a stub. Does not block the registration/
-  join/invite flow itself — the invite link is always available to the
-  inviting org_admin via the cookie relay regardless of delivery.
+- **None remaining** — live email delivery (the one blocker this doc
+  originally flagged) was resolved by Session 19; see `docs/
+  FEDERATED_AUTH.md`. The invite link remains available to the inviting
+  org_admin via the cookie relay as a resilience fallback, not because
+  delivery is unavailable.

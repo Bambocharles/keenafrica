@@ -58,6 +58,19 @@ export interface RlsContext {
    * else. See the self_registration migration's policy comments.
    */
   selfRegistration?: boolean;
+  /**
+   * Federated Auth (Session 19). Set ONLY by
+   * src/lib/oauth-identity.ts's resolveGoogleSignIn(), for the pre-auth
+   * lookup of "user_identities" by (provider, providerAccountId) — there is
+   * no app.user_id yet at that point, same reasoning as authLookup — and
+   * for the accompanying INSERT when that lookup results in a brand-new
+   * Google-only account (paired with selfRegistration on the users/
+   * user_roles insert in the same request). Never set anywhere else. A
+   * self-service "connect Google to my already-authenticated account" link
+   * needs no flag: it runs under a real app.user_id, covered by
+   * user_identities_write's own "user_id = app.user_id" branch.
+   */
+  oauthLookup?: boolean;
 }
 
 /**
@@ -79,6 +92,7 @@ export async function withRls<T>(
     await tx.$executeRaw`SELECT set_config('app.organization_ids', ${JSON.stringify(ctx.organizationIds ?? [])}, true)`;
     await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.oauth_lookup', ${String(!!ctx.oauthLookup)}, true)`;
     return fn(tx);
   });
 }

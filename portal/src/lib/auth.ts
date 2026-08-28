@@ -1,10 +1,44 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import Google from "next-auth/providers/google";
+import { headers } from "next/headers";
 import { compare } from "bcryptjs";
 import { withRls } from "@/lib/rls";
 import { createSession, resolveSessionAuthz } from "@/lib/sessions";
 import { recordAuditEvent } from "@/lib/audit";
 import { isLoginRateLimited } from "@/lib/rate-limit";
+import { resolveGoogleSignIn, type GoogleSignInRejectionReason } from "@/lib/oauth-identity";
+import type { RegisterableRole } from "@/lib/registration";
+
+// Mirrors registration.ts's REGISTERABLE_ROLES/"the subdomain IS the
+// platform-role choice" convention (Session 18) for the one case Google
+// sign-in can also create a brand-new account: admin.<root>/sponsor.<root>
+// have no public signup path at all (Session 18's explicit "Must NOT: no
+// public path to an ADMIN/SPONSOR_* account"), so they resolve to undefined
+// here and oauth-identity.ts's resolveGoogleSignIn() rejects a first-time
+// Google sign-in on those subdomains rather than creating an account.
+async function subdomainSignupRole(): Promise<RegisterableRole | undefined> {
+  try {
+    const h = await headers();
+    const host = (h.get("host") ?? "").split(":")[0].toLowerCase();
+    const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
+    if (host === `teacher.${rootDomain}`) return "TEACHER";
+    if (host === `student.${rootDomain}`) return "STUDENT";
+    return undefined;
+  } catch {
+    // Fails safe: no role resolved means resolveGoogleSignIn() will never
+    // create a new account, only ever sign in/link an existing one.
+    return undefined;
+  }
+}
+
+const GOOGLE_REJECTION_ERROR_CODES: Record<GoogleSignInRejectionReason, string> = {
+  no_email: "google_no_email",
+  email_exists_unlinked: "google_email_exists",
+  no_self_service_signup: "google_no_account",
+  conflicting_link: "google_conflicting_link",
+  account_suspended: "google_account_suspended",
+};
 
 // basePath is "/auth", not the default "/api/auth" — a Cloudflare Worker
 // intercepts keenafrica.com/api/* (and *.keenafrica.com/api/*) at the edge
@@ -75,7 +109,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        const valid = await compare(password, user.passwordHash);
+        // Federated Auth (Session 19) — a Google-only account has no
+        // passwordHash at all (see schema.prisma's comment on
+        // User.passwordHash). Treated the same as a wrong password: denied
+        // without distinguishing it from any other invalid-credentials
+        // case, so a caller can't use this to detect "this email is a
+        // Google-only account."
+        const valid = user.passwordHash ? await compare(password, user.passwordHash) : false;
         if (!valid) {
           await recordAuditEvent({
             actorId: user.id,
@@ -124,8 +164,64 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         };
       },
     }),
+    // Session 19 (Federated Auth). Additive to Credentials, not a
+    // replacement — password login is unchanged. No adapter is configured
+    // (see this file's header comment), so all identity linking is
+    // hand-rolled in src/lib/oauth-identity.ts's resolveGoogleSignIn(),
+    // called from the signIn callback below.
+    Google({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    }),
   ],
   callbacks: {
+    // Only the Google branch does anything here — Credentials already
+    // resolved everything (including the rate limit/suspension checks) in
+    // authorize() above, before this callback ever runs, so it's a no-op
+    // pass-through for that provider.
+    //
+    // Mutating `user.id`/`user.sessionId` below (rather than returning
+    // something) is deliberate, not a stray side effect: without a database
+    // adapter, @auth/core's handleLoginOrRegister() short-circuits to
+    // `return { user: <the OAuth provider's raw profile>, account }`
+    // (node_modules/@auth/core/lib/actions/callback/handle-login.js) and
+    // that exact object — the same one this callback receives as `user` —
+    // is what the jwt callback below is then called with. Rewriting its
+    // `id` from Google's subject id to our internal User.id here is the
+    // only hook available to make `token.sub` end up correct; there is no
+    // adapter-based alternative available in this setup.
+    signIn: async ({ user, account }) => {
+      if (account?.provider !== "google") return true;
+      if (!account.providerAccountId) return false;
+
+      const h = await headers();
+      const ipAddress = h.get("x-forwarded-for");
+      const signupRole = await subdomainSignupRole();
+
+      const result = await resolveGoogleSignIn({
+        providerAccountId: account.providerAccountId,
+        email: user.email,
+        name: user.name,
+        ipAddress,
+        signupRole,
+      });
+
+      if (result.outcome === "rejected") {
+        // conflicting_link can only happen mid self-service "connect Google"
+        // (see oauth-identity.ts) — send it back to the profile page that
+        // started the flow rather than /login, which an already-logged-in
+        // actor would just bounce straight off of via its own canAccess*
+        // redirect before ever seeing the message.
+        if (result.reason === "conflicting_link") {
+          return `/profile?error=${GOOGLE_REJECTION_ERROR_CODES[result.reason]}`;
+        }
+        return `/login?error=${GOOGLE_REJECTION_ERROR_CODES[result.reason]}`;
+      }
+
+      user.id = result.userId;
+      (user as { sessionId?: string }).sessionId = result.sessionId;
+      return true;
+    },
     // Runs on every request that calls auth()/getToken(), not just at
     // sign-in — this is what makes a JWT-strategy session revocable. It
     // re-checks the DB-backed Session row (and current roles/permissions/

@@ -110,3 +110,72 @@ export async function registerUser(input: RegisterUserInput): Promise<RegisterUs
     throw err;
   }
 }
+
+export interface RegisterUserViaProviderInput {
+  email: string;
+  name: string;
+  role: RegisterableRole;
+}
+
+export type RegisterUserViaProviderOutcome =
+  | { ok: true; userId: string; email: string; name: string }
+  | { ok: false; error: "invalid_input" | "invalid_role" | "email_taken" };
+
+/**
+ * Federated-auth counterpart to registerUser() (Session 19) — same
+ * self_registration RLS carve-out, same REGISTERABLE_ROLES gate, same
+ * "the only two paths that may INSERT a users row" boundary. The one
+ * difference: no password at all (passwordHash: null — see schema.prisma's
+ * comment on User.passwordHash), since the account is authenticated
+ * entirely via the linked provider identity created right after this call
+ * (src/lib/oauth-identity.ts's resolveGoogleSignIn()). Never called
+ * directly by a Server Action the way registerUser() is — only from that
+ * one caller, which already validated the requested role against the
+ * subdomain the sign-in happened on.
+ */
+export async function registerUserViaProvider(
+  input: RegisterUserViaProviderInput
+): Promise<RegisterUserViaProviderOutcome> {
+  const email = input.email.trim().toLowerCase();
+  const name = input.name.trim() || email;
+
+  if (!email || !EMAIL_RE.test(email)) {
+    return { ok: false, error: "invalid_input" };
+  }
+  if (!REGISTERABLE_ROLES.includes(input.role)) {
+    return { ok: false, error: "invalid_role" };
+  }
+
+  try {
+    const user = await withRls({ selfRegistration: true }, async (tx) => {
+      const role = await tx.role.findUnique({ where: { name: input.role } });
+      if (!role) throw new Error(`Role not seeded: ${input.role}`);
+
+      return tx.user.create({
+        data: {
+          email,
+          name,
+          passwordHash: null,
+          userRoles: { create: [{ roleId: role.id }] },
+        },
+        select: { id: true, email: true, name: true },
+      });
+    });
+
+    await recordAuditEvent({
+      actorId: user.id,
+      action: "user.registered",
+      entityType: "User",
+      entityId: user.id,
+      metadata: { role: input.role, selfService: true, provider: "google" },
+    });
+    emitDomainEvent("UserCreated", { userId: user.id });
+
+    return { ok: true, userId: user.id, email: user.email, name: user.name };
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { ok: false, error: "email_taken" };
+    }
+    throw err;
+  }
+}

@@ -110,3 +110,44 @@
   font-weight: 600;
   margin-bottom: 18px;
 }
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+  color: var(--sidebar-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--sidebar-line);
+}
+
+.oauth {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--sidebar-ink);
+  border: 1px solid var(--sidebar-line);
+  border-radius: 7px;
+  padding: 10px;
+  font-weight: 700;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.oauth:hover {
+  border-color: var(--gold);
+}

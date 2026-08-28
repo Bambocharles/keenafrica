@@ -38,7 +38,7 @@ describe("superAdminTask", () => {
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email } });
     expect(user.isSuperAdmin).toBe(true);
-    expect(await compare("InitialPassword123!", user.passwordHash)).toBe(true);
+    expect(await compare("InitialPassword123!", user.passwordHash!)).toBe(true);
   });
 
   it("never overwrites the password of an account that already exists — the actual production risk this guards against", async () => {
@@ -57,8 +57,8 @@ describe("superAdminTask", () => {
     await superAdminTask.run(prisma);
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email } });
-    expect(await compare("InitialPassword123!", user.passwordHash)).toBe(true);
-    expect(await compare("SomeDifferentPassword456!", user.passwordHash)).toBe(false);
+    expect(await compare("InitialPassword123!", user.passwordHash!)).toBe(true);
+    expect(await compare("SomeDifferentPassword456!", user.passwordHash!)).toBe(false);
   });
 
   it("still keeps isSuperAdmin/name current on repeat runs", async () => {

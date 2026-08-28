@@ -33,6 +33,8 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       orgInvitationLookup?: boolean;
       /** Session 18 (B2B & B2C Onboarding) — see src/lib/rls.ts's RlsContext.selfRegistration. */
       selfRegistration?: boolean;
+      /** Session 19 (Federated Auth) — see src/lib/rls.ts's RlsContext.oauthLookup. */
+      oauthLookup?: boolean;
     },
     fn: (tx: Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0]) => Promise<T>
   ): Promise<T> {
@@ -45,6 +47,7 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       await tx.$executeRaw`SELECT set_config('app.organization_ids', ${JSON.stringify(ctx.organizationIds ?? [])}, true)`;
       await tx.$executeRaw`SELECT set_config('app.org_invitation_lookup', ${String(!!ctx.orgInvitationLookup)}, true)`;
       await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.oauth_lookup', ${String(!!ctx.oauthLookup)}, true)`;
       return fn(tx);
     });
   }
@@ -444,6 +447,90 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
       const cleanup = new PrismaClient();
       await cleanup.userRole.deleteMany({ where: { userId: newUser.id } });
       await cleanup.user.delete({ where: { id: newUser.id } });
+      await cleanup.$disconnect();
+    });
+  });
+
+  describe("Federated Identity (Session 19)", () => {
+    it("user_identities_select/write: a plain unauthenticated/no-permission context can neither read nor insert", async () => {
+      const setup = new PrismaClient();
+      const target = await setup.user.create({
+        data: { email: `rls-oauth-plain-${randomUUID()}@example.com`, name: "Plain", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      await expect(
+        asContext({}, (tx) =>
+          tx.userIdentity.create({ data: { userId: target.id, provider: "google", providerAccountId: randomUUID() } })
+        )
+      ).rejects.toThrow();
+
+      const rows = await asContext({}, (tx) => tx.userIdentity.findMany({ where: { userId: target.id } }));
+      expect(rows).toHaveLength(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.user.delete({ where: { id: target.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("app.oauth_lookup authorizes exactly the one pre-auth SELECT/INSERT this codebase's resolveGoogleSignIn() performs", async () => {
+      const setup = new PrismaClient();
+      const target = await setup.user.create({
+        data: { email: `rls-oauth-lookup-${randomUUID()}@example.com`, name: "Looked Up", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      const providerAccountId = randomUUID();
+      const created = await asContext({ oauthLookup: true }, (tx) =>
+        tx.userIdentity.create({ data: { userId: target.id, provider: "google", providerAccountId }, select: { id: true, userId: true } })
+      );
+      expect(created.userId).toBe(target.id);
+
+      const found = await asContext({ oauthLookup: true }, (tx) =>
+        tx.userIdentity.findUnique({ where: { provider_providerAccountId: { provider: "google", providerAccountId } } })
+      );
+      expect(found?.userId).toBe(target.id);
+
+      // The flag doesn't linger — a plain follow-up context can't read it.
+      const asNobody = await asContext({}, (tx) => tx.userIdentity.findMany({ where: { id: created.id } }));
+      expect(asNobody).toHaveLength(0);
+
+      const cleanup = new PrismaClient();
+      await cleanup.userIdentity.delete({ where: { id: created.id } });
+      await cleanup.user.delete({ where: { id: target.id } });
+      await cleanup.$disconnect();
+    });
+
+    it("user_identities_select/write: a real app.user_id may read and link its OWN row, but not someone else's", async () => {
+      const setup = new PrismaClient();
+      const self = await setup.user.create({
+        data: { email: `rls-oauth-self-${randomUUID()}@example.com`, name: "Self", passwordHash: "x" },
+      });
+      const other = await setup.user.create({
+        data: { email: `rls-oauth-other-${randomUUID()}@example.com`, name: "Other", passwordHash: "x" },
+      });
+      await setup.$disconnect();
+
+      await expect(
+        asContext({ userId: self.id }, (tx) =>
+          tx.userIdentity.create({ data: { userId: other.id, provider: "google", providerAccountId: randomUUID() } })
+        )
+      ).rejects.toThrow();
+
+      const created = await asContext({ userId: self.id }, (tx) =>
+        tx.userIdentity.create({
+          data: { userId: self.id, provider: "google", providerAccountId: randomUUID() },
+          select: { id: true, userId: true },
+        })
+      );
+      expect(created.userId).toBe(self.id);
+
+      const ownRows = await asContext({ userId: self.id }, (tx) => tx.userIdentity.findMany({ where: { id: created.id } }));
+      expect(ownRows).toHaveLength(1);
+
+      const cleanup = new PrismaClient();
+      await cleanup.userIdentity.delete({ where: { id: created.id } });
+      await cleanup.user.deleteMany({ where: { id: { in: [self.id, other.id] } } });
       await cleanup.$disconnect();
     });
   });

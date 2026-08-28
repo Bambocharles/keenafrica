@@ -3,21 +3,27 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { Banner, Button, Card, SectionHeader } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
-import { requestOwnPasswordResetAction } from "./actions";
+import { requestOwnPasswordResetAction, connectGoogleAction } from "./actions";
+import { listOwnLinkedProviders } from "@/lib/oauth-identity";
 
 const ERROR_MESSAGES: Record<string, string> = {
   reset_unavailable: "Could not generate a reset link right now — try again shortly.",
+  // Session 19 (Federated Auth) — the one rejection reason a "connect
+  // Google" attempt can end up here with (see src/lib/auth.ts's signIn
+  // callback, which sends conflicting_link back to /profile specifically).
+  google_conflicting_link: "That Google account is already connected to a different account.",
 };
 
 export default async function StudentProfilePage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; resetLinkGenerated?: string }>;
+  searchParams: Promise<{ error?: string; resetLinkGenerated?: string; linked?: string }>;
 }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
   const user = session.user;
   const query = await searchParams;
+  const linkedProviders = await listOwnLinkedProviders(user.id);
 
   let resetLink: string | null = null;
   if (query.resetLinkGenerated === "1") {
@@ -30,6 +36,7 @@ export default async function StudentProfilePage({
       <SectionHeader title="Profile" count={0} />
 
       {query.error && <Banner>{ERROR_MESSAGES[query.error] ?? "Something went wrong."}</Banner>}
+      {query.linked === "1" && !query.error && <Banner variant="success">Google account connected.</Banner>}
       {resetLink && (
         <Banner variant="success">
           Reset link generated (expires in 1 hour, single use):
@@ -59,13 +66,30 @@ export default async function StudentProfilePage({
       <Card style={{ padding: "20px", display: "grid", gap: "10px" }}>
         <div style={{ fontWeight: 700 }}>Password</div>
         <p className={ui.mono}>
-          No email delivery is configured yet, so the one-time link is shown here directly after you request it.
+          The one-time link is also shown here directly, as a fallback in case email delivery isn't configured in
+          this environment.
         </p>
         <form action={requestOwnPasswordResetAction}>
           <Button type="submit" variant="secondary">
             Send myself a password reset link
           </Button>
         </form>
+      </Card>
+
+      <Card style={{ padding: "20px", display: "grid", gap: "10px" }}>
+        <div style={{ fontWeight: 700 }}>Connected accounts</div>
+        {linkedProviders.includes("google") ? (
+          <p className={ui.mono}>Google — connected.</p>
+        ) : (
+          <>
+            <p className={ui.mono}>Sign in faster next time by connecting your Google account.</p>
+            <form action={connectGoogleAction}>
+              <Button type="submit" variant="secondary">
+                Connect Google
+              </Button>
+            </form>
+          </>
+        )}
       </Card>
     </div>
   );

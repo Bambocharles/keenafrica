@@ -316,7 +316,13 @@ model OrganizationInvitation {
 model User {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String     @unique @db.Citext
-  passwordHash String     @map("password_hash")
+  // Nullable as of Session 19 (Federated Auth) — a user created via Google
+  // sign-in has no password at all (never store/derive one from an OAuth
+  // token). src/lib/auth.ts's Credentials authorize() treats a null hash as
+  // "password login unavailable for this account", not a crash; every other
+  // writer (createUser/registerUser/resetPassword/seed tasks) still always
+  // sets a real hash.
+  passwordHash String?    @map("password_hash")
   name         String
   isSuperAdmin Boolean    @default(false) @map("is_super_admin")
   status       UserStatus @default(active)
@@ -366,7 +372,30 @@ model User {
   organizationMembershipsInvited OrganizationMembership[]    @relation("OrganizationMembershipInviter")
   organizationInvitationsSent    OrganizationInvitation[]    @relation("OrganizationInvitationInviter")
 
+  identities UserIdentity[] @relation("UserIdentities")
+
   @@map("users")
+}
+
+// Federated identity (Session 19). Links a canonical User to a stable
+// external-provider account id — NEVER to an email address alone (someone
+// could sign in with Google using an email that later gets used for a
+// separate password account, or vice versa; see src/lib/oauth-identity.ts's
+// resolveGoogleSignIn() for the exact linking rule this table backs). One
+// row per (provider, providerAccountId); a user may hold more than one
+// (e.g. Google today, another provider later) via the plain userId FK.
+model UserIdentity {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  provider          String
+  providerAccountId String   @map("provider_account_id")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation("UserIdentities", fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("user_identities")
 }
 
 // Identity/authorization foundation (Session 02). Additive to the existing
