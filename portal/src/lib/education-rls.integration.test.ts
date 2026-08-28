@@ -217,4 +217,45 @@ describeIfConfigured("Education Core Row-Level Security (enforced by a non-super
     await cleanup.topic.delete({ where: { id: topic.id } });
     await cleanup.$disconnect();
   });
+
+  it("user_roles_select: reproduces the production bug this session found in src/lib/courses.ts (assignTeacherToCohort/enrollStudent's 'does the target hold this role' check ran with NO RLS context at all, silently returning zero rows under real RLS — see courses.ts's SYSTEM_CTX comment for the fix)", async () => {
+    const setup = new PrismaClient();
+    const teacherRole = await setup.role.findUniqueOrThrow({ where: { name: "TEACHER" } });
+    const targetUser = await setup.user.create({
+      data: { email: `edu-rls-roletarget-${randomUUID()}@example.com`, name: "RLS Role Target", passwordHash: "x" },
+      select: { id: true },
+    });
+    await setup.userRole.create({ data: { userId: targetUser.id, roleId: teacherRole.id } });
+    await setup.$disconnect();
+
+    // The exact shape of the pre-fix query: no app.user_id, no
+    // app.is_super_admin, no app.permissions — this is what a plain,
+    // un-wrapped `prisma.userRole.findFirst()` call (bypassing withRls()
+    // entirely) is equivalent to under RLS. user_roles_select's policy has
+    // no "default allow" branch, so this must return nothing even though
+    // the row genuinely exists — reproducing why every
+    // assignTeacherToCohort()/enrollStudent() call was rejecting a
+    // legitimately-roled target user in production (kf_portal_prod_app
+    // does not bypass RLS) while appearing to work fine against the local
+    // dev superuser connection.
+    const unscoped = await asContext({}, (tx) =>
+      tx.userRole.findFirst({ where: { userId: targetUser.id, role: { name: "TEACHER" } } })
+    );
+    expect(unscoped).toBeNull();
+
+    // The fix: run the same lookup under SYSTEM_CTX (isSuperAdmin: true),
+    // same convention as organizations.ts's isActiveOrganizationMember().
+    // The caller has already been authorized via requirePermission() by
+    // this point in courses.ts — this is a system-level integrity check on
+    // an arbitrary target user, not a data grant to the calling actor.
+    const scoped = await asContext({ isSuperAdmin: true }, (tx) =>
+      tx.userRole.findFirst({ where: { userId: targetUser.id, role: { name: "TEACHER" } } })
+    );
+    expect(scoped?.roleId).toBe(teacherRole.id);
+
+    const cleanup = new PrismaClient();
+    await cleanup.userRole.deleteMany({ where: { userId: targetUser.id } });
+    await cleanup.user.delete({ where: { id: targetUser.id } });
+    await cleanup.$disconnect();
+  });
 });
