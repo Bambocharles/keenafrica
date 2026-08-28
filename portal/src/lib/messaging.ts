@@ -10,6 +10,7 @@ import { actorRlsCtx } from "@/lib/courses";
 import { recordAuditEvent } from "@/lib/audit";
 import { emitDomainEvent } from "@/lib/events";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
+import { isActiveOrganizationMember } from "@/lib/organizations";
 
 /**
  * Messaging (Session 09) — the ONE canonical Conversation/Message system
@@ -49,6 +50,20 @@ const ACTIVE_ENROLLMENT_STATUSES = ["active", "completed"] as const;
  * which genuinely needs one). If actor isn't actually a participant in any
  * of the relevant cohorts, RLS returns zero rows regardless of what the
  * WHERE clause asks for, so this fails closed correctly either way.
+ *
+ * Organization-Aware Education (Session 21): a shared cohort is necessary
+ * but no longer SUFFICIENT once organization-scoped courses exist — a
+ * platform-wide TEACHER/STUDENT role pairing is not enough by itself (see
+ * this session's Owns list). Once a shared cohort is found, if it belongs
+ * to an organization, BOTH parties must currently hold an ACTIVE
+ * OrganizationMembership in it. This is explicit, direct verification
+ * (isActiveOrganizationMember queries organization_memberships itself)
+ * rather than relying solely on the org-membership condition this
+ * session's migration added to cohorts_select/enrollments_select — belt
+ * and suspenders against a future change to those policies, and it also
+ * correctly re-closes messaging if either party's membership is later
+ * suspended/removed, which a stale cohort_teachers/enrollments row alone
+ * would not.
  */
 async function haveSharedCohortRelationship(actor: AuthzActor, otherUserId: string): Promise<boolean> {
   if (actor.id === otherUserId) return false;
@@ -75,12 +90,24 @@ async function haveSharedCohortRelationship(actor: AuthzActor, otherUserId: stri
           status: { in: [...ACTIVE_ENROLLMENT_STATUSES] },
           cohort: { enrollments: { some: { studentUserId: otherUserId, status: { in: [...ACTIVE_ENROLLMENT_STATUSES] } } } },
         },
-        select: { id: true },
+        select: { cohortId: true },
       }),
     ])
   );
 
-  return !!(actorTeachesForOther || otherTeachesForActor || sharedEnrollment);
+  const sharedCohortId = actorTeachesForOther?.cohortId ?? otherTeachesForActor?.cohortId ?? sharedEnrollment?.cohortId;
+  if (!sharedCohortId) return false;
+
+  const cohort = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.cohort.findUnique({ where: { id: sharedCohortId }, select: { organizationId: true } })
+  );
+  if (!cohort?.organizationId) return true;
+
+  const [actorIsMember, otherIsMember] = await Promise.all([
+    isActiveOrganizationMember(cohort.organizationId, actor.id),
+    isActiveOrganizationMember(cohort.organizationId, otherUserId),
+  ]);
+  return actorIsMember && otherIsMember;
 }
 
 /**

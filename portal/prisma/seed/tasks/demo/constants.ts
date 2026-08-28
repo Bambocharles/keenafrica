@@ -34,6 +34,9 @@ export const DEMO_ORGANIZATION_NAMES = [
   "Sahel Community School",
 ] as const;
 
+/** Organization-Aware Education (Session 21) — the one ORGANIZATION-scoped course in the canonical demo dataset, under Baobab Learning Hub. */
+export const DEMO_ORG_COURSE_TITLE = "Baobab Hub: Community Bookkeeping";
+
 export const DEMO_TOPIC_NAMES = [
   "Computer Basics",
   "Internet Safety",

@@ -48,10 +48,14 @@ export async function createAssessment(courseId: string, input: CreateAssessment
   const title = input.title.trim();
   if (!title) throw new Error("Assessment title is required");
 
-  const assessment = await withRls(actorRlsCtx(actor), (tx) =>
-    tx.assessment.create({
+  const assessment = await withRls(actorRlsCtx(actor), async (tx) => {
+    // Organization-Aware Education (Session 21): organizationId is
+    // denormalized from the course at creation, immutable once set.
+    const course = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { organizationId: true } });
+    return tx.assessment.create({
       data: {
         courseId,
+        organizationId: course.organizationId,
         title,
         instructions: input.instructions?.trim() ?? "",
         timeLimitMinutes: input.timeLimitMinutes,
@@ -59,8 +63,8 @@ export async function createAssessment(courseId: string, input: CreateAssessment
         passingScorePercent: input.passingScorePercent,
         createdBy: actor.id,
       },
-    })
-  );
+    });
+  });
 
   await recordAuditEvent({ actorId: actor.id, action: "assessment.created", entityType: "Assessment", entityId: assessment.id, metadata: { courseId } });
 

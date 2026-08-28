@@ -31,6 +31,18 @@ enum CourseStatus {
   archived
 }
 
+// Organization-Aware Education (Session 21). platform (default): visible
+// platform-wide exactly as every course was before this enum existed —
+// PLATFORM_ARCHITECTURE.md's Session 21 acceptance criterion is that this
+// case is provably unchanged. organization: visible only within one
+// Organization (Session 17) — see the organization_aware_education
+// migration's CHECK constraint, which enforces scope/organizationId can
+// never disagree (organization <=> organizationId IS NOT NULL).
+enum CourseScope {
+  platform
+  organization
+}
+
 enum ContentStatus {
   draft
   published
@@ -255,9 +267,15 @@ model Organization {
   createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  creator     User                      @relation("OrganizationCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     User                     @relation("OrganizationCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
   memberships OrganizationMembership[]
   invitations OrganizationInvitation[]
+  // Organization-Aware Education (Session 21) — courses scoped to this
+  // organization, and their denormalized cohorts/assessments/questions.
+  courses     Course[]
+  cohorts     Cohort[]
+  assessments Assessment[]
+  questions   Question[]
 
   @@index([createdBy])
   @@map("organizations")
@@ -268,15 +286,15 @@ model Organization {
 // membership row per organization; its `status`/`role` carry the full
 // lifecycle rather than deleting and recreating the row.
 model OrganizationMembership {
-  id             String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId String                        @map("organization_id") @db.Uuid
-  userId         String                        @map("user_id") @db.Uuid
-  role           OrganizationMembershipRole    @default(org_member)
-  status         OrganizationMembershipStatus  @default(invited)
-  invitedBy      String?                       @map("invited_by") @db.Uuid
-  joinedAt       DateTime?                     @map("joined_at") @db.Timestamptz(6)
-  createdAt      DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime                      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String                       @map("organization_id") @db.Uuid
+  userId         String                       @map("user_id") @db.Uuid
+  role           OrganizationMembershipRole   @default(org_member)
+  status         OrganizationMembershipStatus @default(invited)
+  invitedBy      String?                      @map("invited_by") @db.Uuid
+  joinedAt       DateTime?                    @map("joined_at") @db.Timestamptz(6)
+  createdAt      DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user         User         @relation("OrganizationMembershipUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -294,16 +312,16 @@ model OrganizationMembership {
 // raw token is returned once, by src/lib/organizations.ts's
 // inviteToOrganization, and never persisted.
 model OrganizationInvitation {
-  id             String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId String                        @map("organization_id") @db.Uuid
-  email          String                        @db.Citext
-  role           OrganizationMembershipRole    @default(org_member)
-  tokenHash      String                        @unique @map("token_hash")
-  status         OrganizationInvitationStatus  @default(pending)
-  invitedBy      String                        @map("invited_by") @db.Uuid
-  expiresAt      DateTime                      @map("expires_at") @db.Timestamptz(6)
-  acceptedAt     DateTime?                     @map("accepted_at") @db.Timestamptz(6)
-  createdAt      DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  id             String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String                       @map("organization_id") @db.Uuid
+  email          String                       @db.Citext
+  role           OrganizationMembershipRole   @default(org_member)
+  tokenHash      String                       @unique @map("token_hash")
+  status         OrganizationInvitationStatus @default(pending)
+  invitedBy      String                       @map("invited_by") @db.Uuid
+  expiresAt      DateTime                     @map("expires_at") @db.Timestamptz(6)
+  acceptedAt     DateTime?                    @map("accepted_at") @db.Timestamptz(6)
+  createdAt      DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   inviter      User         @relation("OrganizationInvitationInviter", fields: [invitedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -367,10 +385,10 @@ model User {
   certificatesAsStudent Certificate[] @relation("CertificateStudent")
   certificatesRevoked   Certificate[] @relation("CertificateRevoker")
 
-  organizationsCreated           Organization[]             @relation("OrganizationCreator")
-  organizationMemberships        OrganizationMembership[]   @relation("OrganizationMembershipUser")
-  organizationMembershipsInvited OrganizationMembership[]    @relation("OrganizationMembershipInviter")
-  organizationInvitationsSent    OrganizationInvitation[]    @relation("OrganizationInvitationInviter")
+  organizationsCreated           Organization[]           @relation("OrganizationCreator")
+  organizationMemberships        OrganizationMembership[] @relation("OrganizationMembershipUser")
+  organizationMembershipsInvited OrganizationMembership[] @relation("OrganizationMembershipInviter")
+  organizationInvitationsSent    OrganizationInvitation[] @relation("OrganizationInvitationInviter")
 
   identities UserIdentity[] @relation("UserIdentities")
 
@@ -462,14 +480,14 @@ model UserRole {
 // sessions actually revocable: the JWT only ever carries this row's id: the
 // row itself is the source of truth for whether the session is still valid.
 model Session {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String    @map("user_id") @db.Uuid
-  userAgent String?   @map("user_agent")
-  ipAddress String?   @map("ip_address")
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
-  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
-  revokedBy String?   @map("revoked_by") @db.Uuid
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  userAgent        String?   @map("user_agent")
+  ipAddress        String?   @map("ip_address")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedBy        String?   @map("revoked_by") @db.Uuid
   // MFA & Account Security (Session 20). Decided once, at createSession()
   // time, from src/lib/mfa.ts's shouldRequireLoginMfa() (the user already
   // has TOTP enabled, OR their role/org is covered by the MFA policy hook)
@@ -480,8 +498,8 @@ model Session {
   // pending session can reach nothing but the MFA challenge itself no
   // matter which route it's pointed at. Reuses this same Session row/
   // revocation model — NOT a second session table.
-  mfaRequired Boolean @default(false) @map("mfa_required")
-  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
+  mfaRequired      Boolean   @default(false) @map("mfa_required")
+  mfaVerifiedAt    DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
   // Step-up authentication (Session 20) — a short-lived "this session just
   // re-proved its current factor" freshness marker, set by
   // src/lib/mfa.ts's verifyStepUp() (or automatically the moment
@@ -509,12 +527,12 @@ model Session {
 // (docs/IDENTITY_SECURITY.md), so encrypting the secret itself is the real
 // backstop against a raw table read ever yielding a usable TOTP seed.
 model TotpCredential {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId            String    @unique @map("user_id") @db.Uuid
-  secretCiphertext  String    @map("secret_ciphertext")
-  enabledAt         DateTime? @map("enabled_at") @db.Timestamptz(6)
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String    @unique @map("user_id") @db.Uuid
+  secretCiphertext String    @map("secret_ciphertext")
+  enabledAt        DateTime? @map("enabled_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -655,17 +673,30 @@ model ProjectMembership {
 // See docs/EDUCATION_CORE.md for the full ownership/visibility model and
 // the RLS policies in this migration's SQL.
 
+// Organization-Aware Education (Session 21): scope/organizationId are the
+// tenant boundary Education Core never had before this session (see this
+// migration's own header comment) — PLATFORM_ARCHITECTURE.md §15's
+// "denormalize onto the tables that need it" precedent applies to
+// Cohort/Assessment/Question below, which each copy organizationId from
+// their Course at creation (immutable once set, same convention as
+// lessons.courseId denormalized from modules.courseId). organizationId is
+// nullable/optional here because a PLATFORM course has none; the
+// organization_aware_education migration's CHECK constraint is the actual
+// enforcement that scope and organizationId can never disagree.
 model Course {
-  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  title       String
-  description String       @default("")
-  status      CourseStatus @default(draft)
-  createdBy   String       @map("created_by") @db.Uuid
-  publishedAt DateTime?    @map("published_at") @db.Timestamptz(6)
-  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title          String
+  description    String       @default("")
+  status         CourseStatus @default(draft)
+  scope          CourseScope  @default(platform)
+  organizationId String?      @map("organization_id") @db.Uuid
+  createdBy      String       @map("created_by") @db.Uuid
+  publishedAt    DateTime?    @map("published_at") @db.Timestamptz(6)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   creator               User                   @relation("CourseCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organization          Organization?          @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   cohorts               Cohort[]
   modules               Module[]
   lessons               Lesson[]
@@ -678,26 +709,33 @@ model Course {
   certificates          Certificate[]
 
   @@index([createdBy])
+  @@index([organizationId])
   @@map("courses")
 }
 
+// organizationId is denormalized from course.organizationId at creation
+// (Session 21) — immutable once set, same convention as lessons.courseId.
+// Null for a cohort of a PLATFORM course.
 model Cohort {
-  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  courseId  String       @map("course_id") @db.Uuid
-  name      String
-  status    CohortStatus @default(active)
-  startsAt  DateTime?    @map("starts_at") @db.Timestamptz(6)
-  endsAt    DateTime?    @map("ends_at") @db.Timestamptz(6)
-  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId       String       @map("course_id") @db.Uuid
+  organizationId String?      @map("organization_id") @db.Uuid
+  name           String
+  status         CohortStatus @default(active)
+  startsAt       DateTime?    @map("starts_at") @db.Timestamptz(6)
+  endsAt         DateTime?    @map("ends_at") @db.Timestamptz(6)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   course                 Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organization           Organization?          @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   teachers               CohortTeacher[]
   enrollments            Enrollment[]
   assessmentAssignments  AssessmentAssignment[]
   broadcastConversations Conversation[]
 
   @@index([courseId])
+  @@index([organizationId])
   @@map("cohorts")
 }
 
@@ -945,9 +983,13 @@ model Bookmark {
 // limitation — so hiding the answer key from an in-progress student attempt
 // is enforced by application-layer redaction, not by a DB policy).
 
+// organizationId is denormalized from course.organizationId at creation
+// (Session 21) — immutable once set. Null for a question of a PLATFORM
+// course.
 model Question {
   id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   courseId          String             @map("course_id") @db.Uuid
+  organizationId    String?            @map("organization_id") @db.Uuid
   type              QuestionType
   prompt            String
   explanation       String             @default("")
@@ -963,6 +1005,7 @@ model Question {
   updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   course              Course               @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organization        Organization?        @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   creator             User                 @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
   options             QuestionOption[]
   topics              QuestionTopic[]
@@ -971,6 +1014,7 @@ model Question {
 
   @@index([courseId])
   @@index([createdBy])
+  @@index([organizationId])
   @@map("questions")
 }
 
@@ -1000,9 +1044,13 @@ model QuestionTopic {
   @@map("question_topics")
 }
 
+// organizationId is denormalized from course.organizationId at creation
+// (Session 21) — immutable once set. Null for an assessment of a PLATFORM
+// course.
 model Assessment {
   id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   courseId            String           @map("course_id") @db.Uuid
+  organizationId      String?          @map("organization_id") @db.Uuid
   title               String
   instructions        String           @default("")
   status              AssessmentStatus @default(draft)
@@ -1015,14 +1063,16 @@ model Assessment {
   createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  course      Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  creator     User                   @relation("AssessmentCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  questions   AssessmentQuestion[]
-  versions    AssessmentVersion[]
-  assignments AssessmentAssignment[]
-  attempts    Attempt[]
+  course       Course                 @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organization Organization?          @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator      User                   @relation("AssessmentCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  questions    AssessmentQuestion[]
+  versions     AssessmentVersion[]
+  assignments  AssessmentAssignment[]
+  attempts     Attempt[]
 
   @@index([courseId])
+  @@index([organizationId])
   @@map("assessments")
 }
 

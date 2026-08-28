@@ -1,3 +1,4 @@
+import type { AuthzActor } from "@/lib/authz";
 import { orgActorFromUser } from "@/lib/test-support";
 import {
   acceptOrganizationMembershipInvite,
@@ -8,8 +9,10 @@ import {
   requestToJoinOrganization,
   suspendMembership,
 } from "@/lib/organizations";
+import { assignTeacherToCohort, createCohort, createCourse, enrollStudent, publishCourse } from "@/lib/courses";
+import { createLesson, createModule, publishLesson, publishModule } from "@/lib/content";
 import type { DemoUserRef } from "./identity";
-import { DEMO_ORGANIZATION_NAMES } from "./constants";
+import { DEMO_ORGANIZATION_NAMES, DEMO_ORG_COURSE_TITLE } from "./constants";
 
 /**
  * Organization Core (Session 17) demo data — reuses existing demo teacher/
@@ -39,8 +42,19 @@ import { DEMO_ORGANIZATION_NAMES } from "./constants";
  * authorized API" convention this demo module's sponsor.ts/content.ts
  * siblings already use — proves the lifecycle end-to-end, not just that
  * rows exist.
+ *
+ * Organization-Aware Education (Session 21): also seeds ONE
+ * ORGANIZATION-scoped course under Baobab Learning Hub (org1) — the
+ * canonical demo dataset otherwise contains only PLATFORM-scoped courses
+ * (content.ts's DEMO_COURSE_TITLES), and this session's feature needs at
+ * least one realistic organization-scoped example (CLAUDE_BUILD_RULES.md
+ * §10). teachers[0] (org1's org_admin, active) teaches it; students[0]
+ * (org1's active org_member) is enrolled — both already active org1
+ * members from the membership lifecycle seeded above, so this exercises
+ * the real assignTeacherToCohort()/enrollStudent() org-membership
+ * integrity check on its happy path, not just a raw insert.
  */
-export async function seedOrganizations(teachers: DemoUserRef[], students: DemoUserRef[]): Promise<void> {
+export async function seedOrganizations(adminActor: AuthzActor, teachers: DemoUserRef[], students: DemoUserRef[]): Promise<void> {
   const founder1 = await orgActorFromUser(teachers[0].id);
   const org1 = await createOrganization(
     {
@@ -93,4 +107,23 @@ export async function seedOrganizations(teachers: DemoUserRef[], students: DemoU
   await requestToJoinOrganization(org2.id, await orgActorFromUser(students[3].id));
   const student3Pending = (await listOrganizationMembers(org2.id, await orgActorFromUser(teachers[3].id))).find((m) => m.userId === students[3].id)!;
   await approveJoinRequest(student3Pending.membershipId, await orgActorFromUser(teachers[3].id));
+
+  // --- Organization-Aware Education (Session 21) demo course ---
+  const orgCourse = await createCourse({ title: DEMO_ORG_COURSE_TITLE, organizationId: org1.id }, adminActor);
+  const orgCohort = await createCohort(orgCourse.id, { name: "2026 Cohort" }, adminActor);
+  await assignTeacherToCohort(orgCohort.id, teachers[0].id, adminActor);
+  await enrollStudent(orgCohort.id, students[0].id, adminActor);
+
+  const orgModule = await createModule(orgCourse.id, { title: "Recording Daily Transactions" }, await orgActorFromUser(teachers[0].id));
+  const orgLesson = await createLesson(
+    orgModule.id,
+    {
+      title: "Keeping a Simple Cash Book",
+      content: "Track every naira in and out of your business, every single day.",
+    },
+    await orgActorFromUser(teachers[0].id)
+  );
+  await publishModule(orgModule.id, await orgActorFromUser(teachers[0].id));
+  await publishLesson(orgLesson.id, await orgActorFromUser(teachers[0].id));
+  await publishCourse(orgCourse.id, adminActor);
 }

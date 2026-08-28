@@ -231,6 +231,19 @@ export interface AuthzActor {
    * missing, the same fail-closed shape as a missing permission.
    */
   sessionId?: string;
+  /**
+   * Organization-Aware Education (Session 21) / Organization Core
+   * (Session 17) — the organization ids the caller holds an ACTIVE
+   * OrganizationMembership in, server-resolved by
+   * src/lib/sessions.ts's resolveSessionAuthz() and always present on a
+   * real session.user (see src/types/next-auth.d.ts). Optional here so
+   * the many existing AuthzActor-typed callers/fixtures that predate
+   * Session 17 (src/lib/test-support.ts's actorFromUser(), certificates.ts's
+   * synthetic actors) still type-check with no organization membership at
+   * all — src/lib/courses.ts's actorRlsCtx() treats a missing value as `[]`,
+   * same convention as src/lib/organizations.ts's OrgActor.
+   */
+  organizationIds?: readonly string[];
 }
 
 export class AuthorizationError extends Error {
