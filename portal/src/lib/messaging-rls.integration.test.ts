@@ -162,6 +162,41 @@ describeIfConfigured("Messaging Row-Level Security (enforced by a non-superuser 
       ).rejects.toThrow();
     });
 
+    it("conversations_select: the creator can see the conversation they just created via Prisma's implicit INSERT...RETURNING, before any participant row exists (session 26 fix — reproduces the exact bug src/lib/messaging.ts's startConversation() hit in production: Postgres RLS governs RETURNING by the SELECT policy, and a brand-new conversation has no conversation_participants row yet at the moment of creation)", async () => {
+      let newConversationId: string | undefined;
+      try {
+        const created = await asContext({ userId: s1.id }, (tx) =>
+          tx.conversation.create({ data: { type: "direct", createdBy: s1.id } })
+        );
+        newConversationId = created.id;
+        expect(created.id).toBeDefined();
+
+        // Immediately after, in the SAME shape startConversation() uses:
+        // no participant row exists yet, so this exercises the exact
+        // bootstrap gap — without the fix, the .create() call above itself
+        // throws "new row violates row-level security policy" before this
+        // line is ever reached.
+        const visible = await asContext({ userId: s1.id }, (tx) =>
+          tx.conversation.findUnique({ where: { id: created.id } })
+        );
+        expect(visible?.id).toBe(created.id);
+
+        // A different, unrelated user (no participant row, didn't create
+        // it) still sees nothing — this fix only grants the creator
+        // visibility into their own row, not a general widening.
+        const outsiderVisible = await asContext({ userId: outsiderStudent.id }, (tx) =>
+          tx.conversation.findUnique({ where: { id: created.id } })
+        );
+        expect(outsiderVisible).toBeNull();
+      } finally {
+        if (newConversationId) {
+          const cleanup = new PrismaClient();
+          await cleanup.conversation.deleteMany({ where: { id: newConversationId } });
+          await cleanup.$disconnect();
+        }
+      }
+    });
+
     it("no recursion: messages_select for a large batch resolves without 'infinite recursion detected in policy'", async () => {
       // A regression guard for the specific bug class this migration's own
       // header comment documents — if the SECURITY DEFINER indirection were
@@ -209,6 +244,14 @@ describeIfConfigured("Messaging Row-Level Security (enforced by a non-superuser 
         tx.enrollment.findMany({ where: { cohortId, studentUserId: { in: [s1.id, s2.id] } } })
       );
       expect(rows).toHaveLength(0);
+    });
+
+    it("users_select: a student can read a classmate's User row (needed by listMessageableForStudent's `include: { student }`, session 26 fix) — an outsider with no shared cohort cannot", async () => {
+      const classmateRow = await asContext({ userId: s1.id }, (tx) => tx.user.findUnique({ where: { id: s2.id } }));
+      expect(classmateRow?.id).toBe(s2.id);
+
+      const outsiderRow = await asContext({ userId: outsiderStudent.id }, (tx) => tx.user.findUnique({ where: { id: s2.id } }));
+      expect(outsiderRow).toBeNull();
     });
   });
 
