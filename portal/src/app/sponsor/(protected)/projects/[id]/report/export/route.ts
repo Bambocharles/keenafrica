@@ -23,12 +23,19 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       // Kubernetes-HOSTNAME-fallback class of bug server-entrypoint.js
       // already documents/works around for Auth.js's own redirects), making
       // this redirect target unreachable. Route Handlers aren't covered by
-      // that workaround, so override just the host/port from the request's
+      // that workaround, so override just the hostname from the request's
       // own Host header (already trusted the same way by src/middleware.ts's
-      // subdomain routing) rather than trusting req.url's host wholesale.
+      // subdomain routing — including its ".split(':')[0]" port-stripping:
+      // the Host header this app actually receives in production carries a
+      // spurious ":3000" backend-port suffix, confirmed live) and clear the
+      // port outright — production is always implicit-443 HTTPS, never a
+      // request the caller's own browser could reach on :3000.
       const target = new URL(`/step-up?returnTo=${encodeURIComponent(`/projects/${projectId}/report/export`)}`, req.url);
       const forwardedHost = req.headers.get("host");
-      if (forwardedHost) target.host = forwardedHost;
+      if (forwardedHost) {
+        target.hostname = forwardedHost.split(":")[0];
+        target.port = "";
+      }
       return Response.redirect(target, 302);
     }
     throw err;
