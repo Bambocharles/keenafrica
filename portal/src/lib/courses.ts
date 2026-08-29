@@ -426,15 +426,45 @@ export async function listEnrollmentsForCohort(cohortId: string, actor: AuthzAct
   );
 }
 
-/** A student's own enrollments — no permission required beyond self-scoping. */
+/**
+ * A student's own enrollments — no permission required beyond self-scoping.
+ *
+ * Deliberately two queries rather than one `include: { cohort: { include: {
+ * course: true } } }`: courses_select's student branch only allows
+ * status IN ('published', 'archived') (drafts stay private per
+ * CLAUDE_BUILD_RULES.md §7), so an active enrollment created before its
+ * course is published — a legitimate admin/teacher workflow (build the
+ * roster while content is still being drafted) — makes RLS hide that one
+ * course row. A nested `include` treats the schema's non-nullable `course`
+ * relation as always-present and Prisma's query engine throws
+ * PrismaClientUnknownRequestError ("Field course is required to return
+ * data, got null instead") for the WHOLE list the moment RLS hides even one
+ * of them, taking down /dashboard and /courses entirely rather than just
+ * omitting that one row. Fetching courses separately and filtering lets a
+ * still-draft course's enrollment drop out silently — the same privacy
+ * outcome courses_select already intends, without the crash. Found live via
+ * Session 27's QA pass (a demo-seed student enrolled in a draft fixture
+ * course, `QA26 Empty Fresh Course`).
+ */
 export async function listMyEnrollments(actor: AuthzActor) {
-  return withRls(actorRlsCtx(actor), (tx) =>
+  const enrollments = await withRls(actorRlsCtx(actor), (tx) =>
     tx.enrollment.findMany({
       where: { studentUserId: actor.id },
       orderBy: { enrolledAt: "desc" },
-      include: { cohort: { include: { course: true } } },
+      include: { cohort: true },
     })
   );
+
+  const courseIds = [...new Set(enrollments.map((e) => e.cohort.courseId))];
+  const courses = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.course.findMany({ where: { id: { in: courseIds } } })
+  );
+  const courseById = new Map(courses.map((c) => [c.id, c]));
+
+  return enrollments.flatMap((e) => {
+    const course = courseById.get(e.cohort.courseId);
+    return course ? [{ ...e, cohort: { ...e.cohort, course } }] : [];
+  });
 }
 
 /** Throws AuthorizationError unless actor has an active/completed enrollment in a cohort of this course. */

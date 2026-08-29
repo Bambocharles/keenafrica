@@ -276,4 +276,47 @@ describeIfConfigured("Education Core Row-Level Security (enforced by a non-super
     await cleanup.user.delete({ where: { id: targetUser.id } });
     await cleanup.$disconnect();
   });
+
+  it("courses_select: reproduces the Session 27 production bug in listMyEnrollments() — an active enrollment in a still-draft course made the OLD single `include: { cohort: { include: { course: true } } }` query throw for the student's ENTIRE enrollment list (a real demo-seed student had exactly this shape: two published-course enrollments plus one active enrollment in a draft fixture course), instead of just omitting that one row. The fix (courses.ts) splits this into two queries so a draft course drops out silently.", async () => {
+    const setup = new PrismaClient();
+    const draftCourse = await setup.course.create({
+      data: { title: "RLS Draft Course (not yet published)", createdBy: admin.id, status: "draft" },
+      select: { id: true },
+    });
+    const draftCohort = await setup.cohort.create({ data: { courseId: draftCourse.id, name: "Draft Cohort" }, select: { id: true } });
+    await setup.enrollment.create({ data: { cohortId: draftCohort.id, studentUserId: student.id, status: "active" } });
+    await setup.$disconnect();
+
+    // The exact pre-fix shape: a single nested include treats Prisma's
+    // non-nullable `course` relation as always-present. RLS legitimately
+    // hides the draft course row from this student, and Prisma's query
+    // engine throws for the whole result set rather than nulling one field.
+    await expect(
+      asContext({ userId: student.id }, (tx) =>
+        tx.enrollment.findMany({
+          where: { studentUserId: student.id },
+          include: { cohort: { include: { course: true } } },
+        })
+      )
+    ).rejects.toThrow(/course/i);
+
+    // The fix: fetch enrollments+cohort, then courses separately, and
+    // filter out any enrollment whose course didn't come back (hidden by
+    // RLS) — mirrors listMyEnrollments()'s actual two-query shape.
+    const enrollments = await asContext({ userId: student.id }, (tx) =>
+      tx.enrollment.findMany({ where: { studentUserId: student.id }, include: { cohort: true } })
+    );
+    const courseIds = [...new Set(enrollments.map((e) => e.cohort.courseId))];
+    const courses = await asContext({ userId: student.id }, (tx) => tx.course.findMany({ where: { id: { in: courseIds } } }));
+    const visibleCourseIds = new Set(courses.map((c) => c.id));
+
+    expect(visibleCourseIds.has(courseId)).toBe(true);
+    expect(visibleCourseIds.has(draftCourse.id)).toBe(false);
+
+    const cleanup = new PrismaClient();
+    await cleanup.enrollment.deleteMany({ where: { cohortId: draftCohort.id } });
+    await cleanup.cohort.delete({ where: { id: draftCohort.id } });
+    await cleanup.course.delete({ where: { id: draftCourse.id } });
+    await cleanup.$disconnect();
+  });
 });
