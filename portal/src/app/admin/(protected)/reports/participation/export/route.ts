@@ -18,10 +18,16 @@ export async function GET(req: Request) {
     await requireStepUp(session.user);
   } catch (err) {
     if (err instanceof StepUpRequiredError) {
-      return Response.redirect(
-        new URL(`/step-up?returnTo=${encodeURIComponent(`/reports/participation/export${url.search}`)}`, url),
-        302
-      );
+      // Session 29 (QA: Security/RLS) — applying Session 28's fix here: see
+      // the completion report export route's comment for the full
+      // req.url-host-unreachable-in-production explanation.
+      const target = new URL(`/step-up?returnTo=${encodeURIComponent(`/reports/participation/export${url.search}`)}`, url);
+      const forwardedHost = req.headers.get("host");
+      if (forwardedHost) {
+        target.hostname = forwardedHost.split(":")[0];
+        target.port = "";
+      }
+      return Response.redirect(target, 302);
     }
     throw err;
   }
