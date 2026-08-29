@@ -166,22 +166,38 @@ deletion does not cover Route Handlers' own `req.url` construction — this
 is a distinct instance of the same underlying class, not a regression of
 that fix.
 
-**Fixed**: the sponsor route now overrides just the `host` (and its
-implicit port) on the constructed redirect URL from the request's own
-`Host` header — the identical header `src/middleware.ts`'s subdomain
-routing already trusts for every request. Protocol/path/query are
-untouched. **Scope note**: the identical pattern (`new URL(path, req.url)`
-inside a step-up redirect) exists in three admin console report-export
-routes (`src/app/admin/(protected)/reports/{completion,participation,assessment-outcomes}/export/route.ts`)
-— same bug, same fix, **not fixed here** (outside Sponsor Core /
+**Fixed, in two passes** (the second caught only by this session's own
+live post-deploy re-verification, not by code review or the local test
+suite — both go through Node's real `URL` implementation the same way,
+but neither reproduces the production Host header's actual shape):
+
+1. First pass overrode `target.host` wholesale from the request's `Host`
+   header. Deployed, then re-verified live: this produced
+   `https://sponsor.keenafrica.com:3000/step-up?...` — the right hostname,
+   but a **still-unreachable** `:3000` port, because the `Host` header
+   this app actually receives in production carries a spurious `:3000`
+   backend-port suffix (the exact reason `src/middleware.ts`'s own
+   subdomain resolution already does `.split(":")[0]` before comparing to
+   `ROOT_DOMAIN` — this route just hadn't followed the same convention).
+2. Second pass sets `target.hostname` from the port-stripped value and
+   clears `target.port` outright (production is always implicit-443
+   HTTPS). Deployed and re-verified live: `302 Location:
+   https://sponsor.keenafrica.com/step-up?returnTo=...` — correct, no
+   port, reachable.
+
+**Scope note**: the identical pattern (`new URL(path, req.url)` inside a
+step-up redirect, same missing port-stripping) exists in three admin
+console report-export routes
+(`src/app/admin/(protected)/reports/{completion,participation,assessment-outcomes}/export/route.ts`)
+— same bug, same two-part fix, **not fixed here** (outside Sponsor Core /
 this session's assigned boundary, `CLAUDE_BUILD_RULES.md` §2) — flagged
 below for whoever owns Reporting/Admin.
 
-**Post-fix re-verification (after deploy — see Database migrations/
-deploy note below)**: re-ran the exact repro live — `GET
-/projects/{id}/report/export` as QA SPONSOR_ADMIN with no fresh step-up →
-`302 Location: https://sponsor.keenafrica.com/step-up?returnTo=...`,
-correct host. (Completing the actual step-up challenge and downloading the
+**Post-fix re-verification (after both deploys)**: re-ran the exact repro
+live after each deploy — `GET /projects/{id}/report/export` as QA
+SPONSOR_ADMIN with no fresh step-up → final result: `302 Location:
+https://sponsor.keenafrica.com/step-up?returnTo=...`, correct host, no
+port. (Completing the actual step-up challenge and downloading the
 CSV body was not additionally re-driven — the redirect target being
 correct is what was broken and is what's fixed; the step-up mechanism
 itself is Session 20's own, already covered by its own tests/QA pass.)
@@ -220,10 +236,19 @@ mutated.
 
 ## Deploy note
 
-Both fixes were committed, pushed, merged to `main`, and deployed to
-production via the normal `deploy-portal.yml` pipeline (`production`
-GitHub Environment gate). See the handoff in `status/project-status.md`
-for the PR number and commit SHA.
+Both bugs' fixes were committed, pushed, and deployed to production via
+the normal `deploy-portal.yml` pipeline (`production` GitHub Environment
+gate, approved live by the site owner both times — this session's sandbox
+cannot approve it, same as every deploy since Session 22):
+
+- **PR #49** (`458fd7b`/`cf5068a`, merge commit `272112d7`) — Bug 1 fix,
+  Bug 2's first-pass fix, and this document.
+- **PR #50** (`05d5fa9`, merge commit `1ace44d0`) — Bug 2's second-pass
+  fix (the `:3000` port strip), opened after this session's own live
+  re-verification of PR #49's deploy caught the port still being wrong.
+
+Both deploys completed successfully; the final live re-verification above
+reflects the state after both.
 
 ## Blockers
 
