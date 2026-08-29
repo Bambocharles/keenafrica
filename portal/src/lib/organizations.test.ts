@@ -299,6 +299,35 @@ describe("invitations", () => {
     expect(secondOutcome).toBe("invalid_or_expired");
   });
 
+  it("SESSION 29 (QA: Security/RLS): a genuinely EXPIRED, never-redeemed invitation token is rejected — not just a reused one", async () => {
+    const founder = await user();
+    const org = await makeOrg(founder);
+    const founderActor = await orgActorFromUser(founder.id);
+    const uniqueEmail = `org-invite-expired-${Date.now()}@example.com`;
+
+    const result = await inviteToOrganization(org.id, uniqueEmail, "org_member", founderActor);
+    expect(result.mode).toBe("email_invitation");
+    if (result.mode !== "email_invitation") throw new Error("unreachable");
+
+    // Force the row into the past directly — this token was never redeemed
+    // before expiring, unlike the "second redemption" case above.
+    await prisma.organizationInvitation.update({
+      where: { id: result.invitationId },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const newUser = await user();
+    const newActor = await actorFromUser(newUser.id);
+    const outcome = await acceptOrganizationInvitation(result.token, newActor);
+    expect(outcome).toBe("invalid_or_expired");
+
+    // No membership of any kind was created by the failed attempt.
+    const membership = await prisma.organizationMembership.findUnique({
+      where: { organizationId_userId: { organizationId: org.id, userId: newUser.id } },
+    });
+    expect(membership).toBeNull();
+  });
+
   it("only an org_admin (or organizations.manage) may invite — a plain member cannot", async () => {
     const founder = await user();
     const org = await makeOrg(founder);

@@ -27,10 +27,24 @@ export async function GET(req: Request) {
       // must be, for the redirect the browser actually follows) is this
       // route's own known, portal-relative location, same "relative to
       // this subdomain" convention the login pages document.
-      return Response.redirect(
-        new URL(`/step-up?returnTo=${encodeURIComponent(`/reports/completion/export${url.search}`)}`, url),
-        302
-      );
+      //
+      // Session 29 (QA: Security/RLS) — applying Session 28's fix here:
+      // req.url's host resolves to the pod's internal bind address in
+      // production (the same Kubernetes-HOSTNAME-fallback class of bug
+      // server-entrypoint.js already documents/works around for Auth.js's
+      // own redirects), making this redirect target unreachable. Override
+      // the hostname from the request's own Host header (already trusted
+      // the same way by src/middleware.ts's subdomain routing, including
+      // its port-stripping — the Host header this app receives in
+      // production carries a spurious ":3000" backend-port suffix) and
+      // clear the port outright — production is always implicit-443 HTTPS.
+      const target = new URL(`/step-up?returnTo=${encodeURIComponent(`/reports/completion/export${url.search}`)}`, url);
+      const forwardedHost = req.headers.get("host");
+      if (forwardedHost) {
+        target.hostname = forwardedHost.split(":")[0];
+        target.port = "";
+      }
+      return Response.redirect(target, 302);
     }
     throw err;
   }

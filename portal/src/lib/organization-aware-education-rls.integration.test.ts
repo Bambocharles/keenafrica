@@ -63,6 +63,8 @@ describeIfConfigured("Organization-Aware Education Row-Level Security (enforced 
   let orgModuleId: string;
   let orgAssessmentId: string;
   let orgQuestionId: string;
+  let orgAssessmentVersionId: string;
+  let orgAttemptId: string;
 
   beforeAll(async () => {
     const setup = new PrismaClient();
@@ -173,11 +175,48 @@ describeIfConfigured("Organization-Aware Education Row-Level Security (enforced 
     });
     orgQuestionId = orgQuestion.id;
 
+    // Attempt/answer fixture on the ORG-scoped assessment — attempts_select/
+    // answers_select predate Session 21 entirely (assessment_core) and were
+    // NOT touched by its migration; their teacher branches join directly to
+    // "cohorts"/"cohort_teachers" (not through a SECURITY DEFINER helper),
+    // so per Postgres's own "a referenced table's RLS policy is re-applied
+    // under the querying session" behavior they SHOULD cascade correctly
+    // from cohorts_select's Session 21 fix — this is exactly the same
+    // "should cascade" assumption that turned out false for users_select's
+    // SECURITY-DEFINER-backed branches above, so it is verified here rather
+    // than trusted.
+    const orgAssessmentVersion = await setup.assessmentVersion.create({
+      data: {
+        assessmentId: orgAssessmentId,
+        version: 1,
+        title: "Org Assessment v1",
+        instructions: "",
+        questions: [],
+        publishedBy: admin.id,
+      },
+      select: { id: true },
+    });
+    orgAssessmentVersionId = orgAssessmentVersion.id;
+
+    const orgAttempt = await setup.attempt.create({
+      data: {
+        assessmentId: orgAssessmentId,
+        assessmentVersionId: orgAssessmentVersionId,
+        studentUserId: memberStudent.id,
+        attemptNumber: 1,
+      },
+      select: { id: true },
+    });
+    orgAttemptId = orgAttempt.id;
+
     await setup.$disconnect();
   });
 
   afterAll(async () => {
     const setup = new PrismaClient();
+    await setup.answer.deleteMany({ where: { attemptId: orgAttemptId } });
+    await setup.attempt.deleteMany({ where: { id: orgAttemptId } });
+    await setup.assessmentVersion.deleteMany({ where: { id: orgAssessmentVersionId } });
     await setup.question.deleteMany({ where: { courseId: { in: [orgCourseId] } } });
     await setup.assessment.deleteMany({ where: { courseId: { in: [orgCourseId] } } });
     await setup.module.deleteMany({ where: { courseId: { in: [orgCourseId] } } });
@@ -336,6 +375,65 @@ describeIfConfigured("Organization-Aware Education Row-Level Security (enforced 
         tx.course.findMany({ where: { id: orgCourseId } })
       );
       expect(courses).toHaveLength(1);
+    });
+
+    it("SESSION 29 ADVERSARIAL — POSITIVE CONTROL: users_select's cohort-relationship branch, teacher-sees-student direction, correctly respects the org boundary (enrollments_select cascades through)", async () => {
+      const outsiderTeacherSeesStudent = await asContext(
+        { userId: outsiderTeacher.id, organizationIds: [orgBId] },
+        (tx) => tx.user.findMany({ where: { id: memberStudent.id } })
+      );
+      expect(outsiderTeacherSeesStudent).toHaveLength(0);
+
+      const memberTeacherSeesStudent = await asContext(
+        { userId: memberTeacher.id, organizationIds: [orgAId] },
+        (tx) => tx.user.findMany({ where: { id: memberStudent.id } })
+      );
+      expect(memberTeacherSeesStudent).toHaveLength(1);
+    });
+
+    it("SESSION 29 ADVERSARIAL — FINDING #1 (P1, confirmed): users_select's student-sees-teacher branch leaks an org-scoped cohort's teacher identity to a student who is NOT a member of that organization", async () => {
+      // outsiderStudent holds a real (raw-inserted) enrollments row on
+      // orgCohortId (Org A) but is only an active member of Org B — the
+      // exact same fixture shape that correctly hides courses/cohorts/
+      // enrollments/assessments/questions from this same actor above. The
+      // "student sees teacher" branch of users_select instead uses
+      // app_current_user_enrolled_cohort_ids() — a SECURITY DEFINER helper
+      // that returns the caller's OWN enrollment cohort_ids with NO
+      // organization check at all (unlike enrollments_select's teacher
+      // branch, which explicitly re-checks app_cohort_organization_id()).
+      // Real-world trigger: any student enrolled in an org-scoped cohort
+      // whose OrganizationMembership later becomes non-active (left/
+      // removed/suspended) — enrollment rows are not cleaned up on
+      // membership changes (an already-documented gap) — permanently
+      // retains this leak going forward, not just in this bypassed-fixture
+      // scenario.
+      const outsiderStudentSeesTeacher = await asContext(
+        { userId: outsiderStudent.id, organizationIds: [orgBId] },
+        (tx) => tx.user.findMany({ where: { id: memberTeacher.id } })
+      );
+      expect(outsiderStudentSeesTeacher).toHaveLength(0);
+    });
+
+    it("SESSION 29 ADVERSARIAL — FINDING #2 (P1, confirmed): users_select's student-sees-classmate branch leaks a fellow org-scoped classmate's identity to a student who is NOT a member of that organization", async () => {
+      // Same root cause as Finding #1 — the classmate branch also drives
+      // through app_current_user_enrolled_cohort_ids() with no org check.
+      const outsiderStudentSeesClassmate = await asContext(
+        { userId: outsiderStudent.id, organizationIds: [orgBId] },
+        (tx) => tx.user.findMany({ where: { id: memberStudent.id } })
+      );
+      expect(outsiderStudentSeesClassmate).toHaveLength(0);
+    });
+
+    it("SESSION 29 ADVERSARIAL — VERIFIED, no bug: attempts_select's teacher branch (assessment_core, predates Session 21) correctly cascades the org boundary via a direct join to cohorts, unlike users_select's SECURITY-DEFINER-backed branches above", async () => {
+      const outsiderRows = await asContext({ userId: outsiderTeacher.id, organizationIds: [orgBId] }, (tx) =>
+        tx.attempt.findMany({ where: { id: orgAttemptId } })
+      );
+      expect(outsiderRows).toHaveLength(0);
+
+      const memberRows = await asContext({ userId: memberTeacher.id, organizationIds: [orgAId] }, (tx) =>
+        tx.attempt.findMany({ where: { id: orgAttemptId } })
+      );
+      expect(memberRows).toHaveLength(1);
     });
   });
 });
