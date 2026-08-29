@@ -18,10 +18,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     await requireStepUp(session.user);
   } catch (err) {
     if (err instanceof StepUpRequiredError) {
-      return Response.redirect(
-        new URL(`/step-up?returnTo=${encodeURIComponent(`/projects/${projectId}/report/export`)}`, req.url),
-        302
-      );
+      // Session 28 (QA Sponsor) — found live: in production, req.url's host
+      // resolves to the pod's internal bind address (0.0.0.0:3000, the same
+      // Kubernetes-HOSTNAME-fallback class of bug server-entrypoint.js
+      // already documents/works around for Auth.js's own redirects), making
+      // this redirect target unreachable. Route Handlers aren't covered by
+      // that workaround, so override just the host/port from the request's
+      // own Host header (already trusted the same way by src/middleware.ts's
+      // subdomain routing) rather than trusting req.url's host wholesale.
+      const target = new URL(`/step-up?returnTo=${encodeURIComponent(`/projects/${projectId}/report/export`)}`, req.url);
+      const forwardedHost = req.headers.get("host");
+      if (forwardedHost) target.host = forwardedHost;
+      return Response.redirect(target, 302);
     }
     throw err;
   }
