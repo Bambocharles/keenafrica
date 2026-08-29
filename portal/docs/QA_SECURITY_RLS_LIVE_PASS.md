@@ -133,16 +133,20 @@ Platform Admin/super_admin's unchanged cross-tenant reach. All still
 
 ## Deploy
 
-Migration `20260829100000_users_select_cohort_relationship_org_boundary`
-applied to production via the standard `prisma migrate deploy` step in
-`deploy-portal.yml`. Application code changes (the three admin export-route
-redirect fixes, plus the migration) merged via PR and deployed the same way
-every prior session's fixes were.
+PR #52 merged to `main`; `deploy-portal.yml` run
+[33244231862](https://github.com/Bambocharles/keenafrica/actions/runs/33244231862)
+completed successfully — confirmed via the run's own log:
+`Applying migration `20260829100000_users_select_cohort_relationship_org_boundary`` /
+`All migrations have been successfully applied` against the real
+`keenafrica_portal_prod` database, followed by `kubectl set image` rolling
+out the new image to `deployment/portal` in `keen-prod`.
 
-Post-deploy live re-check (after the PR below merged and the production
-deploy completed): `GET /reports/completion/export` without a fresh step-up
-now redirects to `https://admin.keenafrica.com/step-up?...` (no port,
-correct host) — confirmed live against the running production pods.
+**Post-deploy live re-check, all three admin export routes**: `GET
+/reports/completion/export`, `/reports/participation/export`, `/reports/
+assessment-outcomes/export` — each without a fresh step-up — now redirect to
+`https://admin.keenafrica.com/step-up?returnTo=...` (correct host, no stray
+`:3000`), confirmed live against the running production pods, matching the
+pre-deploy check that showed all three broken (`https://0.0.0.0:3000/...`).
 
 ## Known limitations
 
