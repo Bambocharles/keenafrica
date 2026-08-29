@@ -472,7 +472,14 @@ export async function listProjectTeam(projectId: string, actor: AuthzActor): Pro
 // --- Beneficiaries (privacy-aware — see this file's header) ----------------
 
 function anonymizedDisplayName(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  // Strip a trailing parenthetical annotation (e.g. "QA Student
+  // (non-production test account)") before splitting into name parts —
+  // otherwise the last "word" is the annotation's own last token, not the
+  // person's actual last name (found live in Session 28's QA pass: "QA
+  // Student (non-production test account)" anonymized to "QA a." instead
+  // of "QA S.", because parts[parts.length - 1] was "account)").
+  const nameOnly = fullName.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const parts = nameOnly.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "Beneficiary";
   if (parts.length === 1) return parts[0];
   return `${parts[0]} ${parts[parts.length - 1][0]}.`;

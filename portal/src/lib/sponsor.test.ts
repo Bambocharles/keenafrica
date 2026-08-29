@@ -230,6 +230,24 @@ describe("beneficiary privacy — listProjectBeneficiaries never exposes contact
     expect(count).toBe(1);
   });
 
+  it("strips a trailing parenthetical annotation before computing the last-name initial", async () => {
+    // Regression for a bug found live in Session 28's QA pass: every QA
+    // fixture account is named "QA <Role> (non-production test account)" —
+    // naively taking the last whitespace-split token produced "QA a."
+    // (from "account)") instead of "QA S.".
+    const { adminActor, project } = await makeSponsorAndProject();
+    const beneficiary = await user({ status: "active" });
+    await prisma.user.update({
+      where: { id: beneficiary.id },
+      data: { name: "QA Student (non-production test account)" },
+    });
+    await prisma.projectMembership.create({ data: { userId: beneficiary.id, projectId: project.id, role: "beneficiary" } });
+
+    const list = await listProjectBeneficiaries(project.id, adminActor);
+    expect(list).toHaveLength(1);
+    expect(list[0].displayName).toBe("QA S.");
+  });
+
   it("addProjectBeneficiary requires sponsor.manage, not just sponsor.users.manage", async () => {
     const { project } = await makeSponsorAndProject();
     const sponsorAdmin = await user({ roles: ["SPONSOR_ADMIN"] });
