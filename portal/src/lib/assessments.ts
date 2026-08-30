@@ -108,16 +108,62 @@ export async function archiveAssessment(assessmentId: string, actor: AuthzActor)
   await recordAuditEvent({ actorId: actor.id, action: "assessment.archived", entityType: "Assessment", entityId: assessmentId });
 }
 
-/** Requires courses.manage, super_admin, or being a teacher on the course — includes draft assessments. */
+/**
+ * Requires courses.manage, super_admin, or being a teacher on the course —
+ * includes draft assessments.
+ *
+ * Session 31 (P0 root cause): this used to be a single findMany with
+ * `include: { _count: { select: { questions, attempts, assignments } } } }`.
+ * Prisma implements a relation `_count` as a LEFT JOIN to an UNFILTERED
+ * "WHERE 1=1 GROUP BY assessment_id" subquery over the ENTIRE questions/
+ * attempts/assignments tables — it does not push this query's own
+ * `courseId` filter into those subqueries. Because those tables' RLS
+ * policies (assessment_core migration) contain EXISTS clauses that
+ * reference assessments/assessment_assignments/cohorts, which reference
+ * each other in turn, Postgres has to re-evaluate that whole nested policy
+ * chain for every row in questions/attempts/assignments PLATFORM-WIDE, not
+ * just this course's rows — confirmed via EXPLAIN against the real
+ * portal_rls_test role (see status/project-status.md's Session 31
+ * handoff). That combinatorial per-row cost, accumulated across many
+ * sessions' worth of real attempts/assignments rows, is what actually
+ * produced the ~18-28s query time that exceeded Prisma's 5s interactive
+ * transaction timeout (P2028) — not a lock, not a missing index.
+ *
+ * Fix: fetch the course's (already small, already RLS-filtered)
+ * assessment ids first, then compute each count via a separate `groupBy`
+ * explicitly filtered to those ids. Same RLS policies, same visible
+ * counts, same authorization — just bounded to this course's own rows
+ * instead of the whole platform.
+ */
 export async function listAssessmentsForCourse(courseId: string, actor: AuthzActor) {
   await requireAssessmentReadAccess(courseId, actor);
-  return withRls(actorRlsCtx(actor), (tx) =>
-    tx.assessment.findMany({
+  return withRls(actorRlsCtx(actor), async (tx) => {
+    const assessments = await tx.assessment.findMany({
       where: { courseId },
       orderBy: { createdAt: "desc" },
-      include: { _count: { select: { questions: true, attempts: true, assignments: true } } },
-    })
-  );
+    });
+    const ids = assessments.map((a) => a.id);
+    const [questionCounts, attemptCounts, assignmentCounts] = ids.length
+      ? await Promise.all([
+          tx.assessmentQuestion.groupBy({ by: ["assessmentId"], where: { assessmentId: { in: ids } }, _count: { _all: true } }),
+          tx.attempt.groupBy({ by: ["assessmentId"], where: { assessmentId: { in: ids } }, _count: { _all: true } }),
+          tx.assessmentAssignment.groupBy({ by: ["assessmentId"], where: { assessmentId: { in: ids } }, _count: { _all: true } }),
+        ])
+      : [[], [], []];
+    const toMap = (rows: { assessmentId: string; _count: { _all: number } }[]) =>
+      new Map(rows.map((r) => [r.assessmentId, r._count._all]));
+    const questionsMap = toMap(questionCounts);
+    const attemptsMap = toMap(attemptCounts);
+    const assignmentsMap = toMap(assignmentCounts);
+    return assessments.map((a) => ({
+      ...a,
+      _count: {
+        questions: questionsMap.get(a.id) ?? 0,
+        attempts: attemptsMap.get(a.id) ?? 0,
+        assignments: assignmentsMap.get(a.id) ?? 0,
+      },
+    }));
+  });
 }
 
 export async function getAssessmentById(assessmentId: string, actor: AuthzActor) {

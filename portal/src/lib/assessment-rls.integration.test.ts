@@ -227,4 +227,50 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
     const teacherRows = await asContext({ userId: teacher.id }, (tx) => tx.answer.findMany({ where: { id: answer.id } }));
     expect(teacherRows).toHaveLength(1);
   });
+
+  // Session 31 P0 root cause: listAssessmentsForCourse() used to fetch its
+  // per-assessment question/attempt/assignment counts via Prisma's
+  // `include: { _count: { select: {...} } } }`, which generates an
+  // UNFILTERED "WHERE 1=1 GROUP BY assessment_id" subquery over the ENTIRE
+  // questions/attempts/assignments tables rather than scoping it to the
+  // assessments actually being listed. Because those tables' RLS policies
+  // contain EXISTS clauses that recurse back through assessments/
+  // assessment_assignments/cohorts, Postgres had to re-evaluate that whole
+  // nested policy chain for every row in those tables PLATFORM-WIDE, not
+  // just the course being queried — a cost that scaled with total rows
+  // accumulated across every course/session, not with this course's own
+  // data. That is what actually produced the ~18-28s query time that blew
+  // past Prisma's 5s interactive transaction timeout (P2028) in production
+  // — not a lock, not a missing index (see status/project-status.md's
+  // Session 31 handoff for the full evidence trail). The fix (src/lib/
+  // assessments.ts) replaced the `_count` include with explicit `groupBy`
+  // calls filtered to the specific assessment ids already selected. This
+  // test proves that shape under the REAL RLS-enforcing role: the base
+  // scan of each counted table must be conditioned on the assessment id,
+  // not an unfiltered/whole-table scan — reverting to the old `_count`
+  // include pattern would make every assertion below fail.
+  it("Session 31 P0 regression: per-assessment counts must be scoped to the specific assessment id(s), not an unfiltered whole-table scan under RLS", async () => {
+    const explainOne = (table: "assessment_questions" | "attempts" | "assessment_assignments") =>
+      asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, (tx) =>
+        tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(
+          `EXPLAIN SELECT COUNT(*), assessment_id FROM ${table} WHERE assessment_id = '${assessmentId}'::uuid GROUP BY assessment_id`
+        )
+      );
+
+    for (const table of ["assessment_questions", "attempts", "assessment_assignments"] as const) {
+      const rows = await explainOne(table);
+      const planText = rows.map((r) => r["QUERY PLAN"]).join("\n");
+      // The base scan of `table` itself (its own top-level line, not a
+      // nested table pulled in by an RLS policy's own EXISTS check) must
+      // carry an `Index Cond: (assessment_id = ...)` on the VERY NEXT
+      // line — proving Postgres used the id to narrow the scan before
+      // ever reaching a row. The old unfiltered `_count` include pattern
+      // instead shows a bare `Filter:` there (a whole-index/whole-table
+      // scan with no narrowing condition) — this is the exact
+      // discriminator that fails against that pattern, confirmed by
+      // running this same query unfiltered (`WHERE 1=1`) while authoring
+      // this test.
+      expect(planText).toMatch(new RegExp(`on ${table}\\b[^\\n]*\\n\\s*Index Cond: \\(assessment_id`));
+    }
+  });
 });
