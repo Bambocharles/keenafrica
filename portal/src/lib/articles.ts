@@ -404,6 +404,34 @@ export async function getArticleForEdit(articleId: string, actor: AuthzActor) {
 
 const PUBLIC_PAGE_SIZE = 20;
 
+/**
+ * Narrow internal system context (mirrors certificates.ts's
+ * systemCertificateCtx()/progress.ts's systemProgressCtx() convention) —
+ * used ONLY here, to resolve an author's display name for a public,
+ * unauthenticated page. users_select's RLS has no anonymous branch at all
+ * (by design — Session 02 never intended arbitrary user rows to be
+ * publicly readable), so a plain `include: { author: {...} } }` under
+ * withRls({}) makes Prisma's inner join come back null for the
+ * (non-optional) author relation and throw
+ * PrismaClientUnknownRequestError — reproduced live in production
+ * immediately after this session's own deploy (public pages 500ing) and
+ * fixed here. This bypasses RLS deliberately, narrowly, and only to select
+ * `name` — never email/passwordHash/isSuperAdmin/anything else — for
+ * users who are already known (by the caller) to be the author of a
+ * published, publicly-readable article. A denormalized `authorName`
+ * snapshot column on Article (the same pattern Certificate's
+ * studentNameSnapshot/courseTitleSnapshot already use) would be the more
+ * architecturally clean long-term fix; flagged in docs/KEEN_AFRICANS.md
+ * as a follow-up rather than done as part of this incident fix.
+ */
+async function authorNamesByIds(userIds: string[]): Promise<Map<string, string>> {
+  if (userIds.length === 0) return new Map();
+  const users = await withRls({ isSuperAdmin: true }, (tx) =>
+    tx.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
+  );
+  return new Map(users.map((u) => [u.id, u.name]));
+}
+
 export async function listPublishedArticles(opts: { page?: number; tag?: string } = {}) {
   const page = Math.max(1, opts.page ?? 1);
   const where = {
@@ -418,23 +446,24 @@ export async function listPublishedArticles(opts: { page?: number; tag?: string 
         orderBy: { publishedAt: "desc" },
         skip: (page - 1) * PUBLIC_PAGE_SIZE,
         take: PUBLIC_PAGE_SIZE,
-        include: { author: { select: { name: true } } },
       }),
       tx.article.count({ where }),
     ])
   );
 
-  return { articles, total, page, pageSize: PUBLIC_PAGE_SIZE };
+  const names = await authorNamesByIds(articles.map((a) => a.authorId));
+  const withAuthor = articles.map((a) => ({ ...a, author: { name: names.get(a.authorId) ?? "Keen African" } }));
+
+  return { articles: withAuthor, total, page, pageSize: PUBLIC_PAGE_SIZE };
 }
 
 /** Public article page — published only, no login. Returns null for anything else (draft/archived/unknown slug) so the route can 404 uniformly rather than leaking existence. */
 export async function getPublicArticleBySlug(slug: string) {
-  return withRls({}, (tx) =>
-    tx.article.findFirst({
-      where: { slug, status: "published" },
-      include: { author: { select: { name: true } } },
-    })
-  );
+  const article = await withRls({}, (tx) => tx.article.findFirst({ where: { slug, status: "published" } }));
+  if (!article) return null;
+
+  const names = await authorNamesByIds([article.authorId]);
+  return { ...article, author: { name: names.get(article.authorId) ?? "Keen African" } };
 }
 
 /**

@@ -193,6 +193,29 @@ describeIfConfigured("Keen Africans Row-Level Security (enforced by a non-superu
     expect(asset?.id).toBe(publishedCoverAssetId);
   });
 
+  it("regression: an anonymous caller can read a published article WITHOUT a nested author include throwing — users_select has no anonymous branch, so a naive `include: { author }` on this query would 500 in production (caught live, fixed in src/lib/articles.ts's authorNamesByIds())", async () => {
+    // This is the exact shape src/lib/db.ts's application code runs under
+    // withRls({}) — proven directly against the real restricted role
+    // rather than the local-dev superuser connection every other test file
+    // implicitly runs through (see src/lib/test-support.ts's own docstring:
+    // "in local dev this is the Postgres superuser connection, bypasses
+    // RLS entirely" — which is exactly why this class of bug was invisible
+    // to every other test in this session and only surfaced live in prod).
+    const article = await asAnonymous((tx) => tx.article.findFirst({ where: { id: publishedArticleId } }));
+    expect(article?.id).toBe(publishedArticleId);
+
+    // The bug: a plain relation include on the same query, run anonymously.
+    // users_select denies the anonymous caller entirely, so Prisma's inner
+    // join for the required (non-optional) author relation comes back
+    // null and Prisma throws "Inconsistent query result: Field author is
+    // required to return data, got `null` instead" — reproduced here.
+    await expect(
+      asAnonymous((tx) =>
+        tx.article.findFirst({ where: { id: publishedArticleId }, include: { author: { select: { name: true } } } })
+      )
+    ).rejects.toThrow();
+  });
+
   it("asset_attachments/assets cascade: an anonymous caller cannot see a draft article's cover asset", async () => {
     const attachment = await asAnonymous((tx) =>
       tx.assetAttachment.findFirst({ where: { assetId: draftCoverAssetId, entityType: "article_cover" } })
