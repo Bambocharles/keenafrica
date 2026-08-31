@@ -1,9 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
-import { canAccessAdminConsole, hasPermission, PERMISSIONS } from "@/lib/authz";
-import { getUnreadNotificationCount } from "@/lib/notifications";
-import { NotificationBell } from "@/components/ui";
+import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { TopbarTitle } from "./TopbarTitle";
 import { NavLinks } from "./NavLinks";
 import styles from "./layout.module.css";
@@ -15,58 +13,41 @@ function initials(name: string | null | undefined, email: string | null | undefi
   return source.slice(0, 2).toUpperCase();
 }
 
-export default async function ProtectedAdminLayout({
+export default async function ProtectedKeenAfricansLayout({
   children,
 }: {
   children: ReactNode;
 }) {
   const session = await auth();
-  // Extended off the old isSuperAdmin-only gate (Session 03) onto Session
-  // 02's Role/Permission model — this is only the coarse "can see the
-  // console shell" check. Every page/action inside still enforces its own
-  // requirePermission()/requireOwnResourceOrPermission(), so a
-  // TROUBLESHOOTER (say) reaching this layout does not imply it can do
-  // anything beyond its actual, narrower permission set.
+  // Coarse "can see the author dashboard shell" gate only (mirrors every
+  // other portal's layout guard). Every page/action inside still enforces
+  // its own ownership-scoped check against src/lib/articles.ts — holding
+  // the KEEN_AFRICAN role alone grants nothing without author_id matching.
   if (!session?.user) {
     redirect("/login");
   }
-  // MFA & Account Security (Session 20) — a still-pending session already
-  // carries a valid, unrevoked JWT (so `session.user` exists) but
-  // resolveSessionAuthz() zeroed out roles/permissions/isSuperAdmin for it,
-  // so canAccessAdminConsole() below would already correctly deny it —
-  // this just sends it to the right place instead of bouncing to /login.
   if (session.user.mfaPending) {
     redirect("/mfa");
   }
-  if (!canAccessAdminConsole(session.user)) {
+  if (!canAccessKeenAfricanPortal(session.user)) {
     redirect("/login");
   }
   const user = session.user;
-  const unreadCount = await getUnreadNotificationCount(user);
 
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
         <a href="/dashboard" className={styles.brand}>
           <span className={styles.mark}>K</span>
-          Keen Africa
+          Keen Africans
         </a>
 
-        <NavLinks
-          showUsers={hasPermission(user, PERMISSIONS.USERS_READ)}
-          showAudit={hasPermission(user, PERMISSIONS.AUDIT_READ)}
-          showEducation={hasPermission(user, PERMISSIONS.COURSES_MANAGE)}
-          showMessages={user.isSuperAdmin || hasPermission(user, PERMISSIONS.MESSAGES_ADMIN)}
-          showReports={user.isSuperAdmin || hasPermission(user, PERMISSIONS.COURSES_MANAGE)}
-          showCertificates={user.isSuperAdmin || hasPermission(user, PERMISSIONS.CERTIFICATES_MANAGE)}
-          showOrganizations={hasPermission(user, PERMISSIONS.ORGANIZATIONS_MANAGE)}
-          showKeenAfricans={user.isSuperAdmin || hasPermission(user, PERMISSIONS.ARTICLES_MANAGE)}
-        />
+        <NavLinks />
 
         <div className={styles.foot}>
           <div className={styles.footRow}>
             <div style={{ minWidth: 0 }}>
-              <div className={styles.userName}>{user.name ?? "Admin"}</div>
+              <div className={styles.userName}>{user.name ?? "Keen African"}</div>
               <div className={styles.userEmail}>{user.email}</div>
             </div>
             <span className={styles.envTag}>Production</span>
@@ -88,7 +69,6 @@ export default async function ProtectedAdminLayout({
         <header className={styles.topbar}>
           <TopbarTitle />
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <NotificationBell unreadCount={unreadCount} />
             <div className={styles.avatar} title={user.email ?? undefined}>
               {initials(user.name, user.email)}
             </div>

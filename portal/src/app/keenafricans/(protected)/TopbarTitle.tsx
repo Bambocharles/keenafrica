@@ -5,13 +5,8 @@ import styles from "./layout.module.css";
 
 const TITLES: Array<[prefix: string, title: string]> = [
   ["/dashboard", "Dashboard"],
-  ["/reports", "Reports"],
-  ["/certificates", "Certificates"],
-  ["/users", "Users"],
-  ["/audit", "Audit Log"],
-  ["/flags", "Feature Flags"],
-  ["/keen-africans", "Keen Africans"],
-  ["/notifications", "Notifications"],
+  ["/articles/new", "New article"],
+  ["/articles", "Edit article"],
 ];
 
 export function TopbarTitle() {

@@ -25,6 +25,9 @@ async function subdomainSignupRole(): Promise<RegisterableRole | undefined> {
     const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
     if (host === `teacher.${rootDomain}`) return "TEACHER";
     if (host === `student.${rootDomain}`) return "STUDENT";
+    // Session 34 (Keen Africans) — same convention, third self-registerable
+    // subdomain.
+    if (host === `keenafricans.${rootDomain}`) return "KEEN_AFRICAN";
     return undefined;
   } catch {
     // Fails safe: no role resolved means resolveGoogleSignIn() will never

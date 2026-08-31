@@ -145,11 +145,19 @@ enum AssetStatus {
 // below); like 'message', a Certificate has no direct asset_id column —
 // the downloadable file is purely an AssetAttachment join, generated once
 // at issuance time (src/lib/certificates.ts's attachDownloadableCertificate).
+// 'article_cover' added by Session 34 (Keen Africans) — same split-migration
+// requirement as the values above. Anchor row is Article (see the Keen
+// Africans section below); mirrors Resource's role for 'lesson_resource'
+// (Article.coverAssetId is a direct FK, same as Resource.assetId, with the
+// AssetAttachment row existing alongside it purely so the general Asset
+// visibility model — canAccessAsset()/RLS cascade — needs no special-casing
+// for this entity type).
 enum AssetEntityType {
   lesson_resource
   message
   sponsor_document
   certificate
+  article_cover
 }
 
 // Session 10 (Notifications). event-to-notification mapping — see
@@ -345,6 +353,15 @@ model User {
   isSuperAdmin Boolean    @default(false) @map("is_super_admin")
   status       UserStatus @default(active)
   suspendedAt  DateTime?  @map("suspended_at") @db.Timestamptz(6)
+  // Session 34 (Keen Africans) — set once by
+  // src/lib/email-verification.ts's confirmEmailVerification(). Not tied to
+  // any particular role/portal (denormalized onto the canonical User, same
+  // convention as passwordHash/isSuperAdmin) but today only ever gates one
+  // thing: src/lib/articles.ts's publishArticle() requires it before a
+  // self-registered Keen African's first publish. Nullable/unset for every
+  // account created before this session and for admin/seed-provisioned
+  // accounts — nothing else in the platform currently reads this column.
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(6)
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -353,6 +370,7 @@ model User {
   userRoles                UserRole[]
   sessions                 Session[]
   passwordResetTokens      PasswordResetToken[]
+  emailVerificationTokens  EmailVerificationToken[]
   auditEventsAsActor       AuditEvent[]         @relation("AuditActor")
 
   coursesCreated          Course[]        @relation("CourseCreator")
@@ -394,6 +412,10 @@ model User {
 
   totpCredential TotpCredential?
   recoveryCodes  RecoveryCode[]
+
+  // Session 34 (Keen Africans).
+  articles          Article[] @relation("ArticleAuthor")
+  articlesModerated Article[] @relation("ArticleModerator")
 
   @@map("users")
 }
@@ -574,6 +596,24 @@ model PasswordResetToken {
 
   @@index([userId])
   @@map("password_reset_tokens")
+}
+
+// Session 34 (Keen Africans) — same shape as PasswordResetToken above
+// (single-use, hashed, TTL'd, pre-auth-lookup-only RLS carve-out). Backs
+// src/lib/email-verification.ts. Only the token's SHA-256 hash is ever
+// persisted; the raw token exists only in the outgoing email.
+model EmailVerificationToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
 }
 
 // Append-only. No UPDATE/DELETE RLS policy exists for this table at all —
@@ -1301,6 +1341,7 @@ model Asset {
   attachments      AssetAttachment[]
   resources        Resource[]
   projectDocuments ProjectDocument[]
+  articleCovers    Article[]         @relation("ArticleCover")
 
   @@index([uploaderId])
   @@map("assets")
@@ -1617,4 +1658,51 @@ model Certificate {
   @@index([studentUserId])
   @@index([courseId])
   @@map("certificates")
+}
+
+// --- Keen Africans (Session 34) -------------------------------------------
+//
+// Self-serve publishing, deliberately its own trust model from the
+// education platform: open self-registration (KEEN_AFRICAN role, granted by
+// src/lib/registration.ts's REGISTERABLE_ROLES), no approval gate, publicly
+// readable without login once published. Reuses the canonical User/Session/
+// RLS/Asset infrastructure exactly as every other module does — no parallel
+// identity/file system.
+//
+// Content lifecycle reuses ContentStatus (draft -> published -> archived,
+// same enum Module/Lesson already use) rather than a new status type.
+// `body` is Markdown, never raw HTML — rendered server-side through one
+// shared template (src/lib/articles.ts's renderArticleBodyHtml(), marked +
+// sanitize-html) so no self-registered author can inject a script tag into
+// a page served under the keenafrica.com domain. moderatedAt/moderatedBy/
+// moderationNote are set ONLY by the admin "unpublish" safety valve
+// (src/lib/articles.ts's adminUnpublishArticle()) — the acceptable
+// alternative to pre-publish review this session's brief calls for; the
+// action is also independently recorded in AuditEvent, same as every other
+// sensitive action in this codebase, this is just enough state for the
+// author's own dashboard to explain why their article came down.
+model Article {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authorId         String        @map("author_id") @db.Uuid
+  title            String
+  slug             String        @unique
+  body             String
+  excerpt          String?
+  tags             String[]      @default([])
+  status           ContentStatus @default(draft)
+  coverAssetId     String?       @map("cover_asset_id") @db.Uuid
+  publishedAt      DateTime?     @map("published_at") @db.Timestamptz(6)
+  moderatedAt      DateTime?     @map("moderated_at") @db.Timestamptz(6)
+  moderatedBy      String?       @map("moderated_by") @db.Uuid
+  moderationNote   String?       @map("moderation_note")
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  author     User  @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  coverAsset Asset? @relation("ArticleCover", fields: [coverAssetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  moderator  User?  @relation("ArticleModerator", fields: [moderatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([authorId])
+  @@index([status, publishedAt])
+  @@map("articles")
 }

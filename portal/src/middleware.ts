@@ -8,6 +8,7 @@ const RESERVED_SLUGS = new Set([
   "teacher",
   "student",
   "sponsor",
+  "keenafricans",
   "www",
   "api",
   "app",
@@ -61,6 +62,18 @@ export function middleware(req: NextRequest) {
   if (subdomain === "sponsor") {
     const url = req.nextUrl.clone();
     url.pathname = `/sponsor${pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  // Session 34 (Keen Africans) — same rewrite shape as
+  // "admin"/"teacher"/"student"/"sponsor" above. keenafricans.<root> is the
+  // public, self-serve publishing section: open self-registration, no
+  // approval gate, published articles readable with no login at all. A
+  // reserved top-level portal, not a {slug} tenant path (mirrors "sponsor"
+  // above, not the /t/[slug] project-tenant fallthrough below it).
+  if (subdomain === "keenafricans") {
+    const url = req.nextUrl.clone();
+    url.pathname = `/keenafricans${pathname}`;
     return NextResponse.rewrite(url);
   }
 

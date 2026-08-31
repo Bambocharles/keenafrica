@@ -17,6 +17,12 @@ export const ROLE_NAMES = [
   "STUDENT",
   "SPONSOR_ADMIN",
   "SPONSOR_USER",
+  // Added by Session 34 (Keen Africans) — granted automatically on
+  // registration through the keenafricans.<root> signup flow only (see
+  // src/lib/registration.ts's REGISTERABLE_ROLES). Deliberately NOT tied to
+  // Organization Core: an individual publishing under their own name isn't
+  // institutional tenancy.
+  "KEEN_AFRICAN",
 ] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
@@ -106,6 +112,16 @@ export const PERMISSIONS = {
   // organization-scoped capability comes entirely from org_admin
   // membership, never from a global Role.
   ORGANIZATIONS_MANAGE: "organizations.manage",
+  // Added by Session 34 (Keen Africans). articles.write is ownership-scoped
+  // in practice, same shape as courses.content.write/sponsor.projects.read:
+  // holding it only lets src/lib/articles.ts's mutations touch a row whose
+  // author_id already matches the actor (both in application code AND at
+  // the RLS layer — see the keen_africans_articles migration). articles.manage
+  // is the admin/moderation key (ADMIN/SUPER_ADMIN, via ALL_PERMISSION_KEYS):
+  // read/edit/unpublish ANY article, the "no pre-publish review" safety
+  // valve this session's brief requires.
+  ARTICLES_WRITE: "articles.write",
+  ARTICLES_MANAGE: "articles.manage",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
@@ -143,6 +159,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   // grants nothing — see src/lib/sponsor.ts.
   SPONSOR_ADMIN: [PERMISSIONS.SPONSOR_PROJECTS_READ, PERMISSIONS.SPONSOR_USERS_MANAGE],
   SPONSOR_USER: [PERMISSIONS.SPONSOR_PROJECTS_READ],
+  // Ownership-scoped in practice, same shape as TEACHER/SPONSOR_ADMIN above:
+  // holding articles.write with no matching author_id row grants nothing.
+  KEEN_AFRICAN: [PERMISSIONS.ARTICLES_WRITE],
 };
 
 /**
@@ -212,6 +231,20 @@ export const SPONSOR_PORTAL_ROLES: readonly RoleName[] = ["SPONSOR_ADMIN", "SPON
 export function canAccessSponsorPortal(actor: AdminConsoleActor | null | undefined): boolean {
   if (!actor) return false;
   return actor.isSuperAdmin || actor.roles.some((r) => (SPONSOR_PORTAL_ROLES as readonly string[]).includes(r));
+}
+
+/**
+ * Added by Session 34 (Keen Africans). Coarse "can see the author dashboard
+ * shell" gate, same shape as canAccessSponsorPortal(). Grants nothing on its
+ * own — every page/action inside still enforces articles.write PLUS
+ * author_id ownership per article (src/lib/articles.ts), same "permission +
+ * ownership" shape as courses.content.write/cohort_teachers.
+ */
+export const KEEN_AFRICAN_PORTAL_ROLES: readonly RoleName[] = ["KEEN_AFRICAN"];
+
+export function canAccessKeenAfricanPortal(actor: AdminConsoleActor | null | undefined): boolean {
+  if (!actor) return false;
+  return actor.isSuperAdmin || actor.roles.some((r) => (KEEN_AFRICAN_PORTAL_ROLES as readonly string[]).includes(r));
 }
 
 /** The minimal shape any caller (session.user, a test fixture) needs. */
