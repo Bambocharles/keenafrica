@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
+import { getUnreadNotificationCount } from "@/lib/notifications";
+import { NotificationBell } from "@/components/ui";
 import { TopbarTitle } from "./TopbarTitle";
 import { NavLinks } from "./NavLinks";
 import styles from "./layout.module.css";
@@ -33,6 +35,7 @@ export default async function ProtectedKeenAfricansLayout({
     redirect("/login");
   }
   const user = session.user;
+  const unreadCount = await getUnreadNotificationCount(user);
 
   return (
     <div className={styles.shell}>
@@ -69,6 +72,7 @@ export default async function ProtectedKeenAfricansLayout({
         <header className={styles.topbar}>
           <TopbarTitle />
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <NotificationBell unreadCount={unreadCount} />
             <div className={styles.avatar} title={user.email ?? undefined}>
               {initials(user.name, user.email)}
             </div>

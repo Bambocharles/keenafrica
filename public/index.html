@@ -87,6 +87,8 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-shrink: 0;
+    white-space: nowrap;
     font-family: var(--font-display);
     font-weight: 500;
     font-size: 22px;
@@ -101,11 +103,14 @@
   }
   .nav-links {
     display: flex;
+    flex-wrap: wrap;
+    row-gap: 8px;
     gap: 26px;
     list-style: none;
     font-size: 15px;
     font-weight: 500;
   }
+  .nav-links a, .nav-links .nav-dropdown-toggle { white-space: nowrap; }
   .nav-links a { color: var(--ink-soft); transition: color 0.2s; }
   .nav-links a:hover { color: var(--green-deep); }
   .nav-cta {
@@ -118,9 +123,74 @@
     border-radius: 999px;
     font-size: 14px;
     font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
     transition: transform 0.2s, background 0.2s;
   }
   .nav-cta:hover { background: var(--terracotta); transform: translateY(-1px); }
+
+  /* Portal login dropdown */
+  .nav-dropdown { position: relative; display: flex; align-items: center; }
+  .nav-dropdown-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-soft);
+    font: inherit;
+    transition: color 0.2s;
+  }
+  .nav-dropdown-toggle:hover { color: var(--green-deep); }
+  .nav-dropdown-toggle svg { transition: transform 0.2s; }
+  .nav-dropdown.open .nav-dropdown-toggle { color: var(--green-deep); }
+  .nav-dropdown.open .nav-dropdown-toggle svg { transform: rotate(180deg); }
+  .nav-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 16px);
+    left: 50%;
+    transform: translateX(-50%) translateY(-6px);
+    min-width: 210px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 60;
+  }
+  .nav-dropdown.open .nav-dropdown-menu {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+  }
+  .nav-dropdown-heading {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    padding: 8px 12px 4px;
+  }
+  .nav-dropdown-item {
+    display: block;
+    padding: 9px 12px;
+    border-radius: 6px;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    transition: background 0.15s, color 0.15s;
+  }
+  .nav-dropdown-item:hover, .nav-dropdown-item:focus-visible { background: var(--cream-2); color: var(--green-deep); }
+  .nav-dropdown-item.indent { padding-left: 22px; }
+  .nav-dropdown-divider { height: 1px; background: var(--line); margin: 6px 4px; }
+
   .nav-toggle {
     display: none;
     width: 40px;
@@ -149,6 +219,22 @@
     border-top: 1px solid var(--line);
   }
   .mobile-menu-links a:hover { color: var(--green-deep); }
+  .mobile-menu-heading {
+    padding: 14px 0 4px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    border-top: 1px solid var(--line);
+  }
+  .mobile-menu-subheading {
+    padding: 10px 0 2px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-muted);
+  }
+  .mobile-menu-links a.mobile-sub-item { border-top: none; padding: 8px 0 8px 16px; font-size: 15px; }
   .mobile-menu-cta { margin-top: 16px; justify-content: center; width: 100%; }
   @media (max-width: 900px) {
     .nav-links, .nav-cta { display: none; }
@@ -671,6 +757,21 @@
         <li><a href="learn/index.html">Learning Lab</a></li>
         <li><a href="#involve">Get involved</a></li>
         <li><a href="#contact">Contact</a></li>
+        <li class="nav-dropdown" id="portal-dropdown">
+          <button type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="portal-menu">
+            Portal login
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="nav-dropdown-menu" id="portal-menu" role="menu" aria-label="Portal login">
+            <span class="nav-dropdown-heading">Education</span>
+            <a href="https://teacher.keenafrica.com/login" class="nav-dropdown-item indent" role="menuitem">Teacher</a>
+            <a href="https://student.keenafrica.com/login" class="nav-dropdown-item indent" role="menuitem">Student</a>
+            <div class="nav-dropdown-divider"></div>
+            <a href="https://admin.keenafrica.com/login" class="nav-dropdown-item" role="menuitem">Admin</a>
+            <a href="https://sponsor.keenafrica.com/login" class="nav-dropdown-item" role="menuitem">Sponsor</a>
+            <a href="https://keenafricans.keenafrica.com/" class="nav-dropdown-item" role="menuitem">Keen Africans</a>
+          </div>
+        </li>
       </ul>
     </nav>
     <a href="#involve" class="nav-cta">Back a bright mind
@@ -689,6 +790,13 @@
       <li><a href="learn/index.html">Learning Lab</a></li>
       <li><a href="#involve">Get involved</a></li>
       <li><a href="#contact">Contact</a></li>
+      <li class="mobile-menu-heading">Portal login</li>
+      <li class="mobile-menu-subheading">Education</li>
+      <li><a class="mobile-sub-item" href="https://teacher.keenafrica.com/login">Teacher</a></li>
+      <li><a class="mobile-sub-item" href="https://student.keenafrica.com/login">Student</a></li>
+      <li><a href="https://admin.keenafrica.com/login">Admin</a></li>
+      <li><a href="https://sponsor.keenafrica.com/login">Sponsor</a></li>
+      <li><a href="https://keenafricans.keenafrica.com/">Keen Africans</a></li>
     </ul>
     <a href="#involve" class="btn btn-primary mobile-menu-cta">Back a bright mind →</a>
   </div>
@@ -1033,6 +1141,24 @@
     mobileMenu.classList.remove('open');
     navToggle.setAttribute('aria-expanded', 'false');
   }));
+
+  const portalDropdown = document.getElementById('portal-dropdown');
+  const portalToggle = portalDropdown.querySelector('.nav-dropdown-toggle');
+  const closePortalDropdown = () => {
+    portalDropdown.classList.remove('open');
+    portalToggle.setAttribute('aria-expanded', 'false');
+  };
+  portalToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = portalDropdown.classList.toggle('open');
+    portalToggle.setAttribute('aria-expanded', String(isOpen));
+  });
+  document.addEventListener('click', (e) => {
+    if (!portalDropdown.contains(e.target)) closePortalDropdown();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePortalDropdown();
+  });
 
   const contactForm = document.getElementById('contact-form');
   const contactStatus = document.getElementById('contact-status');
