@@ -60,12 +60,90 @@ opaque server-generated UUID (`storageKey`), never a caller-supplied path.
 This is what makes path traversal structurally impossible rather than
 something a sanitizer has to catch.
 
-Only `LocalDiskStorageDriver` exists today (`ASSET_STORAGE_LOCAL_ROOT`,
-default `<repo>/var/asset-storage`, outside `public/`). Swapping to an
-object-storage vendor means implementing `StorageDriver` and changing
-`STORAGE_DRIVER` — `src/lib/assets.ts` and everything above it is
+Two drivers exist:
+
+- `LocalDiskStorageDriver` (`STORAGE_DRIVER=local`, the default) —
+  `ASSET_STORAGE_LOCAL_ROOT`, default `<repo>/var/asset-storage`, outside
+  `public/`. Fine for local dev; **not safe in production** with more than
+  one replica and no shared volume — see "Session 32" below for why this
+  broke production.
+- `S3StorageDriver` (`STORAGE_DRIVER=s3`, **production's driver as of
+  Session 32**) — a generic S3-API driver (works against any S3-compatible
+  vendor: AWS S3, R2, MinIO, Backblaze B2, ...), not vendor-specific, even
+  though production is currently configured against Cloudflare R2. Signs
+  requests with `aws4fetch` (a ~2KB, zero-dependency SigV4 signer over the
+  platform `fetch()`) rather than `@aws-sdk/client-s3` — this driver only
+  needs three verbs (PUT/GET/DELETE object), and the full AWS SDK is a much
+  heavier dependency for that; matches this codebase's existing bias
+  (Session 19's mailer chose plain `fetch()` over an SDK for the same
+  reason). Configured via `S3_BUCKET`/`S3_ENDPOINT`/`S3_ACCESS_KEY_ID`/
+  `S3_SECRET_ACCESS_KEY`/`S3_REGION` — see `docs/ENVIRONMENT.md`.
+
+Swapping the vendor again later means implementing `StorageDriver` and
+changing `STORAGE_DRIVER` (or the `S3_*` env vars, if it's still
+S3-compatible) — `src/lib/assets.ts` and everything above it is
 unaffected, satisfying the acceptance criterion "storage vendor can change
-without rewriting domain models."
+without rewriting domain models." This held exactly as designed when
+Session 32 added the second driver: zero changes to `assets.ts`,
+`content.ts`, the Asset/AssetAttachment schema, or any authorization logic.
+
+## Session 32 — production object storage decision
+
+Session 30 (go-live readiness) confirmed live what Sessions 09/13/28 had
+already flagged: `k8s/portal-prod.yaml` runs 2 replicas with no persistent
+volume, so `STORAGE_DRIVER=local` writes an upload to whichever pod
+handled it, and downloading from the other pod 500s. This blocked
+Resources, Sponsor documents, Certificates, and Messaging attachments for
+any real user.
+
+**Chose Cloudflare R2 (S3-compatible object storage) over a shared
+ReadWriteMany PVC**, decided against this specific infra rather than in
+the abstract:
+
+- This platform's infra is self-managed Docker/VM hosts running a
+  single-node-control-plane k3s cluster (`keenafrica-infra` +
+  `keenafrica-worker-1`/`-2`, per `docs/QA_LIVE_TEST_ACCOUNTS.md`) — no
+  managed-cloud CSI driver providing a tested RWX volume story. Standing up
+  NFS (or similar) ourselves would be genuinely new infrastructure with its
+  own single-point-of-failure risk, not a shortcut, and nothing in this
+  infra today provides or tests that guarantee.
+- Cloudflare is already this domain's DNS/edge/tunnel provider
+  (`terraform/providers.tf`, `main.tf`) — one fewer vendor relationship,
+  and R2 has zero egress fees (relevant once uploads/downloads are real
+  production traffic across four consumers).
+- R2's S3-compatible API means the new driver is a generic
+  `S3StorageDriver`, not an R2-specific one — the same vendor-neutrality
+  `PLATFORM_ARCHITECTURE.md` §11 already required of the abstraction,
+  satisfied one level further down (see "Storage abstraction" above).
+
+**Infrastructure provisioned**: `terraform/portal-storage.tf` —
+`cloudflare_r2_bucket.portal_assets`, named `keenafrica-portal-assets-prod`
+(per-environment naming; only `prod` is provisioned today, since staging
+doesn't exist per `docs/ENVIRONMENT.md`). Applied live via
+`terraform apply -var-file=envs/prod.tfvars -target=cloudflare_r2_bucket.portal_assets`.
+The R2 API token (S3 Access Key ID/Secret Access Key) was created via the
+R2 dashboard's own "Manage R2 API Tokens" flow, scoped to Object Read &
+Write on just this bucket — not via Terraform (the `cloudflare` provider
+has no resource for R2 token/credential creation; see
+`terraform/portal-storage.tf`'s comment for why the generic
+`cloudflare_api_token` path was rejected) — and written directly to the
+`portal-secrets` k8s Secret, never committed anywhere.
+
+**Pre-existing `local`-driver files in production**: see
+`status/project-status.md`'s Session 32 entry for what was actually
+checked and found (a live `Asset` table query for
+`storage_driver='local' AND status='active'`, run by the site owner —
+this sandbox's own DB access is blocked the same way every session since
+22 has been). Reasoning going in: `local` storage is pod-local ephemeral
+disk, not a volume, so any pre-Session-32 upload would already be gone
+after any of the several `kubectl rollout restart`s production has had
+since (each restart destroys and recreates pods) — but that's a
+plausibility argument, not a substitute for actually checking the `Asset`
+metadata table, which is what was done.
+
+**Verified live, post-fix**: repeated Session 28's exact repro — upload
+through one production pod, download through the other — see
+`status/project-status.md`'s Session 32 entry for the full transcript.
 
 ## Upload validation
 
