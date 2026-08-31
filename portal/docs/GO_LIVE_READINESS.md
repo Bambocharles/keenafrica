@@ -188,6 +188,41 @@ policy-replacement. This means:
 
 ## 6. Live-verified P0: `/assessments` is broken in production right now
 
+> **RESOLVED — Session 31 (2026-08-31).** Root-caused (two genuinely
+> distinct mechanisms, both confirmed with direct live production
+> evidence — not inferred) and fixed. Full writeup, evidence, and fix
+> detail: `status/project-status.md`'s Session 31 handoff. Summary:
+>
+> - **Teacher's 500s**: `listAssessmentsForCourse()`'s Prisma `_count`
+>   include generated an unfiltered scan across the entire `attempts`/
+>   `assessment_questions`/`assessment_assignments` tables, and RLS policy
+>   recursion made that scan re-evaluate a deep policy chain for every row
+>   platform-wide, not just the course queried. Fixed by scoping the count
+>   queries to the specific assessment ids already selected (PR #56).
+> - **Student's "200 but stuck loading"**: a completely different
+>   mechanism, only found because the teacher fix didn't resolve it.
+>   `attempts_select`'s RLS policy joined through `assessments` to resolve
+>   a course, pulling in that table's entire policy tree; the resulting
+>   plan's *estimated* cost crossed Postgres's JIT-compilation threshold,
+>   so Postgres spent ~6.7s JIT-compiling 2,148 functions for a query that,
+>   once compiled, did no actual work (confirmed via live `EXPLAIN ANALYZE`
+>   against production — every plan node marked `never executed`). Fixed
+>   by denormalizing `course_id` onto `Attempt` (PR #57), the same
+>   convention already used for `AssessmentAssignment.courseId`.
+> - **Post-fix, both roles, solo + 3-way concurrent, verified against
+>   production**: teacher 0.15-0.35s/200 (was 18-29s/500), student
+>   0.20-0.40s/200 with the real assignment list rendering correctly (was
+>   7-11s/200 but resolving to a swallowed error, not real content).
+> - Root cause was captured, not raised via a bumped Prisma timeout or a
+>   weakened/bypassed RLS policy — both fixes preserve access rules
+>   provably identical to before (verified in each PR's own regression
+>   test and reasoning, not merely asserted).
+> - One residual item, not blocking: `assessment_assignments`/`attempts`
+>   were found completely empty in production mid-session, cause
+>   unexplained (not this session's actions) — see project-status.md's
+>   Known limitations for this session. The Go/No-Go statement below is
+>   otherwise unchanged by this item.
+
 **Independently reproduced live during this session** (not just cited from Session 27), as QA
 TEACHER and QA STUDENT (real password + real TOTP MFA, both accounts' actual `/dashboard`→`/mfa`→
 `/dashboard` flow completed, not simulated):
@@ -294,13 +329,21 @@ did new work on it.
 
 ## Go/No-Go statement
 
+> **Update — Session 31 (2026-08-31)**: item 1 below (`/assessments`) is **resolved** — see §6's
+> resolution note and `status/project-status.md`'s Session 31 handoff for full evidence. Item 2
+> (file/asset storage) was outside Session 31's scope and remains open, unchanged. **The verdict
+> as of this update is still NO-GO**, on the strength of item 2 alone; re-run this session's full
+> checklist (not just the assessments item) before flipping to GO.
+
 **NO-GO for real organizations and real students**, as of 2026-08-29, on the strength of two
 independently live-reproduced, currently-open defects:
 
-1. **`/assessments` is unusable in production for every teacher and student** (§6) — a P0 core-
-   product-feature outage, reproduced fresh this session, root cause still unconfirmed.
+1. ~~**`/assessments` is unusable in production for every teacher and student** (§6) — a P0 core-
+   product-feature outage, reproduced fresh this session, root cause still unconfirmed.~~
+   **Resolved by Session 31 — see §6.**
 2. **File/asset storage is unreliable across production's 2 replicas** (§7) — blocks Resources,
    Sponsor documents, Certificates, and Messaging attachments for any real user who uploads a file.
+   **Still open.**
 
 Every other item in Session 30's scope is either confirmed with live evidence (§1 checklist, §2
 email, §5 rollback plan) or explicitly named as a bounded, accepted, non-blocking gap (§3 QA
@@ -308,11 +351,12 @@ accounts — site-owner-accepted as a time-bound exception; §4 RLS production-r
 bounded by "no org-scoped course exists yet"; DMARC monitor-only posture; Auth.js raw-endpoint
 host bug — low severity, no live impact).
 
-**What would flip this to GO**: (a) root-causing and fixing the assessments transaction-timeout
-bug, confirmed by a fresh live re-test identical to §6's; (b) either standing up shared/persistent
-storage for the Asset service or accepting file-upload features as out-of-scope-for-now and gating
-them behind a feature flag until storage is fixed. Neither is a large body of work relative to what
-already exists, but both are real, product-blocking defects, not process gaps.
+**What would flip this to GO**: (a) ~~root-causing and fixing the assessments transaction-timeout
+bug, confirmed by a fresh live re-test identical to §6's~~ **— done, Session 31**; (b) either
+standing up shared/persistent storage for the Asset service or accepting file-upload features as
+out-of-scope-for-now and gating them behind a feature flag until storage is fixed. Neither is a
+large body of work relative to what already exists, but both are real, product-blocking defects,
+not process gaps.
 
 ## Required next-session actions
 
