@@ -24,15 +24,18 @@ import type { RoleName } from "@/lib/authz";
  * immediately afterward via Auth.js's existing Credentials provider
  * (src/lib/auth.ts) — registerUser() itself never creates a Session row.
  *
- * Only TEACHER/STUDENT are self-registerable — sessions/18-b2b-b2c-
- * onboarding.md's mission is explicitly "a new teacher or student";
+ * Only TEACHER/STUDENT/KEEN_AFRICAN are self-registerable — sessions/18-b2b-
+ * b2c-onboarding.md's mission is explicitly "a new teacher or student";
  * ADMIN/TROUBLESHOOTER/SPONSOR_* accounts remain admin-provisioned only
  * (see src/lib/users.ts's createUser(), still users.create-gated,
- * untouched by this module).
+ * untouched by this module). KEEN_AFRICAN added by Session 34 — same
+ * "the subdomain IS the platform-role choice" convention, not
+ * architecturally special beyond the role grant (see
+ * sessions/34-keen-africans.md item 5).
  */
 
-export const REGISTERABLE_ROLES: readonly RoleName[] = ["TEACHER", "STUDENT"];
-export type RegisterableRole = "TEACHER" | "STUDENT";
+export const REGISTERABLE_ROLES: readonly RoleName[] = ["TEACHER", "STUDENT", "KEEN_AFRICAN"];
+export type RegisterableRole = "TEACHER" | "STUDENT" | "KEEN_AFRICAN";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;

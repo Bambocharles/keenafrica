@@ -84,6 +84,17 @@ export interface RlsContext {
    * "user_id = app.user_id" branch.
    */
   mfaLoginLookup?: boolean;
+  /**
+   * Keen Africans (Session 34). Set ONLY by
+   * src/lib/email-verification.ts, for the token-hash lookup/consume that
+   * has to run before any real session exists (same "possession-proof
+   * token, not app.user_id" shape as app.password_reset_lookup) — the
+   * accompanying user.email_verified_at UPDATE runs under a real
+   * app.user_id (set to the token's own userId) so it's covered by
+   * users_update's existing self-update branch, needing no separate
+   * carve-out there. Never set anywhere else.
+   */
+  emailVerificationLookup?: boolean;
 }
 
 /**
@@ -107,6 +118,7 @@ export async function withRls<T>(
     await tx.$executeRaw`SELECT set_config('app.self_registration', ${String(!!ctx.selfRegistration)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.oauth_lookup', ${String(!!ctx.oauthLookup)}, true)`;
     await tx.$executeRaw`SELECT set_config('app.mfa_login_lookup', ${String(!!ctx.mfaLoginLookup)}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.email_verification_lookup', ${String(!!ctx.emailVerificationLookup)}, true)`;
     return fn(tx);
   });
 }

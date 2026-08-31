@@ -140,11 +140,35 @@ export async function cleanupTestCertificates(studentUserIds: string[]): Promise
   await cleanupTestAssets(certAssetIds);
 }
 
+/**
+ * Deletes a set of test-created articles, including their cover-image
+ * asset attachments — call this BEFORE cleanupTestUsers() for any users
+ * referenced as author/moderator (keen_africans_articles migration's FKs
+ * are all ON DELETE NO ACTION, same convention as every other cleanup
+ * helper here).
+ */
+export async function cleanupTestArticles(articleIds: string[]): Promise<void> {
+  if (articleIds.length === 0) return;
+  const coverAssetIds = (
+    await prisma.article.findMany({ where: { id: { in: articleIds } }, select: { coverAssetId: true } })
+  )
+    .map((a) => a.coverAssetId)
+    .filter((id): id is string => id !== null);
+  await prisma.assetAttachment.deleteMany({ where: { entityType: "article_cover", entityId: { in: articleIds } } });
+  await prisma.article.deleteMany({ where: { id: { in: articleIds } } });
+  await cleanupTestAssets(coverAssetIds);
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
   await cleanupTestNotifications(userIds);
   await cleanupTestConversations(userIds);
   await cleanupTestCertificates(userIds);
+  const authoredArticleIds = (
+    await prisma.article.findMany({ where: { authorId: { in: userIds } }, select: { id: true } })
+  ).map((a) => a.id);
+  await cleanupTestArticles(authoredArticleIds);
+  await prisma.emailVerificationToken.deleteMany({ where: { userId: { in: userIds } } });
   const uploadedAssetIds = (
     await prisma.asset.findMany({ where: { uploaderId: { in: userIds } }, select: { id: true } })
   ).map((a) => a.id);

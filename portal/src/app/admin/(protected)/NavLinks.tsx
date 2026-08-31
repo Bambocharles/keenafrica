@@ -19,6 +19,7 @@ export function NavLinks({
   showReports,
   showCertificates,
   showOrganizations,
+  showKeenAfricans,
 }: {
   showUsers: boolean;
   showAudit: boolean;
@@ -27,6 +28,7 @@ export function NavLinks({
   showReports: boolean;
   showCertificates: boolean;
   showOrganizations: boolean;
+  showKeenAfricans: boolean;
 }) {
   const pathname = usePathname();
 
@@ -38,6 +40,7 @@ export function NavLinks({
     ...(showEducation ? [{ href: "/education", icon: "🎓", label: "Courses" }] : []),
     ...(showReports ? [{ href: "/reports", icon: "📊", label: "Reports" }] : []),
     ...(showCertificates ? [{ href: "/certificates", icon: "🏅", label: "Certificates" }] : []),
+    ...(showKeenAfricans ? [{ href: "/keen-africans", icon: "📰", label: "Keen Africans" }] : []),
     ...(showUsers ? [{ href: "/users", icon: "◉", label: "Users" }] : []),
     ...(showMessages ? [{ href: "/messages", icon: "✉", label: "Messages" }] : []),
     ...(showAudit ? [{ href: "/audit", icon: "☰", label: "Audit Log" }] : []),

@@ -208,6 +208,18 @@ async function canAccessAssetAttachment(entityType: string, entityId: string, ac
     return !!message;
   }
 
+  if (entityType === "article_cover") {
+    // An article cover is visible to exactly whoever can see the article
+    // itself — reuses articles_select's RLS-enforced scoping (published-to-
+    // everyone, or author/articles.manage/super_admin for drafts, see the
+    // keen_africans_articles migration, Session 34) rather than a second
+    // visibility rule for the same data.
+    const article = await withRls(actorRlsCtx(actor), (tx) =>
+      tx.article.findUnique({ where: { id: entityId }, select: { id: true } })
+    );
+    return !!article;
+  }
+
   if (entityType === "certificate") {
     // A certificate's downloadable file is visible to exactly whoever can
     // see the certificate itself — reuses certificates_select's RLS-

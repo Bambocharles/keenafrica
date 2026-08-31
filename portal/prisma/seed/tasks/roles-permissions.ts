@@ -15,6 +15,7 @@ const ROLE_DESCRIPTIONS: Record<RoleName, string> = {
   STUDENT: "Enrolls in and completes courses.",
   SPONSOR_ADMIN: "Manages a sponsor organization's projects and users.",
   SPONSOR_USER: "Views a sponsor organization's projects.",
+  KEEN_AFRICAN: "Self-registered publisher on the Keen Africans community section; writes and publishes their own articles.",
 };
 
 const PERMISSION_DESCRIPTIONS: Record<string, string> = {
@@ -40,6 +41,8 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.SPONSOR_USERS_MANAGE]: "Invite or remove other sponsor-team users on a project (ownership-scoped).",
   [PERMISSIONS.CERTIFICATES_MANAGE]: "Verify, view, and revoke any student's issued certificates.",
   [PERMISSIONS.ORGANIZATIONS_MANAGE]: "Manage any organization, its membership, and its invitations, across every tenant.",
+  [PERMISSIONS.ARTICLES_WRITE]: "Create, edit, publish, unpublish, and archive one's own articles (ownership-scoped).",
+  [PERMISSIONS.ARTICLES_MANAGE]: "Read, edit, and unpublish any Keen African's article (moderation).",
 };
 
 /**

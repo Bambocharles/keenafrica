@@ -1,0 +1,243 @@
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 24px 100px;
+  --ink: #16191f;
+  --ink-soft: #3a4551;
+  --muted: #6a7580;
+  --rule: #d9dee3;
+  --rule-soft: #e6eaee;
+  --surface-2: #eef0f3;
+}
+
+@media (prefers-color-scheme: dark) {
+  .wrap {
+    --ink: #e3e8ee;
+    --ink-soft: #bdc7d1;
+    --muted: #8794a2;
+    --rule: #28313b;
+    --rule-soft: #212a33;
+    --surface-2: #1c232c;
+  }
+}
+
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 28px 0;
+  border-bottom: 1px solid var(--rule, #d9dee3);
+  margin-bottom: 40px;
+}
+
+.wordmark {
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  color: var(--ink, #16191f);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wordmark .mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: #d8a43a;
+  color: #0f3b32;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.cta {
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  color: #ffffff;
+  background: #0f5b4c;
+  padding: 8px 14px;
+  border-radius: 7px;
+}
+
+.listTitle {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted, #6a7580);
+  margin: 0 0 20px;
+}
+
+.card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--rule-soft, #e6eaee);
+}
+
+.cardTitle {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0 0 6px;
+  color: var(--ink, #16191f);
+}
+
+.cardMeta {
+  font-size: 12.5px;
+  color: var(--muted, #6a7580);
+  margin: 0 0 8px;
+}
+
+.cardExcerpt {
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--ink-soft, #3a4551);
+  margin: 0;
+}
+
+.empty {
+  padding: 60px 0;
+  text-align: center;
+  color: var(--muted, #6a7580);
+}
+
+.article header.top {
+  padding: 8px 0 30px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--rule, #d9dee3);
+}
+
+.kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1f5fcc;
+  margin: 0 0 14px;
+}
+
+.article h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-size: clamp(1.9rem, 5vw, 2.7rem);
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  margin: 0 0 16px;
+}
+
+.byline {
+  font-size: 12.5px;
+  color: var(--muted, #6a7580);
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cover {
+  width: 100%;
+  border-radius: 10px;
+  margin: 0 0 32px;
+  display: block;
+}
+
+.body {
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--ink, #16191f);
+}
+
+.body h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.55rem;
+  margin: 2em 0 0.6em;
+}
+
+.body h3 {
+  font-size: 1.15rem;
+  margin: 1.7em 0 0.5em;
+}
+
+.body p {
+  margin: 0 0 1.15em;
+}
+
+.body a {
+  color: #1f5fcc;
+}
+
+.body code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.87em;
+  background: var(--surface-2, #eef0f3);
+  border-radius: 3px;
+  padding: 0.1em 0.36em;
+}
+
+.body pre {
+  background: var(--surface-2, #eef0f3);
+  border: 1px solid var(--rule, #d9dee3);
+  border-left: 3px solid #1f5fcc;
+  padding: 16px 18px;
+  overflow-x: auto;
+  border-radius: 4px;
+  margin: 0 0 1.4em;
+}
+
+.body pre code {
+  background: none;
+  padding: 0;
+}
+
+.body blockquote {
+  border-left: 3px solid var(--rule, #d9dee3);
+  margin: 0 0 1.4em;
+  padding: 2px 0 2px 18px;
+  color: var(--muted, #6a7580);
+}
+
+.body ul,
+.body ol {
+  margin: 0 0 1.3em;
+  padding-left: 1.3em;
+}
+
+.body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 1.5em;
+}
+
+.body th,
+.body td {
+  border: 1px solid var(--rule, #d9dee3);
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 0.9em;
+}
+
+.tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--rule, #d9dee3);
+}
+
+.tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted, #6a7580);
+  background: var(--surface-2, #eef0f3);
+  border-radius: 20px;
+  padding: 4px 11px;
+}
