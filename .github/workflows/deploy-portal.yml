@@ -43,6 +43,36 @@ jobs:
           npm ci
           npx prisma migrate deploy
 
+      # Session 34 (Keen Africans) — this step never existed before, and
+      # its absence was a real gap: prisma/schema.prisma's Role/Permission
+      # rows (e.g. this session's own new KEEN_AFRICAN role, articles.write/
+      # articles.manage permissions) only ever get inserted by
+      # `npm run seed` (prisma/seed/tasks/roles-permissions.ts), never by a
+      # migration. Migrations only change schema. Running the seed with the
+      # portal's own runtime DATABASE_URL (the k8s Secret every pod uses)
+      # fails — that connection is a deliberately restricted, RLS-enforced
+      # application role, and roles/permissions' RLS write policy requires
+      # is_super_admin (see the identity_security_foundation migration).
+      # PORTAL_DATABASE_URL_PROD is the same elevated "migrator" credential
+      # the step above already uses for DDL, so it bypasses RLS the same
+      # way. `npm run seed` (never `seed:demo`) runs ONLY the "core" tasks
+      # (roles-permissions, super-admin, feature-flags) — all explicitly
+      # documented as idempotent and safe to run in production on every
+      # deploy: roles-permissions reconciles the Role/Permission catalog
+      # from code (schema-defining, not end-user data), and super-admin
+      # never overwrites an existing account's password, only creates one
+      # if SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD are set and no such
+      # account exists yet.
+      - name: Seed core data (roles, permissions, feature flags)
+        env:
+          DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_PROD }}
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          cd portal
+          npm ci
+          npm run seed
+
       - name: Roll out to prod
         env:
           KUBECONFIG: /home/keen/.kube/config
