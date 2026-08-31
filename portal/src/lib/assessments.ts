@@ -392,6 +392,22 @@ export async function unassignAssessment(assignmentId: string, actor: AuthzActor
   await requireCourseContentAccess(assignment.assessment.courseId, actor, PERMISSIONS.COURSES_CONTENT_PUBLISH);
 
   await withRls(actorRlsCtx(actor), (tx) => tx.assessmentAssignment.delete({ where: { id: assignmentId } }));
+
+  // Session 33 (Data Integrity Investigation): this was the only deletion
+  // path anywhere in the codebase for assessment_assignments rows and had
+  // no audit trail at all — found while investigating why that table (and
+  // attempts, which can only ever be created against an existing
+  // assignment — see startAttempt()) turned up completely empty in
+  // production with no evidence either way in audit_events. Fixed as a
+  // targeted hardening of this specific under-audited cleanup path, per
+  // CLAUDE_BUILD_RULES.md's "audit ... sensitive operations."
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "assessment.unassigned",
+    entityType: "AssessmentAssignment",
+    entityId: assignmentId,
+    metadata: { assessmentId: assignment.assessmentId, cohortId: assignment.cohortId, studentUserId: assignment.studentUserId },
+  });
 }
 
 /** Requires courses.manage, super_admin, or being a teacher on the course. */

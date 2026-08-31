@@ -306,4 +306,41 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
     expect(planText).not.toMatch(/\bon assessments\b/);
     expect(planText).not.toMatch(/\bon assessment_assignments\b/);
   });
+
+  // Session 33 (Data Integrity Investigation & RLS Depth Audit, Part 2):
+  // systemic follow-up to Session 31's Bug 2 above. answers_select/
+  // answers_update's teacher-ownership branch had the SAME shape Session 31
+  // fixed for attempts_select — EXISTS (SELECT 1 FROM attempts att JOIN
+  // assessments asm ON asm.id = att.assessment_id JOIN cohorts c ...) — a
+  // hop through "assessments" that pulls in assessments_select's entire
+  // policy (which itself references assessment_assignments and cohorts
+  // again). Never touched by Session 31 because that session was
+  // root-causing one specific reported symptom, not auditing the schema.
+  // Found via EXPLAIN under this same real portal_rls_test role: 36,300.84
+  // estimated cost / 127 plan nodes against this file's tiny fixture — 4x
+  // to 28x every other RLS-depth candidate checked in the same audit
+  // (scripts/dev/explain-rls-policies.ts), still under Postgres's JIT
+  // threshold today but the same structural risk shape, not yet a live
+  // incident. Fixed (20260831140000_answers_select_join_depth_fix) by
+  // reusing attempts.course_id (already denormalized by Session 31 for the
+  // exact same reason) instead of hopping through "assessments" — same
+  // "provably identical access, one less redundant hop" reasoning as
+  // Session 31's own fix. This test proves "assessments" is never
+  // referenced by answers_select/answers_update any more.
+  it("Session 33 RLS depth audit: answers_select/answers_update must never reference \"assessments\" — same join-depth risk shape Session 31 fixed in attempts_select", async () => {
+    const explainOne = (sql: string) =>
+      asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, (tx) =>
+        tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(sql)
+      );
+
+    const selectRows = await explainOne(`EXPLAIN SELECT id FROM answers WHERE 1=0`);
+    const selectPlan = selectRows.map((r) => r["QUERY PLAN"]).join("\n");
+    expect(selectPlan).not.toMatch(/\bon assessments\b/);
+    expect(selectPlan).not.toMatch(/\bon assessment_assignments\b/);
+
+    const updateRows = await explainOne(`EXPLAIN UPDATE answers SET text_response = text_response WHERE 1=0`);
+    const updatePlan = updateRows.map((r) => r["QUERY PLAN"]).join("\n");
+    expect(updatePlan).not.toMatch(/\bon assessments\b/);
+    expect(updatePlan).not.toMatch(/\bon assessment_assignments\b/);
+  });
 });

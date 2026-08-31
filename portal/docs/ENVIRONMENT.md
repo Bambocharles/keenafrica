@@ -9,7 +9,12 @@
 - **Production** — `keen-prod` k8s namespace, deployed by
   `.github/workflows/deploy-portal.yml` on push to `main` (paths:
   `portal/**`), gated by the `production` GitHub Environment's manual
-  approval.
+  approval. Its Postgres (`postgres01`) is not a single-purpose instance —
+  it hosts `keenafrica_portal_prod` alongside three sibling databases on the
+  same server/role catalog (`keenafrica_portal`, the confirmed-dormant
+  pre-cutover database; `postgres`; `testdb`, untraced). See
+  `docs/BACKUP_RESTORE.md`'s "Infrastructure this assumes" for the full
+  detail — found by Session 30, documented here by Session 33.
 - **Staging** — does **not** currently exist for the portal. It was
   provisioned, verified end-to-end, and then deliberately retired to free
   resources on `keenafrica-infra` before this repo's Phase 1 cutover (see

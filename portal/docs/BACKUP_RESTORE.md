@@ -9,6 +9,30 @@ Proxmox host. That mirror protects against a single disk failure; it is
 `DELETE`, or an accidental `DROP TABLE`, and there was no logical-backup or
 restore-tested procedure before this session).
 
+**`postgres01` is not single-purpose** (discovered by Session 30, documented
+here by Session 33): the instance hosts `keenafrica_portal_prod` alongside
+three sibling databases, sharing the cluster-wide role catalog and
+instance-level resources (`max_connections`, WAL, checkpoint I/O, buffer
+pool):
+- `keenafrica_portal` — the pre-cutover `dev.keenafrica.com` database.
+  Deliberately preserved for its historical data; confirmed dormant (traced
+  via git history, `68c0eea` "Decommission dev.keenafrica.com") — nothing in
+  the live k8s cluster references it.
+- `postgres` — the default administrative database every Postgres instance
+  ships with.
+- `testdb` — untraced. No reference anywhere in this repo's history; likely
+  unrelated VM-setup scratch, not this application's.
+
+None of these three are written to by the portal application. This is a
+documentation gap fix, not a change in behavior — `pg-backup.sh`/
+`pg-restore.sh` above operate on `DATABASE_URL`'s target database only
+(`keenafrica_portal_prod` in production), so the sibling databases were
+never included or excluded by any backup decision; they simply were never
+mentioned. Whether to delete the dormant `keenafrica_portal` database
+remains an open, low-priority decision for whoever owns `postgres01` — not
+made by this session (see `docs/GO_LIVE_READINESS.md`'s data-integrity
+section for the investigation this was originally found during).
+
 The self-hosted GitHub Actions runner (`keenafrica-vm`) already has network
 access to the DB (used today by `deploy-portal.yml` to run
 `prisma migrate deploy`) and has Docker installed. Backups run there rather
