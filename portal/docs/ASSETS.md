@@ -129,21 +129,43 @@ has no resource for R2 token/credential creation; see
 `cloudflare_api_token` path was rejected) — and written directly to the
 `portal-secrets` k8s Secret, never committed anywhere.
 
-**Pre-existing `local`-driver files in production**: see
-`status/project-status.md`'s Session 32 entry for what was actually
-checked and found (a live `Asset` table query for
-`storage_driver='local' AND status='active'`, run by the site owner —
-this sandbox's own DB access is blocked the same way every session since
-22 has been). Reasoning going in: `local` storage is pod-local ephemeral
-disk, not a volume, so any pre-Session-32 upload would already be gone
-after any of the several `kubectl rollout restart`s production has had
-since (each restart destroys and recreates pods) — but that's a
-plausibility argument, not a substitute for actually checking the `Asset`
-metadata table, which is what was done.
+**Pre-existing `local`-driver files in production**: 2 rows found via
+`SELECT id, original_filename, size_bytes, created_at, uploader_id FROM
+assets WHERE storage_driver='local' AND status='active';` (run by the
+site owner against `keenafrica_portal_prod` — this sandbox's own DB
+access is blocked the same way every session since 22 has been):
 
-**Verified live, post-fix**: repeated Session 28's exact repro — upload
-through one production pod, download through the other — see
-`status/project-status.md`'s Session 32 entry for the full transcript.
+| id | filename | size | created_at |
+|---|---|---|---|
+| `6d5688a1-31d4-4d7a-acb1-f190ddd64c50` | `certificate-KA-2026-2FB5355B6CA3.txt` | 600 B | 2026-08-29 06:38:57 UTC |
+| `a9253692-ddc0-410d-98fc-1285cc457e9c` | `qa_doc.txt` | 60 B | 2026-08-29 07:58:27 UTC |
+
+The second is Session 28's own already-documented sponsor-document QA
+fixture (`docs/QA_SPONSOR_LIVE_PASS.md`: "left in place... its own broken
+state is itself useful evidence"). Both predate this session by two days
+and multiple full production redeploys (Session 29's merge, Session 31's
+two PRs, this session's own) — each `deploy-portal.yml` run replaces every
+pod, and `local` storage lives on the pod's own ephemeral writable layer,
+not a volume, so it does not survive a pod being replaced. **Not
+migrated, because the underlying bytes are already gone** — there is
+nothing left on any pod's disk to copy into R2, for either row. Explicitly
+acknowledged here rather than silently left as dangling `active` rows: a
+download attempt against either would already have failed before this
+session (via the old `local` driver, same as any other post-redeploy
+`local` row) and continues to fail now (via `S3StorageDriver`, since the
+key was never written to R2 either) — behavior is unchanged for these two
+specific rows, not newly broken by this session. Whoever next touches
+`Asset` lifecycle/cleanup could reasonably soft-delete these two rows
+(`status='deleted'`) as unrecoverable orphans; left as-is here since
+that's a data cleanup decision outside this session's scope (no schema/
+authorization changes, per this session's own rules).
+
+**Verified live, post-fix**: repeated Session 28's exact repro — real QA
+TEACHER upload (through pod `rg964`) confirmed landing in the R2 bucket
+via the Cloudflare API (not local disk), then 26/26 downloads over the
+public URL succeeded byte-for-byte identical to the original, against a
+Service with exactly 2 pod endpoints — see `status/project-status.md`'s
+Session 32 entry for the full transcript.
 
 ## Upload validation
 

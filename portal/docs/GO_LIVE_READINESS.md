@@ -306,6 +306,32 @@ this is not something that might resolve itself — it needs a fix.
 
 ## 7. File/asset storage is confirmed broken across production's 2 replicas
 
+> **RESOLVED — Session 32 (2026-08-31).** Implemented `S3StorageDriver`
+> behind the existing `src/lib/storage.ts` abstraction (Session 13),
+> backed by a newly-provisioned Cloudflare R2 bucket
+> (`keenafrica-portal-assets-prod`, `terraform/portal-storage.tf`);
+> `STORAGE_DRIVER=s3` is now production's active driver. Full writeup,
+> decision reasoning, and evidence: `docs/ASSETS.md`'s "Session 32"
+> section and `status/project-status.md`'s Session 32 handoff. Summary:
+>
+> - **Live-verified, not just deployed**: real QA TEACHER upload (real
+>   password + TOTP, through the actual production URL) landed in R2
+>   (confirmed via the Cloudflare API, not local disk), handled by one
+>   pod; 26/26 subsequent downloads over the public URL succeeded,
+>   byte-for-byte identical to the original, against a Service with
+>   exactly 2 pod endpoints — this is Session 28's exact repro, repeated
+>   live post-fix, per this session's own acceptance criteria.
+> - **2 pre-existing `local`-driver `Asset` rows found** (one is Session
+>   28's own already-documented `qa_doc.txt` fixture), both from
+>   2026-08-29 — not migrated, because the underlying bytes are already
+>   gone (pod-local ephemeral disk, destroyed by every redeploy since;
+>   at least 3 full redeploys happened between then and this session).
+>   Explicitly accounted for, not silently dropped — see `docs/ASSETS.md`.
+> - `assets.test.ts`, `assets-rls.integration.test.ts`, and the
+>   messaging/sponsor/certificate RLS tests that reference `storageDriver`
+>   all pass unchanged (they never invoke the real driver — verified by
+>   reading them, not assumed).
+
 Re-confirmed live by Session 28 (not re-tested again this session, since nothing has changed):
 `STORAGE_DRIVER=local` writes to the handling pod's own disk; `k8s/portal-prod.yaml` has no
 persistent volume and runs 2 replicas; an upload landing on one pod 500s on download from the
@@ -314,6 +340,9 @@ resolved." This affects every feature that uses the shared Asset/File service: R
 Core), Sponsor documents, Certificates, Messaging attachments. Named here because it is squarely a
 go-live blocker for any real organization/sponsor that uploads a file, not because this session
 did new work on it.
+
+**This section (above the resolution note) is Session 30's original finding, preserved as
+historical record — see the RESOLVED note for current state.**
 
 ## 8. Final sign-off checklist by area
 
@@ -324,7 +353,7 @@ did new work on it.
 | Admin portal | 25 | ✅ | `docs/QA_ADMIN` pass referenced in `status/project-status.md`'s Session 25 entry — not independently re-run this session (no new admin-surface change since). |
 | Teacher portal | 26 | ⚠️ | Live-verified working for messaging/onboarding this session's own re-check; **assessments broken** (§6) is a teacher-portal-blocking defect. |
 | Student portal | 27 | ❌ blocking | **Assessments broken** (§6, P0, still open). `listMyEnrollments()` draft-course crash — confirmed fixed and deployed (commit `59b53d2`, merged via PR #48, present in current `main`/production HEAD `ef13d46`). Cross-student note/bookmark 500-instead-of-graceful-error — still open, low/medium severity, no actual authorization bypass. |
-| Sponsor portal | 28 | ⚠️ | Isolation/privacy confirmed sound; **file storage** (§7) blocks document downloads for any sponsor. |
+| Sponsor portal | 28 | ✅ | Isolation/privacy confirmed sound; **file storage** (§7) — resolved by Session 32, live-verified. |
 | Security/RLS | 29 | ✅ | No open finding (precondition check, above). |
 
 ## Go/No-Go statement
@@ -334,6 +363,14 @@ did new work on it.
 > (file/asset storage) was outside Session 31's scope and remains open, unchanged. **The verdict
 > as of this update is still NO-GO**, on the strength of item 2 alone; re-run this session's full
 > checklist (not just the assessments item) before flipping to GO.
+>
+> **Update — Session 32 (2026-08-31)**: item 2 below (file/asset storage) is now also **resolved**
+> — see §7's resolution note and `status/project-status.md`'s Session 32 handoff for full evidence
+> (live two-pod upload/download repro, post-fix). **Both of Session 30's original NO-GO items are
+> now resolved.** This does not by itself flip the verdict to GO — per Session 31's own note above,
+> that requires re-running this session's full checklist (§1-§5, §8), not just re-confirming the
+> two items that were the acute blockers. Whoever runs that next full pass should treat this as a
+> strong signal, not a substitute for one.
 
 **NO-GO for real organizations and real students**, as of 2026-08-29, on the strength of two
 independently live-reproduced, currently-open defects:
@@ -341,9 +378,9 @@ independently live-reproduced, currently-open defects:
 1. ~~**`/assessments` is unusable in production for every teacher and student** (§6) — a P0 core-
    product-feature outage, reproduced fresh this session, root cause still unconfirmed.~~
    **Resolved by Session 31 — see §6.**
-2. **File/asset storage is unreliable across production's 2 replicas** (§7) — blocks Resources,
-   Sponsor documents, Certificates, and Messaging attachments for any real user who uploads a file.
-   **Still open.**
+2. ~~**File/asset storage is unreliable across production's 2 replicas** (§7) — blocks Resources,
+   Sponsor documents, Certificates, and Messaging attachments for any real user who uploads a
+   file.~~ **Resolved by Session 32 — see §7.**
 
 Every other item in Session 30's scope is either confirmed with live evidence (§1 checklist, §2
 email, §5 rollback plan) or explicitly named as a bounded, accepted, non-blocking gap (§3 QA
@@ -352,11 +389,13 @@ bounded by "no org-scoped course exists yet"; DMARC monitor-only posture; Auth.j
 host bug — low severity, no live impact).
 
 **What would flip this to GO**: (a) ~~root-causing and fixing the assessments transaction-timeout
-bug, confirmed by a fresh live re-test identical to §6's~~ **— done, Session 31**; (b) either
+bug, confirmed by a fresh live re-test identical to §6's~~ **— done, Session 31**; (b) ~~either
 standing up shared/persistent storage for the Asset service or accepting file-upload features as
-out-of-scope-for-now and gating them behind a feature flag until storage is fixed. Neither is a
-large body of work relative to what already exists, but both are real, product-blocking defects,
-not process gaps.
+out-of-scope-for-now and gating them behind a feature flag until storage is fixed~~ **— done,
+Session 32 (shared storage, not a feature flag)**. Both of Session 30's originally-identified
+blockers are now fixed; per the Session 32 update note above, a full go-live checklist re-run is
+still the correct next step before formally declaring GO, not an automatic consequence of both
+items being resolved.
 
 ## Required next-session actions
 
