@@ -1,0 +1,43 @@
+{
+  "edition_date": "2026-08-31",
+  "edition_title": "September 2026 Edition: Build Now, Nigeria's Ecosystem Is Wide Open",
+  "edition_intro": "Ambitious young Nigerians, this month's list rewards people who move fast: a fully funded master's in Beijing, a nine-figure naira startup fund straight from the Federal Ministry of Youth Development, and free certification vouchers that cost you nothing but effort. None of these charge a fee to apply. Read the deadlines carefully, some close in days, and get your applications in.",
+  "posts": [
+    {
+      "slug": "2026-08-31-schwarzman-scholars-2027-2028-cohort",
+      "category": "scholarships",
+      "title": "Schwarzman Scholars 2027-2028 Cohort",
+      "summary": "A fully funded one-year Master's in Global Affairs at Tsinghua University in Beijing, covering tuition, travel, housing, and a stipend.",
+      "deadline": "9 September 2026",
+      "eligibility": "Bachelor's degree holders aged 18 to 28 by 1 August 2027, from any country including Nigeria, applying under the global/US track",
+      "apply_url": "https://www.schwarzmanscholars.org/admissions/application-instructions/"
+    },
+    {
+      "slug": "2026-08-31-niya-startup-pitch-2-0",
+      "category": "grants",
+      "title": "NiYA Startup Pitch 2.0",
+      "summary": "A Federal Ministry of Youth Development initiative putting a \u20a6100 million funding pool behind 100 youth-led Nigerian tech startups, plus mentorship and enterprise tools.",
+      "deadline": "Rolling",
+      "eligibility": "Nigerians aged 18 to 35, with at least two co-founders and a registered NiYA community profile",
+      "apply_url": "https://niya.gov.ng/niyastartup"
+    },
+    {
+      "slug": "2026-08-31-wetech-conference-2026-the-power-shift",
+      "category": "conferences",
+      "title": "Wetech Conference 2026: The Power Shift",
+      "summary": "Africa's largest gathering for women in tech, bringing 2,500+ founders, investors, and operators together in Lagos to talk AI, capital, and leadership.",
+      "deadline": "26 September 2026",
+      "eligibility": "Open registration; women in tech and allies across the African tech ecosystem",
+      "apply_url": "https://event.wetech.africa/"
+    },
+    {
+      "slug": "2026-08-31-gtco-squad-hackathon-3-0",
+      "category": "competitions",
+      "title": "GTCO Squad Hackathon 3.0",
+      "summary": "A national fintech hackathon from GTCO's Squad platform offering up to \u20a610 million in cash prizes to student and developer teams.",
+      "deadline": "Rolling",
+      "eligibility": "Nigerian university students, developers, and early-stage startup teams",
+      "apply_url": "https://squadco.com/hackathon/register/"
+    }
+  ]
+}
