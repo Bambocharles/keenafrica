@@ -116,7 +116,7 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
     await setup.assessmentAssignment.create({ data: { assessmentId, courseId, scope: "cohort", cohortId, createdBy: teacher.id } });
 
     const attempt = await setup.attempt.create({
-      data: { assessmentId, assessmentVersionId: versionId, studentUserId: student.id, attemptNumber: 1 },
+      data: { assessmentId, assessmentVersionId: versionId, courseId, studentUserId: student.id, attemptNumber: 1 },
       select: { id: true },
     });
     attemptId = attempt.id;
@@ -201,7 +201,7 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
   it("attempts_write: a student cannot INSERT an attempt row for another student", async () => {
     await expect(
       asContext({ userId: outsiderStudent.id }, (tx) =>
-        tx.attempt.create({ data: { assessmentId, assessmentVersionId: versionId, studentUserId: student.id, attemptNumber: 99 } })
+        tx.attempt.create({ data: { assessmentId, assessmentVersionId: versionId, courseId, studentUserId: student.id, attemptNumber: 99 } })
       )
     ).rejects.toThrow();
   });
@@ -272,5 +272,38 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
       // this test.
       expect(planText).toMatch(new RegExp(`on ${table}\\b[^\\n]*\\n\\s*Index Cond: \\(assessment_id`));
     }
+  });
+
+  // Session 31 P0 root cause, part 2: attempts_select's teacher-ownership
+  // branch used to join through "assessments" to resolve a course
+  // (EXISTS (SELECT 1 FROM assessments asm JOIN cohorts c ON c.course_id =
+  // asm.course_id JOIN cohort_teachers ct ...)). Because Postgres applies
+  // a referenced table's OWN RLS policy to any reference inside another
+  // policy's expression, evaluating that branch pulled in assessments_
+  // select's entire policy — which itself pulls in assessment_assignments_
+  // select and cohorts_select again. Captured live against production: a
+  // query whose WHERE clause reduces to a compile-time-constant `false`
+  // (nothing to execute, confirmed by "never executed" on every plan node)
+  // still reported ~6.7s of "Execution Time" — almost entirely Postgres
+  // JIT-compiling 2148 functions for a plan estimated to cost 580,811,
+  // because that estimate crosses Postgres's JIT thresholds even though
+  // the actual matching row count is zero (see status/project-status.md's
+  // Session 31 handoff for the full captured EXPLAIN). The fix
+  // denormalized course_id onto Attempt (this migration) so the teacher
+  // branch resolves ownership via cohorts directly, the same convention
+  // AssessmentAssignment.courseId already uses. This test proves that
+  // "assessments" is never referenced at all by attempts_select any more
+  // — reverting to the join-through-assessments shape would make this
+  // assertion fail, and would very likely reintroduce the JIT-cost
+  // regression as accumulated attempt/assignment/cohort data grows.
+  it("Session 31 P0 regression: attempts_select must never reference \"assessments\" — that hop is what blew the RLS policy's plan past Postgres's JIT-compilation threshold", async () => {
+    const rows = await asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, (tx) =>
+      tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(
+        `EXPLAIN SELECT id FROM attempts WHERE student_user_id = '${teacher.id}'::uuid AND 1=0 ORDER BY attempt_number DESC`
+      )
+    );
+    const planText = rows.map((r) => r["QUERY PLAN"]).join("\n");
+    expect(planText).not.toMatch(/\bon assessments\b/);
+    expect(planText).not.toMatch(/\bon assessment_assignments\b/);
   });
 });
