@@ -202,6 +202,7 @@ describeIfConfigured("Organization-Aware Education Row-Level Security (enforced 
       data: {
         assessmentId: orgAssessmentId,
         assessmentVersionId: orgAssessmentVersionId,
+        courseId: orgCourseId,
         studentUserId: memberStudent.id,
         attemptNumber: 1,
       },

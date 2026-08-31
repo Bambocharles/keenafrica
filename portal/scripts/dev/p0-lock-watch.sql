@@ -28,7 +28,7 @@ WITH activity AS (
     wait_event AS wait_event_or_note,
     now() - xact_start AS xact_age,
     now() - query_start AS query_age,
-    left(coalesce(query, ''), 200) AS query
+    left(coalesce(query, ''), 4000) AS query
   FROM pg_stat_activity
   WHERE datname = current_database()
     AND pid <> pg_backend_pid()
@@ -43,7 +43,7 @@ blockers AS (
     ('WAITING on pid ' || blocking.pid || ' (' || blocking.state || ')')::text AS wait_event_or_note,
     now() - blocked.xact_start AS xact_age,
     now() - blocked.query_start AS query_age,
-    left(coalesce(blocked.query, ''), 200) AS query
+    left(coalesce(blocked.query, ''), 4000) AS query
   FROM pg_locks bl
   JOIN pg_stat_activity blocked ON blocked.pid = bl.pid AND NOT bl.granted
   JOIN pg_locks kl ON kl.locktype = bl.locktype

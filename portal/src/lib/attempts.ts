@@ -193,6 +193,7 @@ export async function startAttempt(assessmentId: string, actor: AuthzActor) {
       data: {
         assessmentId,
         assessmentVersionId: version.id,
+        courseId: assessment.courseId,
         studentUserId: actor.id,
         attemptNumber: existing.length + 1,
       },

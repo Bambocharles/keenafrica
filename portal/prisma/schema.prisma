@@ -705,6 +705,7 @@ model Course {
   questions             Question[]
   assessments           Assessment[]
   assessmentAssignments AssessmentAssignment[]
+  attempts              Attempt[]
   lessonProgress        LessonProgress[]
   certificates          Certificate[]
 
@@ -1162,10 +1163,23 @@ model AssessmentAssignment {
   @@map("assessment_assignments")
 }
 
+// courseId is denormalized from assessment.courseId at creation (Session
+// 31) — immutable once set, same convention as AssessmentAssignment.
+// courseId (see that model's comment). attempts_select's teacher-ownership
+// branch used to join through "assessments" to resolve a course, which
+// meant Postgres had to apply assessments_select's ENTIRE policy (which
+// itself pulls in assessment_assignments_select and cohorts_select again)
+// to every row considered — a plan so large its estimated cost tripped
+// Postgres's JIT compilation threshold, adding 6-7s of pure JIT-compile
+// time to a query that, once actually executed, does almost nothing (see
+// status/project-status.md's Session 31 handoff for the captured EXPLAIN
+// evidence). Reading course_id directly off this row breaks that hop the
+// same way AssessmentAssignment.courseId already does.
 model Attempt {
   id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   assessmentId        String        @map("assessment_id") @db.Uuid
   assessmentVersionId String        @map("assessment_version_id") @db.Uuid
+  courseId            String        @map("course_id") @db.Uuid
   studentUserId       String        @map("student_user_id") @db.Uuid
   attemptNumber       Int           @map("attempt_number")
   status              AttemptStatus @default(in_progress)
@@ -1180,6 +1194,7 @@ model Attempt {
 
   assessment        Assessment        @relation(fields: [assessmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   assessmentVersion AssessmentVersion @relation(fields: [assessmentVersionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  course            Course            @relation(fields: [courseId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student           User              @relation("AttemptStudent", fields: [studentUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   grader            User?             @relation("AttemptGrader", fields: [gradedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
   answers           Answer[]
@@ -1188,6 +1203,7 @@ model Attempt {
   @@index([studentUserId])
   @@index([assessmentId])
   @@index([assessmentVersionId])
+  @@index([courseId])
   @@map("attempts")
 }
 
