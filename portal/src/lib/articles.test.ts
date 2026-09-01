@@ -13,7 +13,11 @@ import {
   deriveExcerpt,
   getArticleForEdit,
   getPublicArticleBySlug,
+  getTopicCounts,
+  hashViewerKey,
   listMyArticles,
+  listPublishedArticles,
+  listTrendingArticles,
   publishArticle,
   recordArticleView,
   renderArticleBodyHtml,
@@ -233,6 +237,168 @@ describe("recordArticleView (Session 42 — Follow & Author Reputation Display)"
 
   it("does not throw for an unknown article id — a view-count failure must never break the page render", async () => {
     await expect(recordArticleView("00000000-0000-0000-0000-000000000000")).resolves.toBeUndefined();
+  });
+});
+
+describe("hashViewerKey (Session 44 — Discovery, Search & Recommendations)", () => {
+  it("keys a signed-in viewer on their own stable user id, ignoring any IP/User-Agent passed alongside it", () => {
+    expect(hashViewerKey({ userId: "abc-123" })).toBe("user:abc-123");
+    expect(hashViewerKey({ userId: "abc-123", ipAddress: "1.2.3.4", userAgent: "AnyAgent/1.0" })).toBe("user:abc-123");
+  });
+
+  it("hashes an anonymous viewer's IP+User-Agent — the raw IP never appears in the returned key", () => {
+    const key = hashViewerKey({ ipAddress: "203.0.113.9", userAgent: "TestAgent/1.0" });
+    expect(key).toMatch(/^anon:[0-9a-f]{64}$/);
+    expect(key).not.toContain("203.0.113.9");
+  });
+
+  it("is stable for the same IP+User-Agent pair and different for a different one", () => {
+    const a = hashViewerKey({ ipAddress: "203.0.113.9", userAgent: "SameAgent" });
+    const b = hashViewerKey({ ipAddress: "203.0.113.9", userAgent: "SameAgent" });
+    const c = hashViewerKey({ ipAddress: "198.51.100.4", userAgent: "SameAgent" });
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
+
+  it("returns an empty string when there is nothing at all to key on", () => {
+    expect(hashViewerKey({})).toBe("");
+  });
+});
+
+describe("recordArticleView — per-viewer dedup (Session 44 — Discovery, Search & Recommendations)", () => {
+  it("does not double-count a repeat view from the same viewerKey within the cooldown window", async () => {
+    const actor = await keenAfrican(true);
+    const article = await createArticle({ title: "Dedup Same Viewer" }, actor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, actor);
+
+    await recordArticleView(article.id, "user:reader-1");
+    await recordArticleView(article.id, "user:reader-1");
+    await recordArticleView(article.id, "user:reader-1");
+
+    const row = await prisma.article.findUniqueOrThrow({ where: { id: article.id }, select: { viewCount: true } });
+    expect(row.viewCount).toBe(1);
+  });
+
+  it("counts two different viewerKeys as two separate views", async () => {
+    const actor = await keenAfrican(true);
+    const article = await createArticle({ title: "Dedup Different Viewers" }, actor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, actor);
+
+    await recordArticleView(article.id, "user:reader-1");
+    await recordArticleView(article.id, "user:reader-2");
+
+    const row = await prisma.article.findUniqueOrThrow({ where: { id: article.id }, select: { viewCount: true } });
+    expect(row.viewCount).toBe(2);
+  });
+
+  it("counts again once the dedup cooldown window has elapsed", async () => {
+    const actor = await keenAfrican(true);
+    const article = await createArticle({ title: "Dedup Window Elapsed" }, actor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, actor);
+
+    await recordArticleView(article.id, "user:reader-1");
+    // recordArticleView() has no clock-injection point, so backdating the
+    // row it just wrote directly is the simplest way to exercise the
+    // "cooldown window has passed" branch.
+    await prisma.articleView.updateMany({
+      where: { articleId: article.id, viewerKey: "user:reader-1" },
+      data: { viewedAt: new Date(Date.now() - 31 * 60 * 1000) },
+    });
+    await recordArticleView(article.id, "user:reader-1");
+
+    const row = await prisma.article.findUniqueOrThrow({ where: { id: article.id }, select: { viewCount: true } });
+    expect(row.viewCount).toBe(2);
+  });
+});
+
+describe("listTrendingArticles (Session 44 — Discovery, Search & Recommendations)", () => {
+  it("ranks by RECENT view velocity, not lifetime views — a new article's recent views outrank an old article's larger but stale lifetime total", async () => {
+    const actor = await keenAfrican(true);
+    const staleButPopular = await createArticle({ title: "Stale But Once Popular" }, actor);
+    createdArticleIds.push(staleButPopular.id);
+    await publishArticle(staleButPopular.id, actor);
+    const freshAndHot = await createArticle({ title: "Fresh And Hot" }, actor);
+    createdArticleIds.push(freshAndHot.id);
+    await publishArticle(freshAndHot.id, actor);
+
+    // staleButPopular: 10 lifetime views, all pushed OUTSIDE the trending window.
+    for (let i = 0; i < 10; i++) {
+      await recordArticleView(staleButPopular.id, `user:stale-viewer-${i}`);
+    }
+    await prisma.articleView.updateMany({
+      where: { articleId: staleButPopular.id },
+      data: { viewedAt: new Date(Date.now() - 72 * 60 * 60 * 1000) },
+    });
+
+    // freshAndHot: 3 views, all inside the (default 48h) trending window.
+    for (let i = 0; i < 3; i++) {
+      await recordArticleView(freshAndHot.id, `user:fresh-viewer-${i}`);
+    }
+
+    const trending = await listTrendingArticles(20);
+    const ids = trending.map((a) => a.id);
+    expect(ids).toContain(freshAndHot.id);
+    expect(ids).not.toContain(staleButPopular.id);
+  });
+
+  it("never includes an article that was unpublished after accruing its views", async () => {
+    const actor = await keenAfrican(true);
+    const article = await createArticle({ title: "Later Unpublished Trending Candidate" }, actor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, actor);
+    await recordArticleView(article.id, "user:trending-then-gone");
+    await unpublishArticle(article.id, actor);
+
+    const trending = await listTrendingArticles(50);
+    expect(trending.map((a) => a.id)).not.toContain(article.id);
+  });
+
+  it("returns an empty array when there are no recent views at all", async () => {
+    // Not a strict global assertion (other suites may be writing views
+    // concurrently) — just confirms the function itself never throws on an
+    // empty candidate pool and always returns an array.
+    const trending = await listTrendingArticles(1);
+    expect(Array.isArray(trending)).toBe(true);
+  });
+});
+
+describe("getTopicCounts / listPublishedArticles topic filter (Session 44 — Discovery, Search & Recommendations)", () => {
+  it("zero-fills every curated topic, not just the ones with at least one article", async () => {
+    const counts = await getTopicCounts();
+    expect(Object.keys(counts).sort()).toEqual(
+      ["ai", "business", "career", "cloud", "culture", "engineering", "entrepreneurship"].sort()
+    );
+    for (const value of Object.values(counts)) {
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("listPublishedArticles({ topic }) only returns articles tagged with that exact topic", async () => {
+    const actor = await keenAfrican(true);
+    const cloudArticle = await createArticle({ title: "Cloud Topic Fixture", topic: "cloud" }, actor);
+    createdArticleIds.push(cloudArticle.id);
+    await publishArticle(cloudArticle.id, actor);
+    const aiArticle = await createArticle({ title: "AI Topic Fixture", topic: "ai" }, actor);
+    createdArticleIds.push(aiArticle.id);
+    await publishArticle(aiArticle.id, actor);
+
+    const { articles } = await listPublishedArticles({ topic: "cloud" });
+    expect(articles.some((a) => a.id === cloudArticle.id)).toBe(true);
+    expect(articles.some((a) => a.id === aiArticle.id)).toBe(false);
+    expect(articles.every((a) => a.topic === "cloud")).toBe(true);
+  });
+
+  it("never includes a draft article, even one tagged with the requested topic", async () => {
+    const actor = await keenAfrican(true);
+    const draft = await createArticle({ title: "Draft In Business Topic", topic: "business" }, actor);
+    createdArticleIds.push(draft.id);
+    // Deliberately never published.
+
+    const { articles } = await listPublishedArticles({ topic: "business" });
+    expect(articles.some((a) => a.id === draft.id)).toBe(false);
   });
 });
 

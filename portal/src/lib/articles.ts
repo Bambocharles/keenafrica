@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "crypto";
 import { Marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 import type { ArticleTopic } from "@prisma/client";
@@ -949,12 +950,43 @@ const PUBLIC_PAGE_SIZE = 20;
  * no elevation either. The elevated-context pattern is fully removed from
  * this file, not left coexisting with the new mechanism.
  */
-export async function listPublishedArticles(opts: { page?: number; tag?: string } = {}) {
+/**
+ * Session 40 (Keen Africans — LinkedIn Verification). Two independent
+ * public badges — see the two page components' badge slot for the
+ * precedence rule (verified supersedes the plain "Keen African" label,
+ * never both at once). Session 44 (Discovery) pulled this out of
+ * listPublishedArticles()/getPublicArticleBySlug() into one shared helper
+ * so listTrendingArticles() and listArticlesByTopic() below (and
+ * src/lib/search.ts's searchArticles()) can reuse the exact same
+ * author-info shape instead of re-deriving it.
+ */
+async function attachPublicAuthorInfo<T extends { authorId: string; authorName: string }>(
+  articles: T[]
+): Promise<Array<T & { author: { name: string; username: string | null; member: boolean; verified: boolean } }>> {
+  const authorIds = articles.map((a) => a.authorId);
+  const [usernames, memberIds, verifiedIds] = await Promise.all([
+    getUsernamesByUserIds(authorIds),
+    getMemberLabelUserIds(authorIds),
+    getVerifiedUserIds(authorIds),
+  ]);
+  return articles.map((a) => ({
+    ...a,
+    author: {
+      name: a.authorName,
+      username: usernames.get(a.authorId) ?? null,
+      member: memberIds.has(a.authorId),
+      verified: verifiedIds.has(a.authorId),
+    },
+  }));
+}
+
+export async function listPublishedArticles(opts: { page?: number; tag?: string; topic?: ArticleTopic } = {}) {
   await flipDueScheduledArticles();
   const page = Math.max(1, opts.page ?? 1);
   const where = {
     status: "published" as const,
     ...(opts.tag ? { tags: { has: opts.tag.trim().toLowerCase() } } : {}),
+    ...(opts.topic ? { topic: opts.topic } : {}),
   };
 
   const [articles, total] = await withRls({}, (tx) =>
@@ -969,26 +1001,7 @@ export async function listPublishedArticles(opts: { page?: number; tag?: string 
     ])
   );
 
-  const authorIds = articles.map((a) => a.authorId);
-  // Session 40 (Keen Africans — LinkedIn Verification). Two independent
-  // public badges — see the two page components' badge slot for the
-  // precedence rule (verified supersedes the plain "Keen African" label,
-  // never both at once).
-  const [usernames, memberIds, verifiedIds] = await Promise.all([
-    getUsernamesByUserIds(authorIds),
-    getMemberLabelUserIds(authorIds),
-    getVerifiedUserIds(authorIds),
-  ]);
-  const withAuthor = articles.map((a) => ({
-    ...a,
-    author: {
-      name: a.authorName,
-      username: usernames.get(a.authorId) ?? null,
-      member: memberIds.has(a.authorId),
-      verified: verifiedIds.has(a.authorId),
-    },
-  }));
-
+  const withAuthor = await attachPublicAuthorInfo(articles);
   return { articles: withAuthor, total, page, pageSize: PUBLIC_PAGE_SIZE };
 }
 
@@ -998,28 +1011,120 @@ export async function getPublicArticleBySlug(slug: string) {
   const article = await withRls({}, (tx) => tx.article.findFirst({ where: { slug, status: "published" } }));
   if (!article) return null;
 
-  const [usernames, memberIds, verifiedIds] = await Promise.all([
-    getUsernamesByUserIds([article.authorId]),
-    getMemberLabelUserIds([article.authorId]),
-    getVerifiedUserIds([article.authorId]),
-  ]);
-  return {
-    ...article,
-    author: {
-      name: article.authorName,
-      username: usernames.get(article.authorId) ?? null,
-      member: memberIds.has(article.authorId),
-      verified: verifiedIds.has(article.authorId),
-    },
-  };
+  const [withAuthor] = await attachPublicAuthorInfo([article]);
+  return withAuthor;
+}
+
+// --- Discovery (Session 44) ----------------------------------------------
+//
+// Trending/Topics browsing — see recordArticleView()/ArticleView's own
+// comments for the view-tracking half of this session. "Latest" needs no
+// new function at all: listPublishedArticles() above, called with no
+// filter, already IS "latest published, newest first" — the Explore page
+// just calls it with a small limit for its teaser section and links to the
+// existing full paginated listing for "see all."
+
+/**
+ * Published article counts per Session 38's curated ArticleTopic, for the
+ * Explore page's "Topics" section. Zero-filled for every topic (not just
+ * the ones with at least one article) so the UI can render a stable list
+ * without special-casing an empty topic.
+ */
+export async function getTopicCounts(): Promise<Record<ArticleTopic, number>> {
+  await flipDueScheduledArticles();
+  const rows = await withRls({}, (tx) =>
+    tx.article.groupBy({
+      by: ["topic"],
+      where: { status: "published", topic: { not: null } },
+      _count: { _all: true },
+    })
+  );
+  const counts = Object.fromEntries(ARTICLE_TOPICS.map((t) => [t, 0])) as Record<ArticleTopic, number>;
+  for (const row of rows) {
+    if (row.topic) counts[row.topic] = row._count._all;
+  }
+  return counts;
+}
+
+const TRENDING_WINDOW_MS = 48 * 60 * 60 * 1000; // 48h — "recent," not lifetime.
+const TRENDING_CANDIDATE_POOL = 50; // wide enough that filtering out a since-unpublished article rarely starves the result.
+
+/**
+ * Trending — ranked by RECENT view velocity (views in the last 48h), never
+ * lifetime Article.viewCount, so a new article can surface instead of being
+ * permanently buried under an old one's accumulated total (this session's
+ * own explicit rule). Backed by ArticleView (see that model's own comment),
+ * not Article.viewCount.
+ *
+ * Two-step, not one join: group ArticleView by article for a candidate
+ * pool (cheap, indexed on (article_id, viewed_at)), then re-fetch those
+ * articles filtered to CURRENTLY published — an article that accrued views
+ * while published and was since unpublished/archived (self-service or the
+ * admin safety valve) must never appear here even though its view rows
+ * still exist. This is an approximation, not a live join: if enough
+ * top-ranked candidates in the pool got filtered out, the true 51st-most-
+ * viewed article might be missed. Acceptable for this session's "simple
+ * v1" scope — see docs/KEEN_AFRICANS.md's "Known limitations."
+ */
+export async function listTrendingArticles(limit = 5) {
+  await flipDueScheduledArticles();
+  const since = new Date(Date.now() - TRENDING_WINDOW_MS);
+
+  const grouped = await withRls({}, (tx) =>
+    tx.articleView.groupBy({
+      by: ["articleId"],
+      where: { viewedAt: { gte: since } },
+      _count: { _all: true },
+      orderBy: { _count: { articleId: "desc" } },
+      take: TRENDING_CANDIDATE_POOL,
+    })
+  );
+  if (grouped.length === 0) return [];
+
+  const viewsByArticleId = new Map(grouped.map((g) => [g.articleId, g._count._all]));
+  const articles = await withRls({}, (tx) =>
+    tx.article.findMany({ where: { id: { in: [...viewsByArticleId.keys()] }, status: "published" } })
+  );
+
+  const withAuthor = await attachPublicAuthorInfo(articles);
+  return withAuthor
+    .map((a) => ({ ...a, viewsInWindow: viewsByArticleId.get(a.id) ?? 0 }))
+    .sort((a, b) => b.viewsInWindow - a.viewsInWindow)
+    .slice(0, limit);
 }
 
 /**
- * Session 42 (Follow & Author Reputation Display). A minimal view counter
- * — see schema.prisma's Article.viewCount comment for why this is the
- * canonical mechanism (Session 44/Discovery had not shipped a
- * view-tracking mechanism of its own as of this session — checked first,
- * per this session's own "coordinate, don't build it twice" instruction).
+ * Session 44 (Discovery, Search & Recommendations). Derives the dedup key
+ * recordArticleView() below uses to decide "is this the same viewer again,
+ * soon" — NEVER a raw IP address (see ArticleView's own schema.prisma
+ * comment): a signed-in viewer is keyed on their stable user id; an
+ * anonymous one is keyed on a salted sha256 of IP+User-Agent, so this
+ * value can never be reversed back into an identifiable IP by anyone who
+ * only has DB access. Salted with AUTH_SECRET (already this codebase's one
+ * server-only secret — see auth.ts) purely so the hash isn't trivially
+ * reproducible client-side; this is an abuse-resistance measure, not a
+ * cryptographic identity claim.
+ *
+ * Callers with nothing to key on (no session, no headers — e.g. a script)
+ * may omit every field; recordArticleView() then falls back to its own
+ * "no dedup" behavior, unchanged from Session 42 — see that function's own
+ * comment.
+ */
+export function hashViewerKey(input: { userId?: string | null; ipAddress?: string | null; userAgent?: string | null }): string {
+  if (input.userId) return `user:${input.userId}`;
+  if (!input.ipAddress && !input.userAgent) return "";
+  const secret = process.env.AUTH_SECRET ?? "";
+  const raw = `${input.ipAddress ?? "unknown"}|${input.userAgent ?? "unknown"}`;
+  return `anon:${createHash("sha256").update(`${secret}:${raw}`).digest("hex")}`;
+}
+
+const VIEW_DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Session 42 (Follow & Author Reputation Display) / extended by Session 44
+ * (Discovery, Search & Recommendations) — see schema.prisma's
+ * Article.viewCount and ArticleView comments for the full mechanism this
+ * extends rather than duplicates.
  *
  * Deliberately a SEPARATE call from getPublicArticleBySlug() above, not a
  * side effect folded into that read: the public article page calls
@@ -1027,9 +1132,18 @@ export async function getPublicArticleBySlug(slug: string) {
  * generateMetadata(), once from the page component body — a pre-existing
  * pattern, not introduced by this session), and folding the increment into
  * the read would double-count a single page view. Callers must call this
- * exactly once, from the page component body only. No dedup by reader/IP/
- * session — a deliberately minimal counter, not a full analytics
- * mechanism; see docs/KEEN_AFRICANS.md's "Known limitations."
+ * exactly once, from the page component body only.
+ *
+ * `viewerKey` (see hashViewerKey() above) is OPTIONAL and, when supplied,
+ * ADDS a lightweight dedup: a repeat view from the same viewer within
+ * VIEW_DEDUPE_WINDOW_MS is silently skipped (no viewCount increment, no
+ * new ArticleView row) — this session's own "must not be trivially
+ * gameable" rule, without turning this into a hardened analytics system
+ * (still no login/cookie requirement, still resettable by a new IP/browser
+ * — see docs/KEEN_AFRICANS.md's "Known limitations"). Omitting viewerKey
+ * entirely preserves Session 42's original behavior exactly: every call
+ * counts, no dedup — every pre-existing caller/test keeps working
+ * unchanged.
  *
  * Reuses the existing systemArticlesCtx() (articles.manage, no real actor)
  * — the same narrow system context flipDueScheduledArticles() already uses
@@ -1039,11 +1153,26 @@ export async function getPublicArticleBySlug(slug: string) {
  * break the primary request" convention src/lib/events.ts's
  * onDomainEvent() already establishes.
  */
-export async function recordArticleView(articleId: string): Promise<void> {
+export async function recordArticleView(articleId: string, viewerKey?: string): Promise<void> {
   try {
-    await withRls(systemArticlesCtx(), (tx) =>
-      tx.article.update({ where: { id: articleId }, data: { viewCount: { increment: 1 } } })
-    );
+    if (viewerKey) {
+      const recent = await withRls(systemArticlesCtx(), (tx) =>
+        tx.articleView.findFirst({
+          where: { articleId, viewerKey, viewedAt: { gte: new Date(Date.now() - VIEW_DEDUPE_WINDOW_MS) } },
+          select: { id: true },
+        })
+      );
+      if (recent) return;
+    }
+
+    await withRls(systemArticlesCtx(), async (tx) => {
+      await tx.article.update({ where: { id: articleId }, data: { viewCount: { increment: 1 } } });
+      // A caller that supplied no viewerKey still gets an ArticleView row
+      // (a fresh, never-reused synthetic key) so listTrendingArticles()
+      // still sees the view — only the dedup CHECK above is skipped when
+      // no key is supplied, not the log entry itself.
+      await tx.articleView.create({ data: { articleId, viewerKey: viewerKey || `anon:${randomUUID()}` } });
+    });
   } catch (err) {
     console.error("[articles] recordArticleView failed", err);
   }

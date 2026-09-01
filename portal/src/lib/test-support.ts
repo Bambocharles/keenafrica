@@ -200,6 +200,10 @@ export async function cleanupTestArticles(articleIds: string[]): Promise<void> {
   // article row itself.
   await cleanupCommentsByArticleIds(articleIds);
   await prisma.articleReaction.deleteMany({ where: { articleId: { in: articleIds } } });
+  // Session 44 (Discovery, Search & Recommendations) — ArticleView rows
+  // have no FK cascade either (article_views_article_id_fkey is ON DELETE
+  // NO ACTION, same convention as every other cleanup helper here).
+  await prisma.articleView.deleteMany({ where: { articleId: { in: articleIds } } });
   await prisma.article.deleteMany({ where: { id: { in: articleIds } } });
   await cleanupTestAssets(coverAssetIds);
 }
