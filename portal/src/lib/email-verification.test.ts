@@ -1,11 +1,13 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { confirmEmailVerification, isEmailVerified, requestEmailVerification } from "@/lib/email-verification";
-import { cleanupTestUsers, createTestUser } from "@/lib/test-support";
+import { ensureProfile } from "@/lib/profiles";
+import { actorFromUser, cleanupTestProfiles, cleanupTestUsers, createTestUser } from "@/lib/test-support";
 
 const createdUserIds: string[] = [];
 
 afterAll(async () => {
+  await cleanupTestProfiles(createdUserIds);
   await cleanupTestUsers(createdUserIds);
 });
 
@@ -67,5 +69,24 @@ describe("email verification", () => {
 
     expect(await confirmEmailVerification(rawToken)).toBe("invalid_or_expired");
     expect(await isEmailVerified(user.id)).toBe(false);
+  });
+
+  it("Session 40: also flips the public 'Keen African' label's denormalized Profile.emailVerified, for a profile that already existed pre-verification", async () => {
+    const user = await newUser();
+    const actor = await actorFromUser(user.id);
+    const profile = await ensureProfile(actor, { name: user.name });
+    expect(profile.emailVerified).toBe(false);
+
+    const crypto = await import("node:crypto");
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    await prisma.emailVerificationToken.create({
+      data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 60_000) },
+    });
+
+    expect(await confirmEmailVerification(rawToken)).toBe("ok");
+
+    const updated = await prisma.profile.findUniqueOrThrow({ where: { userId: user.id } });
+    expect(updated.emailVerified).toBe(true);
   });
 });

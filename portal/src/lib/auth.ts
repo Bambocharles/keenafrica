@@ -1,13 +1,14 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
+import LinkedIn from "next-auth/providers/linkedin";
 import { headers } from "next/headers";
 import { compare } from "bcryptjs";
 import { withRls } from "@/lib/rls";
 import { createSession, resolveSessionAuthz, revokeSessionAsSystem } from "@/lib/sessions";
 import { recordAuditEvent } from "@/lib/audit";
 import { isLoginRateLimited } from "@/lib/rate-limit";
-import { resolveGoogleSignIn, type GoogleSignInRejectionReason } from "@/lib/oauth-identity";
+import { resolveGoogleSignIn, resolveLinkedInSignIn, type GoogleSignInRejectionReason } from "@/lib/oauth-identity";
 import type { RegisterableRole } from "@/lib/registration";
 import { shouldRequireLoginMfa } from "@/lib/mfa";
 
@@ -42,6 +43,19 @@ const GOOGLE_REJECTION_ERROR_CODES: Record<GoogleSignInRejectionReason, string> 
   no_self_service_signup: "google_no_account",
   conflicting_link: "google_conflicting_link",
   account_suspended: "google_account_suspended",
+};
+
+// Session 40 (Keen Africans — LinkedIn Verification). Same shape as
+// GOOGLE_REJECTION_ERROR_CODES above, reusing the identical rejection-reason
+// type (see oauth-identity.ts's resolveLinkedInSignIn() docstring for why
+// LinkedIn only ever produces a subset of these in practice —
+// no_self_service_signup covers every "not an active connect flow" case).
+const LINKEDIN_REJECTION_ERROR_CODES: Record<GoogleSignInRejectionReason, string> = {
+  no_email: "linkedin_no_email",
+  email_exists_unlinked: "linkedin_email_exists",
+  no_self_service_signup: "linkedin_no_account",
+  conflicting_link: "linkedin_conflicting_link",
+  account_suspended: "linkedin_account_suspended",
 };
 
 // basePath is "/auth", not the default "/api/auth" — a Cloudflare Worker
@@ -193,6 +207,28 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     }),
+    // Session 40 (Keen Africans — LinkedIn Verification). Same
+    // no-adapter/hand-rolled-linking shape as Google above — identity
+    // linking lives in oauth-identity.ts's resolveLinkedInSignIn(), called
+    // from the signIn callback below. next-auth's built-in LinkedIn
+    // provider is already the current "Sign In with LinkedIn using OpenID
+    // Connect" product (type: "oidc", issuer https://www.linkedin.com/oauth
+    // — see node_modules/@auth/core/providers/linkedin.js); with no
+    // explicit `authorization.params.scope` override it requests the
+    // OIDC-provider default "openid profile email" scope, which is exactly
+    // the full set LinkedIn's current docs list as supported (openid,
+    // profile, email — the legacy r_liteprofile/r_emailaddress scopes are
+    // retired). Confirmed against LinkedIn's current Microsoft-Learn-hosted
+    // API docs, not assumed — see docs/KEEN_AFRICANS.md's "Verification"
+    // section. This grants name/email/photo ONLY; there is no scope or
+    // endpoint exposing LinkedIn's own identity-verification status to a
+    // third party, which is the entire reason this feature is a human
+    // review workflow (src/lib/verification.ts) rather than an automatic
+    // badge.
+    LinkedIn({
+      clientId: process.env.LINKEDIN_CLIENT_ID,
+      clientSecret: process.env.LINKEDIN_CLIENT_SECRET,
+    }),
   ],
   callbacks: {
     // Only the Google branch does anything here — Credentials already
@@ -211,6 +247,35 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // only hook available to make `token.sub` end up correct; there is no
     // adapter-based alternative available in this setup.
     signIn: async ({ user, account }) => {
+      if (account?.provider === "linkedin") {
+        if (!account.providerAccountId) return false;
+
+        const h = await headers();
+        const ipAddress = h.get("x-forwarded-for");
+
+        const result = await resolveLinkedInSignIn({
+          providerAccountId: account.providerAccountId,
+          email: user.email,
+          name: user.name,
+          pictureUrl: user.image,
+          ipAddress,
+        });
+
+        if (result.outcome === "rejected") {
+          // LinkedIn only ever gets here via the /account "Connect
+          // LinkedIn" self-service flow (see resolveLinkedInSignIn's own
+          // docstring — there is no public "Sign in with LinkedIn" entry
+          // point on this platform) — always send errors back to /account,
+          // never /login, which an already-authenticated actor would bounce
+          // straight off of.
+          return `/account?error=${LINKEDIN_REJECTION_ERROR_CODES[result.reason]}`;
+        }
+
+        user.id = result.userId;
+        (user as { sessionId?: string }).sessionId = result.sessionId;
+        return true;
+      }
+
       if (account?.provider !== "google") return true;
       if (!account.providerAccountId) return false;
 

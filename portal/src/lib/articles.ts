@@ -9,7 +9,8 @@ import { actorRlsCtx } from "@/lib/courses";
 import { countRecentAuditEvents } from "@/lib/rate-limit";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
 import { getStorageDriver } from "@/lib/storage";
-import { resolveAuthorName, getUsernamesByUserIds, anonymizeOwnProfile } from "@/lib/profiles";
+import { resolveAuthorName, getUsernamesByUserIds, getMemberLabelUserIds, anonymizeOwnProfile } from "@/lib/profiles";
+import { getVerifiedUserIds } from "@/lib/verification";
 import { anonymizeOwnAccount, assertOwnAccountDeletable } from "@/lib/users";
 
 /**
@@ -897,10 +898,24 @@ export async function listPublishedArticles(opts: { page?: number; tag?: string 
     ])
   );
 
-  const usernames = await getUsernamesByUserIds(articles.map((a) => a.authorId));
+  const authorIds = articles.map((a) => a.authorId);
+  // Session 40 (Keen Africans — LinkedIn Verification). Two independent
+  // public badges — see the two page components' badge slot for the
+  // precedence rule (verified supersedes the plain "Keen African" label,
+  // never both at once).
+  const [usernames, memberIds, verifiedIds] = await Promise.all([
+    getUsernamesByUserIds(authorIds),
+    getMemberLabelUserIds(authorIds),
+    getVerifiedUserIds(authorIds),
+  ]);
   const withAuthor = articles.map((a) => ({
     ...a,
-    author: { name: a.authorName, username: usernames.get(a.authorId) ?? null },
+    author: {
+      name: a.authorName,
+      username: usernames.get(a.authorId) ?? null,
+      member: memberIds.has(a.authorId),
+      verified: verifiedIds.has(a.authorId),
+    },
   }));
 
   return { articles: withAuthor, total, page, pageSize: PUBLIC_PAGE_SIZE };
@@ -912,8 +927,20 @@ export async function getPublicArticleBySlug(slug: string) {
   const article = await withRls({}, (tx) => tx.article.findFirst({ where: { slug, status: "published" } }));
   if (!article) return null;
 
-  const usernames = await getUsernamesByUserIds([article.authorId]);
-  return { ...article, author: { name: article.authorName, username: usernames.get(article.authorId) ?? null } };
+  const [usernames, memberIds, verifiedIds] = await Promise.all([
+    getUsernamesByUserIds([article.authorId]),
+    getMemberLabelUserIds([article.authorId]),
+    getVerifiedUserIds([article.authorId]),
+  ]);
+  return {
+    ...article,
+    author: {
+      name: article.authorName,
+      username: usernames.get(article.authorId) ?? null,
+      member: memberIds.has(article.authorId),
+      verified: verifiedIds.has(article.authorId),
+    },
+  };
 }
 
 /**

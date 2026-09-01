@@ -5,6 +5,7 @@ import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { deriveExcerpt } from "@/lib/articles";
 import { getPublicProfileByUsername } from "@/lib/profiles";
 import { LegalFooter } from "../../LegalFooter";
+import { VerificationBadge } from "../../VerificationBadge";
 import styles from "../../site.module.css";
 
 /**
@@ -52,7 +53,7 @@ export default async function ProfilePage({
   params: Promise<{ username: string }>;
 }) {
   const { username } = await params;
-  const { profile, articles } = await loadProfile(username);
+  const { profile, articles, verified } = await loadProfile(username);
   const session = await auth();
   const signedIn = canAccessKeenAfricanPortal(session?.user);
 
@@ -87,11 +88,7 @@ export default async function ProfilePage({
         <div>
           <h1 className={styles.profileName}>
             {profile.displayName}
-            {/* Verification badge slot — deliberately empty. Session 40's
-                territory (this session's own explicit "Must NOT: build
-                verification/badges yet"); reserved here so that session can
-                render a badge without touching this page's layout. */}
-            <span data-verification-badge-slot aria-hidden />
+            <VerificationBadge member={profile.emailVerified} verified={verified} featured={profile.featured} />
           </h1>
           {(profile.profession || profile.country) && (
             <p className={styles.profileMeta}>

@@ -43,6 +43,7 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.ORGANIZATIONS_MANAGE]: "Manage any organization, its membership, and its invitations, across every tenant.",
   [PERMISSIONS.ARTICLES_WRITE]: "Create, edit, publish, unpublish, and archive one's own articles (ownership-scoped).",
   [PERMISSIONS.ARTICLES_MANAGE]: "Read, edit, and unpublish any Keen African's article (moderation).",
+  [PERMISSIONS.VERIFICATION_REVIEW]: "Review a Keen African's connected LinkedIn profile and grant or revoke the Verified Keen African badge.",
 };
 
 /**
