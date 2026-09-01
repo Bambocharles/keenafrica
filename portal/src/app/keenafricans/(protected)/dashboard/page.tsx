@@ -1,32 +1,52 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { listMyArticles } from "@/lib/articles";
 import { isEmailVerified } from "@/lib/email-verification";
 import { resendVerificationAction } from "../articles/actions";
+import { requestOwnPasswordResetAction } from "./actions";
 import { Banner, Button, Card, EmptyState, SectionHeader, StatusBadge } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
 
 const ERROR_MESSAGES: Record<string, string> = {
   action_failed: "Something went wrong.",
+  reset_unavailable: "Could not generate a reset link right now — try again shortly.",
 };
 
 export default async function KeenAfricansDashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; verification?: string }>;
+  searchParams: Promise<{ error?: string; verification?: string; resetLinkGenerated?: string }>;
 }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
   const user = session.user;
 
-  const { error, verification } = await searchParams;
+  const { error, verification, resetLinkGenerated } = await searchParams;
   const [articles, verified] = await Promise.all([listMyArticles(user), isEmailVerified(user.id)]);
   const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
+
+  let resetLink: string | null = null;
+  if (resetLinkGenerated === "1") {
+    const store = await cookies();
+    resetLink = store.get("own_reset_link")?.value ?? null;
+  }
 
   return (
     <div style={{ display: "grid", gap: "20px" }}>
       {error && <Banner>{ERROR_MESSAGES[error] ?? "Something went wrong."}</Banner>}
       {verification === "sent" && <Banner variant="success">Verification email sent — check your inbox.</Banner>}
+      {resetLink && (
+        <Banner variant="success">
+          Reset link generated (expires in 1 hour, single use):
+          <div className={ui.mono} style={{ marginTop: 6, wordBreak: "break-all" }}>
+            {resetLink}
+          </div>
+        </Banner>
+      )}
+      {resetLinkGenerated === "1" && !resetLink && (
+        <Banner>The reset link already expired from view (shown once, for 60 seconds). Request a new one below.</Banner>
+      )}
 
       {!verified && (
         <Card style={{ padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
@@ -90,6 +110,21 @@ export default async function KeenAfricansDashboardPage({
             ))}
           </div>
         )}
+      </section>
+
+      <section>
+        <SectionHeader title="Account" count={0} />
+        <Card style={{ padding: "20px", display: "grid", gap: "10px" }}>
+          <div>
+            <div className={ui.nameCell}>{user.name ?? "Keen African"}</div>
+            <div className={ui.subCell}>{user.email}</div>
+          </div>
+          <form action={requestOwnPasswordResetAction}>
+            <Button type="submit" variant="outline">
+              Send myself a password reset link
+            </Button>
+          </form>
+        </Card>
       </section>
     </div>
   );

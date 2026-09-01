@@ -279,3 +279,24 @@
   border-radius: 20px;
   padding: 4px 11px;
 }
+
+.legalFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--rule, #d9dee3);
+  font-size: 12px;
+  color: var(--muted, #6a7580);
+}
+
+.legalFooter a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--rule, #d9dee3);
+}
+
+.legalFooter a:hover {
+  color: #1f5fcc;
+}

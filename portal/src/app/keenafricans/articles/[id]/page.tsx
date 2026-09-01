@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { deriveExcerpt, getPublicArticleBySlug, renderArticleBodyHtml } from "@/lib/articles";
 import { ShareLinks } from "./ShareLinks";
+import { LegalFooter } from "../../LegalFooter";
 import styles from "../../site.module.css";
 
 async function loadArticle(slug: string) {
@@ -104,6 +105,8 @@ export default async function ArticlePage({
           <ShareLinks url={articleUrl} title={article.title} />
         </footer>
       </article>
+
+      <LegalFooter />
     </div>
   );
 }

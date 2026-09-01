@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { deriveExcerpt, listPublishedArticles } from "@/lib/articles";
+import { LegalFooter } from "./LegalFooter";
 import styles from "./site.module.css";
 
 export const metadata = {
@@ -61,6 +62,8 @@ export default async function KeenAfricansHomePage({
           {Number(page ?? 1) * pageSize < total && <a href={`/?page=${Number(page ?? 1) + 1}`}>Older →</a>}
         </div>
       )}
+
+      <LegalFooter />
     </div>
   );
 }
