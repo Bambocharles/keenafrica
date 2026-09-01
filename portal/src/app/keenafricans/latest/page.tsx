@@ -59,6 +59,7 @@ export default async function LatestArticlesPage({
               <h2 className={styles.cardTitle}>{a.title}</h2>
               <p className={styles.cardMeta}>
                 {a.author.name}
+                {a.author.username && ` · @${a.author.username}`}
                 {a.publishedAt && ` · ${new Date(a.publishedAt).toLocaleDateString()}`}
               </p>
               <p className={styles.cardExcerpt}>{a.excerpt || deriveExcerpt(a.body)}</p>

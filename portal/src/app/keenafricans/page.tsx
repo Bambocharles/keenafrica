@@ -74,7 +74,9 @@ export default async function ExplorePage() {
             <a key={a.id} href={`/articles/${a.slug}`} className={styles.smallCard}>
               <h2 className={styles.smallCardTitle}>{a.title}</h2>
               <p className={styles.smallCardMeta}>
-                {a.author.name} · {a.viewsInWindow} {a.viewsInWindow === 1 ? "view" : "views"} in the last 48h
+                {a.author.name}
+                {a.author.username && ` · @${a.author.username}`} · {a.viewsInWindow}{" "}
+                {a.viewsInWindow === 1 ? "view" : "views"} in the last 48h
               </p>
             </a>
           ))}
@@ -96,6 +98,7 @@ export default async function ExplorePage() {
               <h2 className={styles.smallCardTitle}>{a.title}</h2>
               <p className={styles.smallCardMeta}>
                 {a.author.name}
+                {a.author.username && ` · @${a.author.username}`}
                 {a.publishedAt && ` · ${new Date(a.publishedAt).toLocaleDateString()}`}
               </p>
             </a>
