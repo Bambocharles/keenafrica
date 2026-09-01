@@ -75,11 +75,16 @@ export default async function KeenAfricansDashboardPage({
                         </a>
                       </>
                     )}
+                    {a.scheduledAt && <> &middot; scheduled for {new Date(a.scheduledAt).toLocaleString()}</>}
                     {a.moderationNote && <> &middot; moderator note: {a.moderationNote}</>}
+                    {a.reviewNote && (a.reviewStatus === "changes_requested" || a.reviewStatus === "rejected") && (
+                      <> &middot; reviewer note: {a.reviewNote}</>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                   <StatusBadge status={a.status} />
+                  {a.reviewStatus !== "not_submitted" && <StatusBadge status={a.reviewStatus} />}
                   <a href={`/articles/${a.id}/edit`} style={{ textDecoration: "none" }}>
                     <Button type="button" variant="outline">
                       Edit

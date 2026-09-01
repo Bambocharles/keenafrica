@@ -426,6 +426,16 @@ model User {
   // Session 34 (Keen Africans).
   articles          Article[] @relation("ArticleAuthor")
   articlesModerated Article[] @relation("ArticleModerator")
+  // Session 38 (Keen Africans — Editor Workflow). Distinct from
+  // articlesModerated above: moderatedBy/ArticleModerator is the
+  // post-publish "unpublish safety valve" (Session 34); reviewedBy/
+  // ArticleReviewer is the pre-publish review workflow (submit -> approve/
+  // reject/request-changes) this session adds. Kept as two separate
+  // columns/relations rather than reusing moderatedBy because they answer
+  // different questions and can both be set on the same article's history
+  // (e.g. reviewed-and-approved, published, later unpublished by a
+  // moderator for an unrelated reason).
+  articlesReviewed  Article[] @relation("ArticleReviewer")
 
   // Session 36 (Keen Africans — Profile & Identity). Optional 1:1 —
   // mirrors totpCredential's shape above (a separate table for an
@@ -1704,15 +1714,91 @@ model Certificate {
 // action is also independently recorded in AuditEvent, same as every other
 // sensitive action in this codebase, this is just enough state for the
 // author's own dashboard to explain why their article came down.
+// Session 38 (Keen Africans — Editor Workflow). Article-scoped review
+// workflow, deliberately its OWN enum rather than adding
+// in_review/changes_requested/approved/rejected values to the shared
+// ContentStatus enum Module/Lesson also use (those states are meaningless
+// for Education Core content — see sessions/38's explicit "Must NOT").
+// `status` (ContentStatus) still owns actual visibility
+// (draft/published/archived); `reviewStatus` is a parallel workflow layer
+// that, when used, gates the draft->published transition (see
+// src/lib/articles.ts's assertReviewApproved()). `not_submitted` is the
+// default for every existing and new article — an article that never
+// touches this enum behaves exactly as Session 34 always did
+// (publishArticle() has no review gate to satisfy), which is what keeps
+// direct-publish available as the default per this session's own
+// confirmed-with-the-site-owner decision (see docs/KEEN_AFRICANS.md).
+enum ArticleReviewStatus {
+  not_submitted
+  in_review
+  changes_requested
+  approved
+  rejected
+}
+
+// Session 38 (Keen Africans — Editor Workflow). A small, curated discovery
+// taxonomy for articles — explicitly NOT Education Core's Topic/Skill
+// model (prisma/schema.prisma's `Topic`, tagging Lesson/Question content
+// for mastery calculations). Reusing that table would conflate a
+// hierarchical, admin-managed mastery taxonomy with an open, editorial
+// "what section does this article belong on" category list — a different
+// governance model entirely (this is a flat enum, not a self-referential
+// hierarchy, and carries no mastery/permission meaning at all — see this
+// session's own "not a permissions concept" instruction). Extend by
+// migration, same convention as AssetEntityType's value additions — see
+// docs/KEEN_AFRICANS.md for the extension steps.
+enum ArticleTopic {
+  cloud
+  ai
+  engineering
+  entrepreneurship
+  career
+  business
+  culture
+}
+
 model Article {
   id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   authorId         String        @map("author_id") @db.Uuid
   title            String
   slug             String        @unique
+  // Session 38 (Keen Africans — Editor Workflow). Every slug this article
+  // has ever been published under, oldest first, capped at 10 — populated
+  // by src/lib/articles.ts's updateArticleSlug() whenever the slug
+  // actually changes. Lets the public article route 301-redirect a
+  // previously-indexed URL to the current one instead of 404ing (see
+  // resolveRedirectSlug()). Harmless/unused for an article that never had
+  // its slug edited.
+  previousSlugs    String[]      @default([]) @map("previous_slugs")
   body             String
   excerpt          String?
   tags             String[]      @default([])
+  // Session 38 (Keen Africans — Editor Workflow). Discovery aid, not a
+  // permissions concept — see ArticleTopic's own comment. Nullable: never
+  // required, and every pre-existing article has none.
+  topic            ArticleTopic?
   status           ContentStatus @default(draft)
+  // Session 38 (Keen Africans — Editor Workflow). See ArticleReviewStatus's
+  // own comment for why this is a separate enum/field from `status`.
+  // reviewNote holds the reviewer's most recent reason (rejection or
+  // changes-requested note); reviewedAt/reviewedBy record who last acted
+  // and when, mirroring moderatedAt/moderatedBy/moderationNote's shape
+  // below but for the pre-publish workflow rather than the post-publish
+  // safety valve.
+  reviewStatus     ArticleReviewStatus @default(not_submitted) @map("review_status")
+  reviewNote       String?             @map("review_note")
+  reviewedAt       DateTime?           @map("reviewed_at") @db.Timestamptz(6)
+  reviewedBy       String?             @map("reviewed_by") @db.Uuid
+  // Session 38 (Keen Africans — Editor Workflow). Scheduled publishing.
+  // Set by scheduleArticle() (a future timestamp only); status remains
+  // 'draft' the whole time it's pending — a scheduled article is NOT
+  // publicly visible until src/lib/articles.ts's flipDueScheduledArticles()
+  // (an on-read check, called from every public/author read path — see its
+  // own comment for why this codebase has no cron/job-runner convention to
+  // reuse instead) flips status to 'published' once scheduledAt is due.
+  // Cleared (set back to null) by publishArticle() (immediate publish
+  // supersedes it), unpublishArticle(), and cancelScheduledPublish().
+  scheduledAt      DateTime?           @map("scheduled_at") @db.Timestamptz(6)
   // Session 36 (Keen Africans — Profile & Identity). Denormalized snapshot
   // of the author's display name at creation time, same "stability over
   // always-fresh" trade-off as Certificate.studentNameSnapshot below — set
@@ -1734,9 +1820,12 @@ model Article {
   author     User  @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   coverAsset Asset? @relation("ArticleCover", fields: [coverAssetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   moderator  User?  @relation("ArticleModerator", fields: [moderatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer   User?  @relation("ArticleReviewer", fields: [reviewedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([authorId])
   @@index([status, publishedAt])
+  @@index([status, scheduledAt])
+  @@index([reviewStatus])
   @@map("articles")
 }
 

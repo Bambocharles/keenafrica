@@ -1,16 +1,27 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
-import { deriveExcerpt, getPublicArticleBySlug, renderArticleBodyHtml } from "@/lib/articles";
+import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
 import { ShareLinks } from "./ShareLinks";
 import { LegalFooter } from "../../LegalFooter";
 import styles from "../../site.module.css";
 
+/**
+ * Session 38 (Keen Africans — Editor Workflow). If `slug` was this
+ * article's URL before an author edited it (updateArticleSlug()), send
+ * readers/search engines to the current URL instead of 404ing — see
+ * schema.prisma's Article.previousSlugs comment. A slug that was never
+ * used at all still 404s.
+ */
 async function loadArticle(slug: string) {
   const article = await getPublicArticleBySlug(slug);
-  if (!article) notFound();
-  return article;
+  if (article) return article;
+
+  const currentSlug = await resolveRedirectSlug(slug);
+  if (currentSlug) redirect(`/articles/${currentSlug}`);
+
+  notFound();
 }
 
 export async function generateMetadata({
@@ -76,7 +87,11 @@ export default async function ArticlePage({
 
       <article className={styles.article}>
         <header className={styles.top}>
-          {article.tags.length > 0 && <p className={styles.kicker}>{article.tags.join(" · ")}</p>}
+          {(article.topic || article.tags.length > 0) && (
+            <p className={styles.kicker}>
+              {[article.topic ? ARTICLE_TOPIC_LABELS[article.topic] : null, ...article.tags].filter(Boolean).join(" · ")}
+            </p>
+          )}
           <h1>{article.title}</h1>
           <div className={styles.byline}>
             {article.author.username ? (

@@ -417,3 +417,263 @@ add Security/Settings rows.
 (anonymous read; an outsider can't write/update another user's profile or
 attach an avatar to it, even with a crafted request) — both against the
 real `portal_rls_test` role. 622/622 total passing, `tsc --noEmit` clean.
+
+## Article Editor, Publishing Workflow & Taxonomy (Session 38)
+
+Autosaving editor, an opt-in pre-publish review workflow, scheduled
+publishing, slug editing (with redirects), and a small curated Topic
+taxonomy — all additive to Session 34's Article entity, none of it
+changing existing draft/published/archived behavior for an article that
+doesn't use the new review states.
+
+### Direct-publish stays the default — confirmed, not assumed
+
+This session's own brief explicitly required confirming with the site
+owner before making review mandatory rather than deciding it silently.
+Asked directly: **direct-publish remains available and is the default.**
+The review workflow below is entirely opt-in per article — an author who
+never calls `submitForReview()` publishes exactly as Session 34 always
+allowed, with zero gate. `reviewStatus` defaults to `not_submitted` for
+every existing and new article, and `publishArticle()`'s review check
+(`assertReviewApproved()`) is a no-op whenever `reviewStatus` is
+`not_submitted` or `approved` — only `in_review`/`changes_requested`/
+`rejected` block a plain author from publishing.
+
+### Review workflow — a new Article-scoped enum, not a shared-enum change
+
+`ArticleReviewStatus` (`not_submitted` → `in_review` → `approved`, with
+`changes_requested`/`rejected` as review-time detours back to
+resubmission) is its own Postgres enum and its own `reviewStatus` column
+on `Article` — deliberately NOT new values on the shared `ContentStatus`
+enum `Module`/`Lesson` also use, per this session's explicit "Must NOT".
+`status` (`ContentStatus`) still owns actual visibility; `reviewStatus` is
+a parallel gate that only matters once an article opts in.
+
+State machine (`src/lib/articles.ts`):
+
+```
+not_submitted --submitForReview(author)--> in_review
+in_review --approveArticle(articles.manage)--> approved
+in_review --requestChanges(articles.manage, note)--> changes_requested
+in_review --rejectArticle(articles.manage, reason)--> rejected
+changes_requested --submitForReview(author)--> in_review   (resubmit)
+rejected --submitForReview(author)--> in_review             (resubmit — not terminal)
+approved --publishArticle()/scheduleArticle()--> (status becomes published)
+```
+
+`submitForReview()` requires the article's `status` to be `draft` (an
+already-published or archived article can't be "submitted"). Reviewer
+actions (`approveArticle`/`requestChanges`/`rejectArticle`) require
+`articles.manage` — the same key `adminUnpublishArticle()` already uses,
+held only by ADMIN/SUPER_ADMIN — and each requires the article to
+currently be `in_review` (`InvalidReviewTransitionError` otherwise).
+`requestChanges`/`rejectArticle` require a non-empty note/reason, stored
+in the new `reviewNote` column alongside `reviewedAt`/`reviewedBy`
+(mirrors `moderatedAt`/`moderatedBy`/`moderationNote`'s shape, but for the
+pre-publish workflow — kept as separate columns/relations since the two
+answer different questions and can both be set on one article's history).
+Every transition is audited (`article.review_submitted`/
+`review_approved`/`review_changes_requested`/`review_rejected`).
+`articles.manage`/`super_admin` bypass the review gate entirely when
+publishing — the same bypass shape the email-verification gate already
+has (an admin can publish on someone's behalf).
+
+Reviewer queue: `listArticlesPendingReview(actor)` (`articles.manage`),
+surfaced at `/admin/(protected)/keen-africans` above the existing
+published-articles moderation list, with Approve/Request changes/Reject
+forms per article.
+
+### Scheduled publishing — an on-read check, not a new job runner
+
+This codebase has no cron/scheduled-job convention to reuse (checked —
+no `CronJob` in `k8s/`, no job-runner library, nothing under `scripts/`
+that runs on a schedule), so per this session's own "reuse whatever
+convention exists, don't invent a job runner" instruction, scheduled
+publishing is an **on-read check**: `scheduleArticle(articleId,
+scheduledAt, actor)` sets a new `scheduledAt` timestamp and leaves
+`status` at `draft` (so the article stays fully invisible — same RLS
+policy as any other draft, no bypass); `flipDueScheduledArticles()` scans
+for `status = 'draft' AND scheduledAt <= now()` (a cheap, usually-empty
+query backed by a new `(status, scheduled_at)` index) and flips matching
+rows to `published` under a synthesized system context carrying only
+`articles.manage` (`systemArticlesCtx()`, the same "narrow system
+context, never a real actor's permission set" shape
+`certificates.ts`'s `systemCertificateCtx()`/`progress.ts`'s
+`systemProgressCtx()` already use — appropriate here because the
+triggering caller, e.g. an anonymous public read, has no ownership
+relationship to whichever articles happen to be due). Called from every
+public and author read path (`listPublishedArticles`,
+`getPublicArticleBySlug`, `listMyArticles`, `getArticleForEdit`,
+`listAllPublishedArticlesForAdmin`) — the practical effect is that a
+scheduled article goes live on the next real page load anywhere on the
+site after its `scheduledAt` passes, not necessarily at the exact
+millisecond (an acceptable trade-off this session's brief explicitly
+allows, and a live/idle site could theoretically see a small lag — flagged
+in "Known limitations" below).
+
+`scheduleArticle()`/its cousin `publishArticle()` share the exact same
+`assertReviewApproved()`/email-verification gates — scheduling IS
+publishing, just deferred. An immediate `publishArticle()` call clears
+any pending `scheduledAt` (supersedes it); `unpublishArticle()` clears it
+defensively too. `cancelScheduledPublish()` lets the author back out of a
+pending schedule without publishing.
+
+### Slug editing — allowed, with redirects for already-published articles
+
+The brief asked us to decide whether slug editing is allowed at all, and
+if so, to handle the published-and-indexed case. Decision: **yes, at any
+article status.** `updateArticleSlug(articleId, newSlug, actor)`
+validates format (`^[a-z0-9]+(-[a-z0-9]+)*$`) and global uniqueness
+(excluding the article's own current row), then — whenever the slug
+actually changes — appends the OLD slug to a new `previousSlugs: String[]`
+column (capped at the 10 most recent, oldest evicted first). The public
+article route now tries `resolveRedirectSlug(slug)` before 404ing: if the
+requested slug is a previous slug of a still-published article, it
+`redirect()`s (307) to the current one instead of 404ing — live-verified
+against a real running dev server (see Verification below). A slug that
+was never used at all still 404s normally. No RLS changes were needed —
+row-level policies already cover every column on the row, including the
+new ones (documented in the migration's own header comment).
+
+### Topic — a small curated enum, deliberately NOT Education Core's Topic table
+
+`ArticleTopic` (`cloud`, `ai`, `engineering`, `entrepreneurship`, `career`,
+`business`, `culture`) is a brand-new, flat Postgres enum and a nullable
+`topic` column on `Article` — **not** a reuse of
+`prisma/schema.prisma`'s existing `Topic` model (the Subject → Topic →
+Subtopic/Skill hierarchy that tags `Lesson`/`Question` content for
+mastery calculations). Reusing that table would have conflated a
+hierarchical, admin-managed mastery taxonomy with an open, editorial "what
+section is this article in" category list — different governance, no
+mastery/permission meaning at all (this session's own "not a permissions
+concept" instruction). An article may carry at most one Topic (nullable —
+never required) plus any number of free-form `tags`, both editable in the
+editor. **To extend the list**: add a migration
+(`ALTER TYPE "ArticleTopic" ADD VALUE '...'` — its own migration/
+transaction, same enum-value restriction every other value addition in
+this codebase hits) and add the new value's label to
+`src/lib/articles.ts`'s `ARTICLE_TOPIC_LABELS` map; nothing else needs to
+change, since the editor and public article page both render off that one
+map. Deliberately not wired into any navigation/filtering UI — the brief
+frames Topic as "a discovery aid for Session 44," so no new browse-by-
+topic page or nav was built here.
+
+### Editor upgrade — autosave, live preview through the real pipeline, cover/excerpt kept
+
+`ArticleEditorClient.tsx` (`(protected)/articles/[id]/edit/`) replaces the
+old single `<form action=updateArticleAction>` "Save" button with
+controlled inputs (title/body/excerpt/tags/topic) that autosave via a new
+`autosaveArticleAction` — a Server Action invoked directly from a client
+component inside `startTransition` (per Next's own guidance: "invoke it
+from a form, or from an event handler or useEffect wrapped in
+startTransition"), not bound to a `<form>`, and deliberately calling
+neither `revalidatePath()` nor `redirect()` — either would force a full
+RSC re-render of the edit page on every autosave tick, wiping the very
+input the user is mid-typing into. Two timers bound how much unsaved
+typing a crash/reload can lose: a 1.5s debounce (fires once typing
+pauses) and an 8s hard ceiling that fires even during continuous typing.
+Autosave has no separate "draft content" concept — it just calls the
+existing `updateArticle()` repeatedly, so the saved `Article` row IS the
+resilience mechanism: a reload re-renders the edit page from the
+server-loaded article (see `page.tsx`), which is always at most one
+autosave tick stale. Live-verified directly against the persistence layer
+(see Verification below) — a real reload-equivalent re-fetch reflects
+content that was never explicitly "Saved" via a button click, only
+autosaved.
+
+The live preview is never a second rendering path: `autosaveArticleAction`
+returns HTML from the exact same `renderArticleBodyHtml()` the public page
+calls (marked + sanitize-html), returned alongside the save confirmation
+in the same round trip. Excerpt and cover image are unchanged from
+Session 34 (cover upload/remove still goes through the existing Asset
+service; excerpt was already a real field, now sits in the same
+autosaving form instead of a separate submit).
+
+### Rules preserved
+
+No new rendering path was introduced (`renderArticleBodyHtml()` is still
+the only place Markdown becomes HTML — the editor preview, the autosave
+response, and the public article page all call the exact same function).
+No values were added to the shared `ContentStatus` enum. Review isn't
+mandatory for anyone by default (see above). Every new state transition
+(`submitForReview`/`approveArticle`/`requestChanges`/`rejectArticle`/
+`scheduleArticle`/`cancelScheduledPublish`/`updateArticleSlug`) is
+authorized server-side (ownership via the existing
+`requireArticleOwnerOrManage()`, or `articles.manage` for reviewer
+actions) and audited.
+
+### Migration
+
+`20260901200000_keen_africans_editor_workflow` — both new enums
+(`ArticleReviewStatus`, `ArticleTopic`) plus every new `Article` column
+(`previous_slugs`, `topic`, `review_status`, `review_note`,
+`reviewed_at`, `reviewed_by`, `scheduled_at`) and two new indexes
+(`(status, scheduled_at)`, `(review_status)`), in one migration — unlike
+the `AssetEntityType`/`UserStatus` value additions elsewhere in this
+codebase, these are brand-new enum *types*, not new values on an existing
+one, so Postgres's "can't use a new value in the same transaction that
+adds it" restriction doesn't apply here. No RLS policy changes: RLS is
+row-level, already covers every column on `articles`, and the one
+non-actor write path (`flipDueScheduledArticles()`) runs under
+`articles.manage`, which `articles_update` already grants unconditionally.
+
+### Tests
+
+`articles-editor-workflow.test.ts` — 22 cases: Topic persistence,
+`updateArticleSlug()` (format/uniqueness/ownership/redirect-history),
+the full review state machine (submit → approve/reject/request-changes →
+resubmit, `articles.manage`-only reviewer actions, invalid-transition
+rejection, the reviewer queue's authorization and filtering), and
+scheduled publishing (future-only validation, invisibility until due,
+the same review/verification gates as immediate publish, cancellation,
+`flipDueScheduledArticles()` actually flipping a due row and auditing it,
+an immediate publish clearing a pending schedule). All existing
+`articles.test.ts`/`articles-rls.integration.test.ts` cases pass
+unmodified — direct-publish, ownership enforcement, and RLS behavior for
+an article that never touches the new fields are byte-for-byte the same
+as Session 34/36 left them. 644/644 total passing (622 baseline + 22
+new), `tsc --noEmit` clean.
+
+**Live-verified against a real running dev server** (no browser tool
+available in this sandbox, same limitation prior sessions' notes
+describe — `auth()`/Server Actions require a real Next.js request scope
+that a standalone script can't provide, so the underlying library
+functions were called directly, the same technique the founding-article
+import script used): created and published a real article via the actual
+`createArticle`/`publishArticle` functions, called `updateArticleSlug()`
+to rename it, and confirmed live via `curl` that the OLD slug now returns
+`307` with `location:` pointing at the new slug, and the new slug returns
+`200`. Separately confirmed the autosave persistence mechanism directly:
+called `updateArticle()` (what `autosaveArticleAction` calls internally)
+with edited title/body/tags/topic, then re-fetched via
+`getArticleForEdit()` — the same call `edit/page.tsx` makes on every page
+load — and confirmed every field reflected the "autosaved" edit with no
+separate "Save" action ever invoked, proving a reload shows the latest
+autosaved state.
+
+### Known limitations
+
+- **Scheduled publishing's precision is bounded by real read traffic**,
+  not a timer — a scheduled article goes live on the next page load
+  anywhere on the site after `scheduledAt` passes (public listing, the
+  article page, the author's own dashboard, admin's queue), which is
+  effectively instant on a live site but could theoretically lag on a
+  fully idle one. This is the on-read-check trade-off this session's
+  brief explicitly allows in place of inventing a job runner.
+- **No browser-based interactive verification of the autosave UI itself**
+  (debounce timing, the "Saving…"/"Saved HH:MM:SS" indicator, actually
+  typing into the textarea) — this sandbox has no browser automation tool
+  available by default; verified instead at the mechanism level (the
+  Server Action's underlying persistence + reload-reflects-latest-state,
+  see Verification above). Worth a real browser pass if one becomes
+  available.
+- **Topic has no browse/filter UI** — deliberately, per the brief framing
+  it as Session 44's discovery-aid territory; only the curated enum, the
+  editor picker, and a plain-text label on the article page exist today.
+- **Review workflow has no email/notification integration** — an author
+  submitting for review, or a reviewer approving/rejecting, doesn't
+  trigger a platform `Notification` today (same gap Session 34's own
+  "Known limitations" already flagged for publish/moderation events;
+  Session 39 appears to be independently working on Keen Africans
+  notifications per migration files observed in this shared sandbox,
+  worth checking before adding review-workflow notifications separately).
