@@ -4,15 +4,18 @@ import { getUserById } from "@/lib/users";
 import { getProfileByUserId } from "@/lib/profiles";
 import { listArticlesByAuthorForAdmin } from "@/lib/articles";
 import { getVerificationForAdmin, getVerifiedUserIds } from "@/lib/verification";
+import { getAuthorReputation } from "@/lib/follows";
+import { PROFILE_BADGES, PROFILE_BADGE_LABELS } from "@/lib/profiles";
 import { PERMISSIONS, hasPermission } from "@/lib/authz";
 import {
   approveVerificationForUserAction,
   reinstateKeenAfricanAction,
   rejectVerificationForUserAction,
+  setBadgeAction,
   setFeaturedAction,
   suspendKeenAfricanAction,
 } from "../../actions";
-import { Banner, Button, Card, Input, SectionHeader, StatusBadge, Table } from "@/components/ui";
+import { Banner, Button, Card, Input, SectionHeader, Select, StatusBadge, Table } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -70,11 +73,12 @@ export default async function KeenAfricanUserDetailPage({
   const canModerateArticles = actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE);
   const canReviewVerification = actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.VERIFICATION_REVIEW);
 
-  const [profile, articles, verification, verifiedIds] = await Promise.all([
+  const [profile, articles, verification, verifiedIds, reputation] = await Promise.all([
     getProfileByUserId(id),
     canModerateArticles ? listArticlesByAuthorForAdmin(id, actor) : Promise.resolve([]),
     canReviewVerification ? getVerificationForAdmin(id, actor) : Promise.resolve(null),
     getVerifiedUserIds([id]),
+    getAuthorReputation(id),
   ]);
   const isVerified = verifiedIds.has(id);
 
@@ -98,6 +102,7 @@ export default async function KeenAfricanUserDetailPage({
             ))}
             {isVerified && <StatusBadge status="verified" />}
             {profile?.featured && <span className={ui.roleTag}>Featured</span>}
+            {profile?.editorialBadge && <span className={ui.roleTag}>{PROFILE_BADGE_LABELS[profile.editorialBadge]}</span>}
           </div>
           <div className={ui.mono}>{target.email}</div>
           <div className={ui.mono}>Joined {formatDateTime(target.createdAt)}</div>
@@ -140,6 +145,11 @@ export default async function KeenAfricanUserDetailPage({
             <div className={ui.subCell}>
               {[profile.profession, profile.country].filter(Boolean).join(" · ") || "—"}
             </div>
+            <div className={ui.subCell}>
+              {reputation.articleCount} articles · {reputation.totalViews} views · {reputation.followerCount} followers
+              {" · "}
+              {reputation.followingCount} following
+            </div>
             {canModerateArticles && (
               <form
                 action={setFeaturedAction}
@@ -149,6 +159,22 @@ export default async function KeenAfricanUserDetailPage({
                 <input type="hidden" name="featured" value={profile.featured ? "false" : "true"} />
                 <Button type="submit" variant={profile.featured ? "outline" : "secondary"}>
                   {profile.featured ? "Remove Featured" : "Mark Featured"}
+                </Button>
+              </form>
+            )}
+            {canModerateArticles && (
+              <form action={setBadgeAction} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input type="hidden" name="userId" value={target.id} />
+                <Select name="badge" defaultValue={profile.editorialBadge ?? ""}>
+                  <option value="">No editorial badge</option>
+                  {PROFILE_BADGES.map((b) => (
+                    <option key={b} value={b}>
+                      {PROFILE_BADGE_LABELS[b]}
+                    </option>
+                  ))}
+                </Select>
+                <Button type="submit" variant="secondary">
+                  Save badge
                 </Button>
               </form>
             )}

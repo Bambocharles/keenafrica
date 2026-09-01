@@ -1,0 +1,13 @@
+-- Session 42 (Follow & Author Reputation Display). Adds the
+-- 'user_followed' NotificationType value, split into its own
+-- migration/transaction — Postgres cannot use a new enum value in the same
+-- transaction that adds it (same requirement documented on every prior
+-- NotificationType/AssetEntityType addition, e.g. the
+-- 'verification_status_changed' migration this one follows).
+--
+-- This is the ONLY new NotificationType value this session adds. See
+-- schema.prisma's NotificationType comment and docs/NOTIFICATIONS.md's
+-- "Extension points" section, which already anticipated this exact value
+-- and its exact contract ({followerId, followedUserId}, notifying only the
+-- followed user, dedupe keyed on the follow relationship's own identity).
+ALTER TYPE "NotificationType" ADD VALUE 'user_followed';

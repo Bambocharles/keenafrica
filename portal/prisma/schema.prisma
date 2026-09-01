@@ -212,6 +212,13 @@ enum NotificationType {
   // VerificationStatusChanged comment for why connectLinkedIn() itself
   // never emits this).
   verification_status_changed
+  // Session 42 (Follow & Author Reputation Display). The "follow" value
+  // the Session 39 comment above anticipated. Own migration, same
+  // enum-value-transaction rule. Emitted only by src/lib/follows.ts's
+  // followUser() (never by unfollowUser() — there is no "someone
+  // unfollowed you" notification, per docs/NOTIFICATIONS.md's extension
+  // point), notifying the followed user, never the follower.
+  user_followed
 }
 
 // --- Organization Core (Session 17) --------------------------------------
@@ -499,6 +506,14 @@ model User {
   // this relation is only ever populated for a logged-in reporter.
   reportsFiled    Report[] @relation("ReportReporter")
   reportsReviewed Report[] @relation("ReportReviewer")
+
+  // Session 42 (Follow & Author Reputation Display). See Follow's own
+  // comment. `following` = rows where this user is the follower (people
+  // THEY follow); `followers` = rows where this user is being followed
+  // (people following THEM) — named from this user's own point of view,
+  // not the column name, to keep call sites readable.
+  following Follow[] @relation("FollowFollower")
+  followers Follow[] @relation("FollowFollowing")
 
   @@map("users")
 }
@@ -1850,6 +1865,18 @@ model Article {
   previousSlugs  String[]            @default([]) @map("previous_slugs")
   body           String
   excerpt        String?
+  // Session 42 (Follow & Author Reputation Display). A minimal view
+  // counter — incremented once per real public article-page render by
+  // src/lib/articles.ts's recordArticleView() (called from the page
+  // component only, never from generateMetadata, so a single page visit
+  // counts once). No dedup by reader/IP/session — see that function's own
+  // comment for why this is deliberately the "minimal counter" this
+  // session's brief allows, not a full analytics mechanism. Session 44
+  // (Discovery) had not shipped as of this session — checked first, see
+  // docs/KEEN_AFRICANS.md's "Follow & Author Reputation Display" section —
+  // so this is the canonical view count; a later session should extend
+  // this column rather than add a second one.
+  viewCount      Int                 @default(0) @map("view_count")
   tags           String[]            @default([])
   // Session 38 (Keen Africans — Editor Workflow). Discovery aid, not a
   // permissions concept — see ArticleTopic's own comment. Nullable: never
@@ -1928,6 +1955,21 @@ model Article {
 // src/lib/articles.ts's resolveAuthorName() for the one place that
 // fallback still exists, purely as a defensive fallback for an actor with
 // no profile row at all yet.
+//
+// Session 42 (Follow & Author Reputation Display). A small curated
+// editorial label — deliberately a SEPARATE concept from both verification
+// (Session 40's LinkedIn-reviewed identity badge) and `featured` above
+// (Session 40's own "editorially featured" flag): this one names a
+// community-reputation ROLE ("Top Contributor," "Community Mentor"), not
+// identity or content curation. Kept as a small curated enum rather than
+// free text, same "curated list, not a permissions concept" shape
+// ArticleTopic already established — see src/lib/profiles.ts's
+// PROFILE_BADGE_LABELS for the extension steps.
+enum ProfileBadge {
+  top_contributor
+  community_mentor
+}
+
 model Profile {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId        String   @unique @map("user_id") @db.Uuid
@@ -1960,6 +2002,17 @@ model Profile {
   // sessions/40-keen-africans-linkedin-verification.md: never let this
   // look like a verification badge).
   featured      Boolean  @default(false)
+  // Session 42 (Follow & Author Reputation Display). See ProfileBadge's own
+  // comment for why this is a separate concept from both `featured` above
+  // and verification. Nullable — never required; set/cleared only by
+  // src/lib/profiles.ts's setProfileBadge() (articles.manage-gated, same
+  // permission key setProfileFeatured() already uses — no new permission
+  // key for what is another lightweight extension of the existing
+  // editorial capability). Writable through the SAME profiles_update
+  // articles.manage branch Session 40's migration already added for
+  // `featured` — no further RLS change needed (see that migration's own
+  // "profiles_update amendment" comment).
+  editorialBadge ProfileBadge? @map("editorial_badge")
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -2084,4 +2137,49 @@ model Report {
   @@index([entityType, entityId])
   @@index([status])
   @@map("reports")
+}
+
+// Session 42 (Follow & Author Reputation Display). A follower/following
+// relationship between two Users — a platform-generic social-graph edge,
+// not a Keen-Africans-specific table, but the only entry points into it
+// today (the follow/unfollow button on the public profile page and the
+// article byline, src/lib/follows.ts) require the target to already have a
+// Profile row, which in practice scopes it to Keen Africans authors
+// without needing a role check of its own (same "Profile as the
+// public-safe boundary" reasoning Session 36 established).
+//
+// follower_id <> following_id is enforced BOTH ways, same "app layer AND
+// RLS/DB layer" standard every ownership check in this codebase meets:
+// - a table CHECK constraint (follows_no_self_follow) — the strongest
+//   possible guarantee, since a CHECK constraint applies even under the
+//   isSuperAdmin RLS bypass, unlike a WITH CHECK policy;
+// - the follows_insert RLS policy's own WITH CHECK, mirroring every other
+//   "self_id <> target_id" condition would need;
+// - src/lib/follows.ts's followUser() itself (CannotFollowSelfError),
+//   before either DB layer is ever reached.
+//
+// Double-follow is prevented by the (follower_id, following_id) unique
+// constraint at the DB layer, and followUser() throws AlreadyFollowingError
+// at the application layer rather than silently no-opping, so a client can
+// tell the two states apart.
+//
+// No `status`/soft-delete — a Follow is either present or not; unfollowing
+// is a real DELETE (follows_delete, self-only), the one deliberate
+// exception to this codebase's usual "never hard-delete" convention,
+// appropriate here because a follow relationship carries no history worth
+// preserving (unlike an article/certificate/audit row) — same reasoning
+// AssetAttachment's detach-and-recreate pattern already relies on.
+model Follow {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  followerId  String   @map("follower_id") @db.Uuid
+  followingId String   @map("following_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  follower  User @relation("FollowFollower", fields: [followerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  following User @relation("FollowFollowing", fields: [followingId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("follows")
 }

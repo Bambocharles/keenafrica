@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { createReport, ReportRateLimitedError, ReportTargetNotFoundError } from "@/lib/reports";
+import { AlreadyFollowingError, CannotFollowSelfError, FollowTargetNotFoundError, followUser, unfollowUser } from "@/lib/follows";
 
 /**
  * Session 41 (Admin Moderation, Reporting & Verification Review). Shared
@@ -41,4 +42,49 @@ export async function reportAction(formData: FormData) {
   }
 
   redirect(error ? `${returnTo}?reportError=${error}` : `${returnTo}?reported=1`);
+}
+
+/**
+ * Session 42 (Follow & Author Reputation Display). Shared by both follow
+ * entry points — the public profile page's <FollowButton> and the article
+ * byline's — same "one contract, both call sites" shape as reportAction
+ * above. Requires a real session (unlike reportAction — following, unlike
+ * reporting, is never anonymous); FollowButton itself only ever renders
+ * the signed-in form when a session exists, so reaching here signed out
+ * means a crafted/stale request, not a real user flow — redirecting to
+ * /login is the correct, if defensive, response.
+ */
+export async function followAction(formData: FormData) {
+  const session = await auth();
+  const targetUserId = String(formData.get("targetUserId") ?? "");
+  const returnTo = String(formData.get("returnTo") ?? "/");
+  if (!session?.user) redirect("/login");
+
+  let error: string | null = null;
+  try {
+    await followUser(targetUserId, session.user);
+  } catch (err) {
+    if (err instanceof CannotFollowSelfError) error = "cannot_follow_self";
+    else if (err instanceof AlreadyFollowingError) error = "already_following";
+    else if (err instanceof FollowTargetNotFoundError) error = "not_found";
+    else error = "failed";
+  }
+
+  redirect(error ? `${returnTo}?followError=${error}` : returnTo);
+}
+
+export async function unfollowAction(formData: FormData) {
+  const session = await auth();
+  const targetUserId = String(formData.get("targetUserId") ?? "");
+  const returnTo = String(formData.get("returnTo") ?? "/");
+  if (!session?.user) redirect("/login");
+
+  let error: string | null = null;
+  try {
+    await unfollowUser(targetUserId, session.user);
+  } catch {
+    error = "failed";
+  }
+
+  redirect(error ? `${returnTo}?followError=${error}` : returnTo);
 }

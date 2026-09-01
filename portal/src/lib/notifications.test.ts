@@ -14,6 +14,8 @@ import { addQuestionToAssessment, assignAssessmentToCohort, createAssessment, pu
 import { startAttempt, submitAttempt } from "@/lib/attempts";
 import { startConversation } from "@/lib/messaging";
 import { adminUnpublishArticle, createArticle, publishArticle } from "@/lib/articles";
+import { ensureProfile } from "@/lib/profiles";
+import { followUser, unfollowUser } from "@/lib/follows";
 import { FEATURE_FLAGS, _resetFeatureFlagCache } from "@/lib/feature-flags";
 import * as mailer from "@/lib/mailer";
 import {
@@ -30,7 +32,9 @@ import {
   actorFromUser,
   cleanupTestArticles,
   cleanupTestCourses,
+  cleanupTestFollows,
   cleanupTestNotifications,
+  cleanupTestProfiles,
   cleanupTestUsers,
   createTestUser,
 } from "@/lib/test-support";
@@ -54,7 +58,9 @@ afterEach(() => {
 
 afterAll(async () => {
   await cleanupTestNotifications(createdUserIds);
+  await cleanupTestFollows(createdUserIds);
   await cleanupTestArticles(createdArticleIds);
+  await cleanupTestProfiles(createdUserIds);
   await cleanupTestCourses(createdCourseIds);
   await cleanupTestUsers(createdUserIds);
 });
@@ -479,6 +485,71 @@ describe("ArticleUnpublishedByAdmin -> article_unpublished_by_admin", () => {
 
     const { notifications } = await listMyNotifications(authorActor);
     expect(notifications.filter((n) => n.type === "article_unpublished_by_admin")).toHaveLength(1);
+  });
+});
+
+describe("UserFollowed -> user_followed", () => {
+  it("notifies only the followed user, not the follower, with no href (Session 42)", async () => {
+    const followerUser = await user({ roles: ["KEEN_AFRICAN"] });
+    const followerActor = await actorFromUser(followerUser.id);
+    await ensureProfile(followerActor, { name: "Notif Follower" });
+
+    const followedUser = await user({ roles: ["KEEN_AFRICAN"] });
+    const followedActor = await actorFromUser(followedUser.id);
+    await ensureProfile(followedActor, { name: "Notif Followed" });
+
+    await followUser(followedUser.id, followerActor);
+    await waitForNotificationCount(followedActor, "user_followed", 1);
+
+    const { notifications: followedNotifs } = await listMyNotifications(followedActor);
+    const notif = followedNotifs.find((n) => n.type === "user_followed");
+    expect(notif).toBeDefined();
+    expect(notif!.title).toContain("Notif Follower");
+    expect(notif!.entityType).toBe("user");
+    expect(notif!.entityId).toBe(followerUser.id);
+    expect(notificationHref(notif!)).toBeNull();
+
+    // The recipient is the followed account, never the follower.
+    const { notifications: followerNotifs } = await listMyNotifications(followerActor);
+    expect(followerNotifs.some((n) => n.type === "user_followed")).toBe(false);
+  });
+
+  it("unfollowing then re-following produces a second, independent notification (a fresh Follow row -> a fresh dedupe key)", async () => {
+    const followerUser = await user({ roles: ["KEEN_AFRICAN"] });
+    const followerActor = await actorFromUser(followerUser.id);
+    await ensureProfile(followerActor, { name: "Repeat Follower" });
+
+    const followedUser = await user({ roles: ["KEEN_AFRICAN"] });
+    const followedActor = await actorFromUser(followedUser.id);
+    await ensureProfile(followedActor, { name: "Repeat Followed" });
+
+    await followUser(followedUser.id, followerActor);
+    await waitForNotificationCount(followedActor, "user_followed", 1);
+
+    await unfollowUser(followedUser.id, followerActor);
+    await followUser(followedUser.id, followerActor);
+    await waitForNotificationCount(followedActor, "user_followed", 2);
+
+    const { notifications } = await listMyNotifications(followedActor);
+    expect(notifications.filter((n) => n.type === "user_followed")).toHaveLength(2);
+  });
+
+  it("unfollowing emits no notification at all — there is no 'someone unfollowed you' signal", async () => {
+    const followerUser = await user({ roles: ["KEEN_AFRICAN"] });
+    const followerActor = await actorFromUser(followerUser.id);
+    await ensureProfile(followerActor, { name: "Quiet Unfollower" });
+
+    const followedUser = await user({ roles: ["KEEN_AFRICAN"] });
+    const followedActor = await actorFromUser(followedUser.id);
+    await ensureProfile(followedActor, { name: "Quiet Unfollowed" });
+
+    await followUser(followedUser.id, followerActor);
+    await waitForNotificationCount(followedActor, "user_followed", 1);
+    await unfollowUser(followedUser.id, followerActor);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const { notifications } = await listMyNotifications(followedActor);
+    expect(notifications.filter((n) => n.type === "user_followed")).toHaveLength(1);
   });
 });
 

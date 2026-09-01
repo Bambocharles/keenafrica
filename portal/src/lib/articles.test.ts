@@ -15,6 +15,7 @@ import {
   getPublicArticleBySlug,
   listMyArticles,
   publishArticle,
+  recordArticleView,
   renderArticleBodyHtml,
   unpublishArticle,
   updateArticle,
@@ -213,6 +214,25 @@ describe("publishArticle — email verification gate", () => {
     await unpublishArticle(article.id, actor);
     const publicRow = await getPublicArticleBySlug(article.slug);
     expect(publicRow).toBeNull();
+  });
+});
+
+describe("recordArticleView (Session 42 — Follow & Author Reputation Display)", () => {
+  it("increments the article's view count", async () => {
+    const actor = await keenAfrican(true);
+    const article = await createArticle({ title: "View Counted" }, actor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, actor);
+
+    await recordArticleView(article.id);
+    await recordArticleView(article.id);
+
+    const row = await prisma.article.findUniqueOrThrow({ where: { id: article.id }, select: { viewCount: true } });
+    expect(row.viewCount).toBe(2);
+  });
+
+  it("does not throw for an unknown article id — a view-count failure must never break the page render", async () => {
+    await expect(recordArticleView("00000000-0000-0000-0000-000000000000")).resolves.toBeUndefined();
   });
 });
 

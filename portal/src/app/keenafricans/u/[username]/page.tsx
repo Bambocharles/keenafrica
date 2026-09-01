@@ -4,9 +4,11 @@ import { auth } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { deriveExcerpt } from "@/lib/articles";
 import { getPublicProfileByUsername } from "@/lib/profiles";
+import { getAuthorReputation, isFollowing } from "@/lib/follows";
 import { LegalFooter } from "../../LegalFooter";
 import { VerificationBadge } from "../../VerificationBadge";
 import { ReportForm } from "../../ReportForm";
+import { FollowButton } from "../../FollowButton";
 import styles from "../../site.module.css";
 
 /**
@@ -53,13 +55,20 @@ export default async function ProfilePage({
   searchParams,
 }: {
   params: Promise<{ username: string }>;
-  searchParams: Promise<{ reported?: string; reportError?: string }>;
+  searchParams: Promise<{ reported?: string; reportError?: string; followError?: string }>;
 }) {
   const { username } = await params;
   const { profile, articles, verified } = await loadProfile(username);
   const session = await auth();
   const signedIn = canAccessKeenAfricanPortal(session?.user);
-  const { reported, reportError } = await searchParams;
+  const { reported, reportError, followError } = await searchParams;
+
+  // Session 42 (Follow & Author Reputation Display). Public reads — safe
+  // to run in parallel with everything already loaded above.
+  const [reputation, viewerFollowing] = await Promise.all([
+    getAuthorReputation(profile.userId),
+    isFollowing(session?.user?.id, profile.userId),
+  ]);
 
   const links: Array<{ label: string; href: string }> = [
     profile.websiteUrl ? { label: "Website", href: profile.websiteUrl } : null,
@@ -92,13 +101,41 @@ export default async function ProfilePage({
         <div>
           <h1 className={styles.profileName}>
             {profile.displayName}
-            <VerificationBadge member={profile.emailVerified} verified={verified} featured={profile.featured} />
+            <VerificationBadge
+              member={profile.emailVerified}
+              verified={verified}
+              featured={profile.featured}
+              editorialBadge={profile.editorialBadge}
+            />
           </h1>
           {(profile.profession || profile.country) && (
             <p className={styles.profileMeta}>
               {[profile.profession, profile.country].filter(Boolean).join(" · ")}
             </p>
           )}
+          <p className={styles.reputation}>
+            <span className={styles.reputationStat}>
+              <strong>{reputation.articleCount}</strong> {reputation.articleCount === 1 ? "article" : "articles"}
+            </span>
+            <span aria-hidden>·</span>
+            <span className={styles.reputationStat}>
+              <strong>{reputation.totalViews}</strong> {reputation.totalViews === 1 ? "view" : "views"}
+            </span>
+            <span aria-hidden>·</span>
+            <span className={styles.reputationStat}>
+              <strong>{reputation.followerCount}</strong> {reputation.followerCount === 1 ? "follower" : "followers"}
+            </span>
+          </p>
+          <div className={styles.followRow}>
+            <FollowButton
+              targetUserId={profile.userId}
+              isSelf={session?.user?.id === profile.userId}
+              signedIn={!!session?.user}
+              following={viewerFollowing}
+              returnTo={`/u/${profile.username}`}
+              followError={followError}
+            />
+          </div>
           {profile.bio && <p className={styles.profileBio}>{profile.bio}</p>}
           {links.length > 0 && (
             <div className={styles.profileLinks}>
