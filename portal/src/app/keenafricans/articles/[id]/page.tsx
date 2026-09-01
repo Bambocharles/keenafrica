@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { PERMISSIONS, canAccessKeenAfricanPortal, hasPermission } from "@/lib/authz";
-import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, recordArticleView, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
+import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, hashViewerKey, recordArticleView, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
 import { isFollowing } from "@/lib/follows";
 import { listCommentsForArticle } from "@/lib/comments";
 import { getReactionCount, hasReacted } from "@/lib/reactions";
@@ -102,7 +103,20 @@ export default async function ArticlePage({
   // real render, from the page body only — never from generateMetadata()
   // above, which would double-count a single visit (see recordArticleView()'s
   // own comment). Fire against the article's real id, not the slug.
-  await recordArticleView(article.id);
+  //
+  // Session 44 (Discovery, Search & Recommendations). Passes a dedup key —
+  // the signed-in viewer's own id, or a salted hash of IP+User-Agent for an
+  // anonymous reader — so a rapid page refresh doesn't inflate the count;
+  // see hashViewerKey()/recordArticleView()'s own comments.
+  const h = await headers();
+  await recordArticleView(
+    article.id,
+    hashViewerKey({
+      userId: session?.user?.id,
+      ipAddress: h.get("x-forwarded-for"),
+      userAgent: h.get("user-agent"),
+    })
+  );
   const [viewerFollowingAuthor, comments, reactionCount, viewerReacted] = await Promise.all([
     isFollowing(session?.user?.id, article.authorId),
     listCommentsForArticle(article.id),
@@ -174,7 +188,7 @@ export default async function ArticlePage({
           {article.tags.length > 0 && (
             <div className={styles.tags}>
               {article.tags.map((t) => (
-                <a key={t} href={`/?tag=${encodeURIComponent(t)}`} className={styles.tag}>
+                <a key={t} href={`/latest?tag=${encodeURIComponent(t)}`} className={styles.tag}>
                   #{t}
                 </a>
               ))}

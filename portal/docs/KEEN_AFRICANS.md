@@ -1814,3 +1814,247 @@ None.
   and database (`portal_dev_session43`) are left in place, not cleaned
   up — safe to remove once this branch is merged, or reused as-is if
   Session 43 gets a follow-up.
+
+## Discovery, Search & Recommendations (Session 44)
+
+Branch `session-44-keen-africans-discovery`, off `origin/main` (confirmed
+`origin/main`'s HEAD, `94bdd7f` "Merge pull request #81 from
+Bambocharles/session-43-keen-africans-comments-reactions", is an ancestor
+of the branch this session started from), in its own git worktree
+(`~/keenafrica/.worktrees/session-44-keen-africans-discovery`) against an
+isolated `portal_dev_session44` database (cloned from the shared
+`portal_dev`, then brought fully current via `prisma migrate deploy`).
+Committed locally, not pushed/PR'd — same convention every prior Keen
+Africans session followed. This is the last, and most optional, phase of
+the Keen Africans roadmap.
+
+### What shipped
+
+- **View-count tracking, EXTENDED not duplicated**: Session 42 already
+  shipped `Article.viewCount` (a lifetime counter, no dedup) and
+  `recordArticleView()`. This session adds an append-only `ArticleView`
+  log (`article_id`, `viewer_key`, `viewed_at`) and gives
+  `recordArticleView(articleId, viewerKey?)` a second, OPTIONAL parameter.
+  When a caller supplies a `viewerKey`, a repeat view from the same key
+  within a 30-minute cooldown is silently skipped (no counter increment,
+  no new log row) — the "must not be trivially gameable" rule this
+  session's brief requires. Every pre-existing Session 42 caller/test that
+  passes no `viewerKey` keeps its exact old behavior: every call counts,
+  no dedup at all — nothing about Session 42's contract changed.
+  `src/lib/articles.ts`'s new `hashViewerKey()` derives the key: a
+  signed-in viewer is keyed on their own stable user id (`user:<id>`); an
+  anonymous one on a salted sha256 of IP+User-Agent (`anon:<hash>`) — the
+  raw IP is never stored. The public article page
+  (`src/app/keenafricans/articles/[id]/page.tsx`) now reads
+  `x-forwarded-for`/`user-agent` via `next/headers` and passes the derived
+  key on its one real `recordArticleView()` call.
+- **Trending**, ranked by RECENT view velocity (views in the last 48h),
+  never lifetime `viewCount` — `listTrendingArticles()`. Backed by
+  `ArticleView`, not `Article.viewCount`: groups view rows from the
+  window into a 50-candidate pool, then re-fetches those articles filtered
+  to CURRENTLY published (an article that accrued views while published
+  and was since unpublished/archived never appears, even though its view
+  rows still exist).
+- **The Explore page** (`keenafricans.<root>/`, replacing Session 34's
+  flat "latest articles" list) — four sections against real data:
+  Trending, a Latest teaser (linking to the new `/latest`, which is
+  Session 34's original paginated/tag-filterable listing moved unchanged
+  to its own URL), Topics (Session 38's curated `ArticleTopic` list with
+  live published-article counts, `getTopicCounts()`), and People to follow
+  (signed-in viewers only — omitted entirely for a signed-out visitor,
+  since "doesn't already follow" has no meaning without a viewer
+  identity).
+- **Topic browsing** — `keenafricans.<root>/topics/[topic]`, one page per
+  curated topic, same pagination shape as `/latest` but filtered by
+  `topic` (a new optional filter on `listPublishedArticles()`, alongside
+  the pre-existing `tag` filter). An unrecognized topic segment 404s
+  (validated against `ARTICLE_TOPICS`, never passed straight into the
+  enum-typed Prisma filter).
+- **People to follow** — `listPeopleToFollow()` (`src/lib/follows.ts`):
+  published authors ranked by follower count (then article count as a
+  tiebreak), excluding the viewer themself and anyone already followed.
+  Deliberately simple, per this session's own brief — no ML, no
+  interest-based matching.
+- **Search** — `src/lib/search.ts`'s `searchArticles()`/`searchAuthors()`,
+  basic Postgres full-text search (`to_tsvector`/`plainto_tsquery`/
+  `ts_rank`) backed by two GIN indexes
+  (`keen_africans_search_indexes` migration): articles
+  (title+excerpt+body, partial `WHERE status = 'published'`) and profiles
+  (display name+username+profession+bio, unconditionally — a Profile
+  carries no draft/private state at all). A plain `title`/`display_name`/
+  `username` `ILIKE` is OR'd in alongside the tsvector match, since
+  `plainto_tsquery` is word/stem-based and won't match a short/partial
+  query on its own. Article tags are matched with a separate, unindexed
+  `= ANY(tags)` exact-match condition — `array_to_string()` (needed to
+  fold an array into one indexable text expression) is Postgres-STABLE,
+  not IMMUTABLE, so it cannot be folded into the GIN index at all (see
+  the migration's own comment for the exact error this hit and why). Both
+  queries re-apply their own visibility rule directly in SQL (`WHERE
+  status = 'published'` for articles; nothing to filter for profiles) as
+  defense in depth on top of RLS's own backstop — never rely on RLS
+  alone. `keenafricans.<root>/search?q=...`, a plain GET `<form>`
+  (`SearchBox.tsx`, no client JS), renders both result kinds on one page.
+
+### Migrations
+
+- `20260901310000_keen_africans_article_views` — `article_views` table
+  (`article_id`, `viewer_key`, `viewed_at`), two indexes
+  (`(article_id, viewed_at)` for Trending's own read path,
+  `(article_id, viewer_key, viewed_at)` for the dedup lookup), and RLS:
+  `article_views_select` unconditionally open (same "public engagement
+  signal" reasoning `article_reactions_select`/`follows_select` already
+  established); `article_views_insert` restricted to `super_admin`/
+  `articles.manage` ONLY — no `KEEN_AFRICAN`/`TEACHER`/`STUDENT` role
+  holds `articles.manage`, so a client can never forge a view row
+  directly, independent of whatever `recordArticleView()`'s own
+  application-layer logic does (proven at the DB layer by
+  `article-views-rls.integration.test.ts`, not just asserted). No
+  UPDATE/DELETE policy — append-only, same spirit as `audit_events`.
+- `20260901320000_keen_africans_search_indexes` — two GIN indexes (raw SQL
+  only; Prisma's schema DSL has no way to express a functional/expression
+  index, so — same as every RLS policy in this codebase — these live only
+  in the migration, and `prisma migrate diff` will always report them as
+  "drift" against `schema.prisma`; expected, matching this codebase's
+  existing RLS-drift convention, not a bug).
+
+### APIs / contracts
+
+`src/lib/articles.ts` gained: `hashViewerKey()`, `getTopicCounts()`,
+`listTrendingArticles(limit?)`, a `topic` filter on
+`listPublishedArticles()`'s existing `opts`, and `recordArticleView()`'s
+new optional second parameter (backward-compatible — see "What shipped"
+above). `src/lib/follows.ts` gained `listPeopleToFollow(viewerUserId,
+limit?)`. New `src/lib/search.ts`: `searchArticles(query, limit?)`,
+`searchAuthors(query, limit?)`. `src/lib/test-support.ts`'s
+`cleanupTestArticles()` now also cleans up `ArticleView` rows for the
+articles it removes.
+
+New pages: `keenafricans.<root>/` (rewritten — the Explore page),
+`/latest` (Session 34's original listing, moved here unchanged), `/topics/
+[topic]`, `/search`. New shared component: `SearchBox.tsx`. One existing
+link updated: the article page's per-tag link now points at
+`/latest?tag=...` instead of the old `/?tag=...` (the tag-filterable
+listing moved with the rest of `/latest`'s content).
+
+### Permissions
+
+No new permission keys. Every discovery/search/trending/topic read is
+public/anonymous, same as every other public Keen Africans read.
+`article_views_insert`'s RLS policy reuses the existing `articles.manage`
+key (see Migrations above) — no permission system changes at all.
+
+### Events
+
+None added. Nothing in this session's scope has a natural event
+consumer (a view/search/trending read is not a state-changing action
+worth broadcasting).
+
+### Tests
+
+31 new, on top of the 829 baseline confirmed before this session touched
+anything (Session 43's own reported final count): `hashViewerKey`/
+`recordArticleView` dedup (7, `articles.test.ts`), `listTrendingArticles`
+(3), `getTopicCounts`/topic filter (3), `listPeopleToFollow` (3,
+`follows.test.ts`), `searchArticles`/`searchAuthors` (10, new
+`search.test.ts` — including the explicit "NEVER returns a draft article,
+even one whose title exactly matches the query" case this session's own
+acceptance criteria requires), and a new
+`article-views-rls.integration.test.ts` (5 cases against the real
+non-superuser `portal_rls_test` role — the actual DB-level proof that a
+plain authenticated caller, and a genuinely anonymous one, cannot forge an
+`article_views` INSERT, while an `articles.manage`/`super_admin` context
+can).
+
+**Full suite: 858/860 passing** (829 baseline + 31 new). `npx tsc --noEmit`
+clean. Two failures observed only under full concurrent-suite load, both
+already documented by prior sessions as pre-existing and unrelated to Keen
+Africans work, and both confirmed to pass cleanly in isolation this
+session: `assessment-rls.integration.test.ts`'s Session 31 query-plan
+assertion (flagged since Session 38 — sensitive to this shared DB's
+planner statistics, not to anything this session touched) and
+`notifications.test.ts`'s timing-sensitive cases under concurrent load
+(flagged since Session 41; this run it was the `CoursePublished`/
+`ArticleUnpublishedByAdmin` cases specifically, which vary run to run —
+this session never touched `notifications.ts` or the
+`ArticleUnpublishedByAdmin` listener).
+
+**Live-verified against a real running dev server, real HTTP** (`npm run
+dev` on a scratch port, `curl -H "Host: keenafricans.portal.local"` — no
+browser tool in this sandbox): a one-time scratch script
+(`scratch-session44-verify.ts`, deleted before this session finished)
+called the real `createArticle`/`publishArticle`/`recordArticleView`/
+`followUser` functions to create two published articles (one with 8
+lifetime views deliberately backdated outside the 48h trending window,
+one with 3 views inside it) and one draft. Confirmed: the Explore
+homepage's Trending section contains ONLY the fresh article ("3 views in
+the last 48h"), not the stale-but-larger-lifetime-total one; the Topics
+grid shows the live count (`Cloud 1`); `/topics/cloud` and
+`/latest?tag=cloudops` each return exactly the matching article;
+`/search?q=infrastructure` (a word from the article body) finds the
+article and returns zero results for the draft's own exact title; author
+search by name works; the draft's direct article URL 404s; and three
+rapid real page loads of the same article with the same User-Agent (curl)
+increased `viewCount` by exactly 1, not 3, proving the dedup mechanism
+works end-to-end over real HTTP, not just in a unit test. All fixtures
+were deleted afterward (confirmed zero `title ILIKE '%Live Verify%'` rows
+remain). Not independently curl-verified: the authenticated "People to
+follow" section (same limitation prior sessions documented for
+authenticated round trips — a Credentials-provider login via curl did not
+resolve cleanly in the time available) — covered instead by
+`listPeopleToFollow()`'s own direct unit tests.
+
+### Known limitations
+
+- **View-count dedup is a 30-minute cooldown per (article, viewer-key),
+  not a hardened analytics system** — a viewer who reloads after the
+  window, or from a different IP/browser, is counted again. Deliberately
+  minimal per this session's own "must not be trivially gameable, but does
+  not need to be a hardened system" rule.
+- **Trending is a candidate-pool approximation, not a live join**: the top
+  50 recently-viewed article ids are computed first, then filtered to
+  currently-published — if more than 50 recently-viewed articles got
+  unpublished, the true 51st-ranked article could be missed. Not a
+  realistic concern at this platform's current scale.
+- **No `ArticleView` retention/pruning job** — the log table grows
+  unboundedly. Worth adding once real traffic makes it a size concern; the
+  RLS policy comment flags this explicitly as unbuilt.
+- **Search tag matching is unindexed** (`= ANY(tags)`, not folded into the
+  GIN index — `array_to_string()` is Postgres-STABLE, not IMMUTABLE, so it
+  cannot be). Fine at today's article volume; worth a dedicated GIN index
+  directly on the `tags` array column (a different, indexable pattern) if
+  volume ever makes it a bottleneck.
+- **`plainto_tsquery` is word/stem-based, not substring/prefix** — a
+  three- or four-character partial query may not match (mitigated, not
+  fully solved, by the `ILIKE` fallback on title/display-name/username).
+- **No typeahead/autocomplete, no search-result highlighting, no
+  relevance tuning beyond Postgres's default `ts_rank`** — a plain
+  GET-form-and-results-page, per this session's own "simple v1" scope.
+- **"People to follow" has no interest/topic-based matching** — purely
+  follower-count-ranked. A v2 could weight by shared topics/tags between
+  the viewer's own follows and a candidate author's articles.
+- **No dedicated "recommended articles" surface on the article page
+  itself** (e.g., "more like this" / same-topic articles at the foot of an
+  article) — the session brief allowed same-topic articles as a valid v1
+  "Recommended" shape, but the Explore page's four required sections
+  (Trending/Latest/Topics/People to follow) were prioritized within this
+  session's scope; `/topics/[topic]` doubles as a reasonable interim
+  "more like this" for a reader who wants it, one click away via the
+  article's own topic kicker.
+
+### Blockers
+
+None.
+
+### Required next-session actions
+
+This is the last phase of the roadmap as currently scoped — no session 45
+is defined. If the roadmap continues, reasonable next steps flagged above:
+an `ArticleView` retention job, a dedicated `tags` GIN index, an
+in-article "more like this" surface, and interest-weighted "People to
+follow." Whoever has merge authority should review and merge/deploy
+`session-44-keen-africans-discovery` — complete and tested but
+deliberately left unpushed, matching every prior Keen Africans session's
+own convention. This session's isolated worktree
+(`~/keenafrica/.worktrees/session-44-keen-africans-discovery`) and
+database (`portal_dev_session44`) are left in place, not cleaned up —
+safe to remove once this branch is merged.

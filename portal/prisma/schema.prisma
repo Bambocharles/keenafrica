@@ -1939,6 +1939,8 @@ model Article {
   // Session 43 (Comments & Reactions).
   comments  Comment[]
   reactions ArticleReaction[]
+  // Session 44 (Discovery, Search & Recommendations).
+  views     ArticleView[]
 
   @@index([authorId])
   @@index([status, publishedAt])
@@ -2227,6 +2229,49 @@ model ArticleReaction {
   @@index([articleId])
   @@index([userId])
   @@map("article_reactions")
+}
+
+// Session 44 (Discovery, Search & Recommendations). An append-only
+// view-event log — EXTENDS Session 42's Article.viewCount lifetime counter
+// (see that column's own comment), never duplicates it: recordArticleView()
+// still increments viewCount on every counted view, exactly as before. This
+// table exists for two things viewCount alone can't answer:
+//
+//  1. Trending's recent-view-VELOCITY signal (a window like "views in the
+//     last 48h"), so a brand-new article isn't permanently buried under an
+//     old article's lifetime total — see src/lib/articles.ts's
+//     listTrendingArticles().
+//  2. A lightweight per-viewer dedup check (this session's own "must not be
+//     trivially gameable" rule): recordArticleView(articleId, viewerKey)
+//     looks up this table for a recent row before counting again. A caller
+//     that passes no viewerKey at all (every pre-existing Session 42
+//     caller/test) gets the exact old behavior — no dedup, every call
+//     counts — so nothing about Session 42's contract changes.
+//
+// viewerKey is NEVER a raw IP address — src/lib/articles.ts's
+// hashViewerKey() returns "user:<id>" for a signed-in viewer or a salted
+// sha256 of IP+User-Agent for an anonymous one, so this table never stores
+// anything more identifying than the page view itself already implies.
+//
+// No RLS-facing user path writes this table directly — every insert goes
+// through recordArticleView()'s own narrow systemArticlesCtx() (articles.manage,
+// no real actor), same "system context, no user-facing write path" shape
+// flipDueScheduledArticles() already uses for this same table's parent.
+// Select is left open (same "public engagement signal, nothing private to
+// protect" reasoning article_reactions_select/follows_select already
+// established) — a view *count* is already public via Article.viewCount, so
+// there's nothing gained by hiding raw rows containing only a hashed key.
+model ArticleView {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  articleId String   @map("article_id") @db.Uuid
+  viewerKey String   @map("viewer_key")
+  viewedAt  DateTime @default(now()) @map("viewed_at") @db.Timestamptz(6)
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([articleId, viewedAt])
+  @@index([articleId, viewerKey, viewedAt])
+  @@map("article_views")
 }
 
 // Session 42 (Follow & Author Reputation Display). A follower/following

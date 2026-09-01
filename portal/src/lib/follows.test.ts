@@ -12,6 +12,7 @@ import {
   getFollowerCount,
   getFollowingCount,
   isFollowing,
+  listPeopleToFollow,
   unfollowUser,
 } from "@/lib/follows";
 import { actorFromUser, cleanupTestArticles, cleanupTestFollows, cleanupTestProfiles, cleanupTestUsers, createTestUser } from "@/lib/test-support";
@@ -190,5 +191,61 @@ describe("getAuthorReputation", () => {
     const author = await keenAfrican("Quiet Author");
     const reputation = await getAuthorReputation(author.user.id);
     expect(reputation).toEqual({ articleCount: 0, totalViews: 0, followerCount: 0, followingCount: 0 });
+  });
+});
+
+describe("listPeopleToFollow (Session 44 — Discovery, Search & Recommendations)", () => {
+  it("suggests published authors, excluding the viewer themself and anyone already followed", async () => {
+    const viewer = await keenAfrican("PTF Viewer");
+    const popular = await keenAfrican("PTF Popular Author", true);
+    const alreadyFollowed = await keenAfrican("PTF Already Followed Author", true);
+    const fan1 = await keenAfrican("PTF Fan One");
+    const fan2 = await keenAfrican("PTF Fan Two");
+
+    const popularArticle = await createArticle({ title: "PTF Popular Piece" }, popular.actor);
+    createdArticleIds.push(popularArticle.id);
+    await publishArticle(popularArticle.id, popular.actor);
+    const followedArticle = await createArticle({ title: "PTF Already Followed Piece" }, alreadyFollowed.actor);
+    createdArticleIds.push(followedArticle.id);
+    await publishArticle(followedArticle.id, alreadyFollowed.actor);
+
+    await followUser(popular.user.id, fan1.actor);
+    await followUser(popular.user.id, fan2.actor);
+    await followUser(alreadyFollowed.user.id, viewer.actor);
+
+    const suggestions = await listPeopleToFollow(viewer.user.id, 20);
+    const ids = suggestions.map((s) => s.userId);
+
+    expect(ids).toContain(popular.user.id);
+    expect(ids).not.toContain(alreadyFollowed.user.id);
+    expect(ids).not.toContain(viewer.user.id);
+
+    const popularEntry = suggestions.find((s) => s.userId === popular.user.id);
+    expect(popularEntry?.followerCount).toBeGreaterThanOrEqual(2);
+    expect(popularEntry?.articleCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("excludes an author with zero published articles (drafts-only or none at all)", async () => {
+    const viewer = await keenAfrican("PTF Viewer 2");
+    const noArticlesAtAll = await keenAfrican("PTF No Articles Author");
+    const draftOnly = await keenAfrican("PTF Draft Only Author");
+    const draft = await createArticle({ title: "PTF Never Published" }, draftOnly.actor);
+    createdArticleIds.push(draft.id);
+    // Deliberately never published.
+
+    const suggestions = await listPeopleToFollow(viewer.user.id, 50);
+    const ids = suggestions.map((s) => s.userId);
+    expect(ids).not.toContain(noArticlesAtAll.user.id);
+    expect(ids).not.toContain(draftOnly.user.id);
+  });
+
+  it("works for a signed-out viewer (undefined) — no already-following exclusion applies", async () => {
+    const author = await keenAfrican("PTF Anonymous-Viewer Author", true);
+    const article = await createArticle({ title: "PTF Anonymous Viewer Piece" }, author.actor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, author.actor);
+
+    const suggestions = await listPeopleToFollow(undefined, 50);
+    expect(suggestions.some((s) => s.userId === author.user.id)).toBe(true);
   });
 });

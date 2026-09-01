@@ -3,6 +3,7 @@ import { actorRlsCtx } from "@/lib/courses";
 import type { AuthzActor } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
 import { emitDomainEvent } from "@/lib/events";
+import { getVerifiedUserIds } from "@/lib/verification";
 
 /**
  * Follow & Author Reputation Display (Session 42). A follower/following
@@ -176,4 +177,78 @@ export async function getAuthorReputation(userId: string): Promise<AuthorReputat
     followerCount,
     followingCount,
   };
+}
+
+// --- People to follow (Session 44 — Discovery, Search & Recommendations) --
+
+export interface SuggestedAuthor {
+  userId: string;
+  username: string;
+  displayName: string;
+  profession: string | null;
+  avatarAssetId: string | null;
+  verified: boolean;
+  followerCount: number;
+  articleCount: number;
+}
+
+/**
+ * "People to follow" — the Explore page's fourth section. Deliberately
+ * simple, per this session's own brief: authors with the most followers
+ * (then articles, as a tiebreak) that the viewer isn't already following
+ * and isn't themself. No ML, no interest-based matching — see
+ * docs/KEEN_AFRICANS.md's "Known limitations" for what a v2 could add.
+ *
+ * "Author" here means "has at least one published article" — same
+ * practical scoping getAuthorReputation()/getPublicProfileByUsername()
+ * already use, not a role check of its own (a Profile with zero published
+ * articles has nothing to recommend yet).
+ */
+export async function listPeopleToFollow(viewerUserId: string | undefined | null, limit = 5): Promise<SuggestedAuthor[]> {
+  const authorAgg = await withRls({}, (tx) =>
+    tx.article.groupBy({
+      by: ["authorId"],
+      where: { status: "published" },
+      _count: { _all: true },
+    })
+  );
+  if (authorAgg.length === 0) return [];
+
+  const articleCountByAuthorId = new Map(authorAgg.map((a) => [a.authorId, a._count._all]));
+  const candidateIds = authorAgg.map((a) => a.authorId).filter((id) => id !== viewerUserId);
+  if (candidateIds.length === 0) return [];
+
+  const [followerAgg, alreadyFollowing, profiles, verifiedIds] = await Promise.all([
+    withRls({}, (tx) =>
+      tx.follow.groupBy({ by: ["followingId"], where: { followingId: { in: candidateIds } }, _count: { _all: true } })
+    ),
+    viewerUserId
+      ? withRls({}, (tx) =>
+          tx.follow.findMany({
+            where: { followerId: viewerUserId, followingId: { in: candidateIds } },
+            select: { followingId: true },
+          })
+        )
+      : Promise.resolve([]),
+    withRls({}, (tx) => tx.profile.findMany({ where: { userId: { in: candidateIds } } })),
+    getVerifiedUserIds(candidateIds),
+  ]);
+
+  const followerCountByAuthorId = new Map(followerAgg.map((f) => [f.followingId, f._count._all]));
+  const alreadyFollowingIds = new Set(alreadyFollowing.map((f) => f.followingId));
+
+  return profiles
+    .filter((p) => !alreadyFollowingIds.has(p.userId))
+    .map((p) => ({
+      userId: p.userId,
+      username: p.username,
+      displayName: p.displayName,
+      profession: p.profession,
+      avatarAssetId: p.avatarAssetId,
+      verified: verifiedIds.has(p.userId),
+      followerCount: followerCountByAuthorId.get(p.userId) ?? 0,
+      articleCount: articleCountByAuthorId.get(p.userId) ?? 0,
+    }))
+    .sort((a, b) => b.followerCount - a.followerCount || b.articleCount - a.articleCount)
+    .slice(0, limit);
 }
