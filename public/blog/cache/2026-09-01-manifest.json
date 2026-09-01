@@ -1,0 +1,52 @@
+{
+  "edition_date": "2026-09-01",
+  "edition_title": "September 2026: The Doors Open Before the Deadlines Do",
+  "edition_intro": "Ambitious young Nigerians do not wait for permission, they track deadlines like appointments. This edition rounds up five live opportunities worth your time this month: a fully funded master's in Beijing, a nine-figure naira startup grant, free tech expo access in Lagos, a \u20a62.2 million essay prize, and a free route to a Microsoft certification. Move on these before the windows close.",
+  "posts": [
+    {
+      "slug": "2026-09-01-schwarzman-scholars-2027-2028",
+      "category": "scholarships",
+      "title": "Schwarzman Scholars 2027-2028",
+      "summary": "A fully funded one-year master's degree at Tsinghua University in Beijing, covering tuition, housing, travel, and a stipend, built for future global leaders under 30.",
+      "deadline": "9 September 2026",
+      "eligibility": "Bachelor's degree holders worldwide, generally aged 24 to 29; open to Nigerians and all nationalities; no GRE, GMAT, or Mandarin required",
+      "apply_url": "https://www.schwarzmanscholars.org/admissions/application-instructions/"
+    },
+    {
+      "slug": "2026-09-01-niya-startup-pitch-2-0",
+      "category": "grants",
+      "title": "NiYA Startup Pitch 2.0",
+      "summary": "Up to \u20a6100 million in non-dilutive funding for 100 Nigerian startups, plus mentorship and enterprise tools, through the federal government's youth platform.",
+      "deadline": "Rolling",
+      "eligibility": "Nigerian founders aged 18 to 35, with a startup that has at least two co-founders and a completed NiYA profile",
+      "apply_url": "https://niya.gov.ng/"
+    },
+    {
+      "slug": "2026-09-01-gitex-nigeria-2026",
+      "category": "conferences",
+      "title": "GITEX Nigeria 2026",
+      "summary": "Free registration for West Africa's largest tech expo and AI summit, putting young builders in the same room as global tech leaders and investors in Lagos.",
+      "deadline": "3 September 2026",
+      "eligibility": "Open to all; free visitor registration, no invitation required",
+      "apply_url": "https://gitexnigeria.ng/"
+    },
+    {
+      "slug": "2026-09-01-nigerian-economic-summit-nes-32",
+      "category": "conferences",
+      "title": "Nigerian Economic Summit (NES #32)",
+      "summary": "A two-day national dialogue on jobs and productivity in Abuja, putting young Nigerians in the same room as policymakers, investors, and business leaders shaping economic reform.",
+      "deadline": "26 October 2026",
+      "eligibility": "Open to the public via pre-registration; students, entrepreneurs, and young professionals attend alongside policymakers",
+      "apply_url": "https://www.nesgroup.org/32"
+    },
+    {
+      "slug": "2026-09-01-ncdmb-national-undergraduate-essay-competition-2026",
+      "category": "competitions",
+      "title": "NCDMB National Undergraduate Essay Competition 2026",
+      "summary": "\u20a62.2 million in cash prizes and laptops for the best essays on local content and manufacturing, from Nigeria's oil and gas content regulator.",
+      "deadline": "26 September 2026",
+      "eligibility": "100 or 200 level students at Nigerian universities, polytechnics, or colleges of education",
+      "apply_url": "https://ncdmbessay.ng/"
+    }
+  ]
+}
