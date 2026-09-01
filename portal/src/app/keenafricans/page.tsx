@@ -71,7 +71,7 @@ export default async function ExplorePage() {
             <p className={styles.listTitle}>Trending</p>
           </div>
           {trending.map((a) => (
-            <a key={a.id} href={`/articles/${a.slug}`} className={styles.smallCard}>
+            <a key={a.id} href={a.author.username ? `/${a.author.username}/${a.slug}` : `/articles/${a.slug}`} className={styles.smallCard}>
               <h2 className={styles.smallCardTitle}>{a.title}</h2>
               <p className={styles.smallCardMeta}>
                 {a.author.name}
@@ -94,7 +94,7 @@ export default async function ExplorePage() {
           <div className={styles.empty}>No articles published yet.</div>
         ) : (
           latestTeaser.map((a) => (
-            <a key={a.id} href={`/articles/${a.slug}`} className={styles.smallCard}>
+            <a key={a.id} href={a.author.username ? `/${a.author.username}/${a.slug}` : `/articles/${a.slug}`} className={styles.smallCard}>
               <h2 className={styles.smallCardTitle}>{a.title}</h2>
               <p className={styles.smallCardMeta}>
                 {a.author.name}

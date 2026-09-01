@@ -79,6 +79,25 @@ export const COUNTRIES: readonly string[] = [
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 
+/**
+ * Session 36 follow-up (username-prefixed article URLs). Every literal
+ * top-level path segment under src/app/keenafricans — a username equal to
+ * any of these would make that author's articles permanently unreachable
+ * at `/<username>/<slug>`, since Next.js always resolves an existing
+ * literal route (e.g. `search/page.tsx`) before it would ever consider the
+ * `[username]/[slug]` dynamic route. Kept as one list, reused by both
+ * uniqueUsername()'s auto-generation loop and updateProfile()'s
+ * self-service validation, so it can never drift between the two paths a
+ * username is ever set. Update this list if a new top-level route segment
+ * is ever added under keenafricans.
+ */
+const RESERVED_USERNAMES = new Set([
+  "articles", "avatars", "covers", "latest", "login", "mfa", "privacy",
+  "register", "reset-password", "search", "terms", "topics", "u",
+  "verify-email", "account", "assets", "dashboard", "notifications",
+  "profile", "security", "step-up",
+]);
+
 function slugifyUsername(name: string): string {
   const base = name
     .toLowerCase()
@@ -96,10 +115,14 @@ async function uniqueUsername(name: string): Promise<string> {
   let suffix = 1;
   // Same bounded-probe shape as articles.ts's uniqueSlug() — profile
   // creation happens at most once per user (ensureProfile is idempotent),
-  // so this can never be driven into a long scan.
+  // so this can never be driven into a long scan. A reserved-word
+  // collision is treated exactly like a taken username — the suffix loop
+  // below already handles both uniformly.
   while (true) {
-    const existing = await withRls({}, (tx) => tx.profile.findUnique({ where: { username: candidate }, select: { id: true } }));
-    if (!existing) return candidate;
+    const taken = RESERVED_USERNAMES.has(candidate)
+      ? true
+      : !!(await withRls({}, (tx) => tx.profile.findUnique({ where: { username: candidate }, select: { id: true } })));
+    if (!taken) return candidate;
     suffix += 1;
     candidate = `${base}-${suffix}`;
   }
@@ -238,6 +261,9 @@ export async function updateProfile(actor: AuthzActor, input: UpdateProfileInput
     username = normalizeUsernameInput(input.username);
     if (!USERNAME_RE.test(username)) {
       throw new Error("Username must be 3-30 characters: lowercase letters, numbers, and hyphens only");
+    }
+    if (RESERVED_USERNAMES.has(username)) {
+      throw new Error("That username is reserved — please choose another");
     }
   }
 

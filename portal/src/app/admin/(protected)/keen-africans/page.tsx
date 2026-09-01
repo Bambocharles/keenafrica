@@ -313,7 +313,9 @@ export default async function AdminKeenAfricansPage({
                   </div>
                   {a.status === "published" && (
                     <a
-                      href={`https://keenafricans.${process.env.ROOT_DOMAIN ?? "keenafrica.com"}/articles/${a.slug}`}
+                      href={`https://keenafricans.${process.env.ROOT_DOMAIN ?? "keenafrica.com"}${
+                        a.author.profile?.username ? `/${a.author.profile.username}/${a.slug}` : `/articles/${a.slug}`
+                      }`}
                       target="_blank"
                       rel="noreferrer"
                       style={{ fontSize: 12.5, color: "var(--accent)", alignSelf: "center" }}

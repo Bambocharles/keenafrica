@@ -163,7 +163,7 @@ export default async function ProfilePage({
       ) : (
         <div>
           {articles.map((a) => (
-            <a key={a.id} href={`/articles/${a.slug}`} className={styles.card}>
+            <a key={a.id} href={`/${profile.username}/${a.slug}`} className={styles.card}>
               <h2 className={styles.cardTitle}>{a.title}</h2>
               <p className={styles.cardMeta}>
                 {a.publishedAt && new Date(a.publishedAt).toLocaleDateString()}

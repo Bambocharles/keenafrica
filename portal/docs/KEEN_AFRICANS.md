@@ -142,14 +142,18 @@ every other portal's.
 - `keenafricans.<root>/` — public listing, published articles only, no
   login (`getPublicArticleBySlug`/`listPublishedArticles`, both
   `withRls({})`).
-- `keenafricans.<root>/articles/[id]` — public reading page (`[id]` is
-  the route **segment name**, not the value — Next.js requires one
+- `keenafricans.<root>/<username>/<slug>` — the public reading page (as
+  of the Session 36 follow-up below; superseded the plain `/articles/
+  <slug>` shape). `generateMetadata()` sets title/description/OG image
+  (`/covers/{coverAssetId}`) from the real extracted content.
+- `keenafricans.<root>/articles/[id]` — now a **permanent redirect shim**
+  into the URL above (see the Session 36 follow-up section), kept forever
+  so every already-shared `/articles/<slug>` link keeps working. `[id]`
+  is the route **segment name**, not the value — Next.js requires one
   consistent dynamic-segment name per URL position across the whole app
   dir, including across route groups, and this position also resolves
   `.../articles/[id]/edit` under `(protected)`; the actual value routed
-  through is the article's **slug**). `generateMetadata()` sets
-  title/description/OG image (`/covers/{coverAssetId}`) from the real
-  extracted content.
+  through is (and always was) the article's **slug**, not a UUID.
 - `/register`, `/login`, `/mfa` — mirror teacher/student's pages exactly;
   `/mfa` is a defense-in-depth stub (MFA policy covers `SUPER_ADMIN` only
   today, so a plain `KEEN_AFRICAN` account never actually reaches it).
@@ -417,6 +421,77 @@ add Security/Settings rows.
 (anonymous read; an outsider can't write/update another user's profile or
 attach an avatar to it, even with a crafted request) — both against the
 real `portal_rls_test` role. 622/622 total passing, `tsc --noEmit` clean.
+
+## Username-prefixed article URLs (Session 36 follow-up)
+
+The site owner's original expectation — confirmed against the real
+precedent for a *shared, multi-author* platform (dev.to:
+`dev.to/<username>/<slug>`, as opposed to a single-author personal blog,
+where the domain itself already carries the author's identity) — was that
+an article's URL would carry its author's username. The canonical public
+article URL is now `keenafricans.<root>/<username>/<slug>`
+(`src/app/keenafricans/[username]/[slug]/page.tsx`), not
+`/articles/<slug>`.
+
+**No new schema.** The obvious risk — `Profile.username` is mutable at
+any time via `updateProfile()`, with no redirect history (unlike
+`Article.slug`, which already has `previousSlugs`/`resolveRedirectSlug()`)
+— is solved without a `previousUsernames` column. The new route treats the
+URL's username segment as **non-authoritative**: the slug alone (globally
+unique, unchanged) is the real lookup key. If the requested username
+doesn't match the looked-up article's *current* author (stale link after
+a rename, or a wrong username typed in), the route
+`permanentRedirect()`s to the canonical `/<current-username>/<slug>` —
+self-healing, same pattern GitHub/dev.to use. This can never leak content
+between authors: since `Article.slug` is globally unique, a stale/wrong
+username paired with a real slug can only ever resolve to the one article
+that actually owns that slug.
+
+**`/articles/[id]/page.tsx` is now a permanent redirect shim**, not a
+second live URL — every already-shared `/articles/<slug>` link (the
+founding article, posted to LinkedIn before this change) keeps working
+forever via a 308 into the canonical URL. Still uses the existing
+`resolveRedirectSlug()` fallback for a renamed slug first, same as before.
+
+**`/u/<username>` (the profile page) is unchanged** — deliberately not
+part of this migration; only the article URL was ever misaligned with
+what was actually wanted. A bare `/<username>` (no slug) redirects to
+`/u/<username>` as a small nicety
+(`src/app/keenafricans/[username]/page.tsx`).
+
+**Reserved usernames.** `src/lib/profiles.ts`'s `RESERVED_USERNAMES` set
+(every literal top-level route segment under `src/app/keenafricans` —
+`articles`, `search`, `u`, `login`, etc.) is now enforced in both places a
+username is ever set (`updateProfile()`'s validation and
+`uniqueUsername()`'s auto-generation loop) — previously unguarded, and a
+real risk once the article path space is `/<username>/<slug>`: Next.js
+always resolves an existing literal route before it would ever consider
+the `[username]/[slug]` dynamic one, so a reserved username would make
+that author's articles permanently unreachable.
+
+Every internal link that builds a reading-page URL (homepage
+trending/latest, `/latest`, `/topics/[topic]`, `/search`, `/u/[username]`'s
+own article list, the author dashboard/editor's "view live" links, both
+admin console "open live" links) was updated to the new scheme, each with
+a graceful `/articles/<slug>` fallback for the defensive case of an
+author with no profile row yet (should not happen in practice —
+`ensureProfile()` runs on every protected page load before an article
+could ever be created).
+
+### Tests
+
+`profiles.test.ts` gained a `RESERVED_USERNAMES` describe block:
+`updateProfile()` rejects a reserved word, and `ensureProfile()`'s
+auto-generation loop skips straight past one even when a name slugifies
+to it. No route-level unit tests (this codebase's established
+convention — JSX pages have no test surface here); verified live instead
+against a real dev server: new URL renders (200), old `/articles/<slug>`
+redirects (308) to the canonical URL, a wrong/stale username redirects
+(308) to the correct one, a simulated username rename correctly redirects
+*both* the pre-rename username URL and the old `/articles/<slug>` shim to
+the new username, a bare `/<username>` redirects to `/u/<username>`, and
+every listing page's links use the new scheme. All test data cleaned up
+afterward.
 
 ## Article Editor, Publishing Workflow & Taxonomy (Session 38)
 

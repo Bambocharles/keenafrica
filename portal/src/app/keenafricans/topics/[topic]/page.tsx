@@ -65,10 +65,11 @@ export default async function TopicPage({
       ) : (
         <div>
           {articles.map((a) => (
-            <a key={a.id} href={`/articles/${a.slug}`} className={styles.card}>
+            <a key={a.id} href={a.author.username ? `/${a.author.username}/${a.slug}` : `/articles/${a.slug}`} className={styles.card}>
               <h2 className={styles.cardTitle}>{a.title}</h2>
               <p className={styles.cardMeta}>
                 {a.author.name}
+                {a.author.username && ` · @${a.author.username}`}
                 {a.publishedAt && ` · ${new Date(a.publishedAt).toLocaleDateString()}`}
               </p>
               <p className={styles.cardExcerpt}>{a.excerpt || deriveExcerpt(a.body)}</p>
