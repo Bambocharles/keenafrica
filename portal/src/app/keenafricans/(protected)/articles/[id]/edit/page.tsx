@@ -4,14 +4,17 @@ import { getArticleForEdit, renderArticleBodyHtml, ArticleNotFoundError } from "
 import { AuthorizationError } from "@/lib/authz";
 import { isEmailVerified } from "@/lib/email-verification";
 import { Banner, Button, Card, Field, Input, StatusBadge } from "@/components/ui";
-import ui from "@/components/ui/styles.module.css";
+import { ArticleEditorClient } from "./ArticleEditorClient";
 import {
   archiveArticleAction,
+  cancelScheduledPublishAction,
   publishArticleAction,
   removeCoverImageAction,
+  scheduleArticleAction,
   setCoverImageAction,
+  submitForReviewAction,
   unpublishArticleAction,
-  updateArticleAction,
+  updateArticleSlugAction,
 } from "../../actions";
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -21,8 +24,16 @@ const ERROR_MESSAGES: Record<string, string> = {
   not_found: "That article no longer exists.",
   unsupported_file_type: "That file type isn't supported for a cover image.",
   file_too_large: "That file is too large.",
+  review_not_approved: "This article needs to be approved by a reviewer before it can be published.",
+  invalid_review_transition: "That review action isn't valid right now.",
+  invalid_slug: "URLs can only contain lowercase letters, numbers, and hyphens.",
+  slug_taken: "That URL is already taken by another article.",
+  invalid_schedule: "Pick a publish time in the future.",
   action_failed: "Something went wrong.",
 };
+
+/** Review states that block a plain author from publishing — see src/lib/articles.ts's assertReviewApproved(). 'not_submitted'/'approved' are the two states publishing is allowed from. */
+const REVIEW_BLOCKS_PUBLISH = new Set(["in_review", "changes_requested", "rejected"]);
 
 export default async function EditArticlePage({
   params,
@@ -50,6 +61,10 @@ export default async function EditArticlePage({
 
   const [verified, rootDomain] = [await isEmailVerified(user.id), process.env.ROOT_DOMAIN ?? "keenafrica.com"];
   const preview = article.body ? renderArticleBodyHtml(article.body) : "";
+  const isOwner = article.authorId === user.id;
+  const reviewBlocksPublish = REVIEW_BLOCKS_PUBLISH.has(article.reviewStatus) && !user.isSuperAdmin && !user.permissions.includes("articles.manage");
+  const canPublish = verified && !reviewBlocksPublish;
+  const publishDisabledReason = !verified ? "Verify your email to publish" : reviewBlocksPublish ? "Awaiting review approval" : undefined;
 
   return (
     <div style={{ display: "grid", gap: "20px", maxWidth: 760 }}>
@@ -58,16 +73,33 @@ export default async function EditArticlePage({
 
       <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
         <StatusBadge status={article.status} />
+        {article.reviewStatus !== "not_submitted" && <StatusBadge status={article.reviewStatus} />}
         {article.status === "published" && (
           <a href={`https://keenafricans.${rootDomain}/articles/${article.slug}`} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>
             View live ↗
           </a>
         )}
-        <div style={{ marginLeft: "auto", display: "flex", gap: "8px" }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          {article.status === "draft" && article.reviewStatus === "not_submitted" && isOwner && (
+            <form action={submitForReviewAction}>
+              <input type="hidden" name="articleId" value={article.id} />
+              <Button type="submit" variant="outline">
+                Submit for review
+              </Button>
+            </form>
+          )}
+          {article.status === "draft" && (article.reviewStatus === "changes_requested" || article.reviewStatus === "rejected") && isOwner && (
+            <form action={submitForReviewAction}>
+              <input type="hidden" name="articleId" value={article.id} />
+              <Button type="submit" variant="outline">
+                Resubmit for review
+              </Button>
+            </form>
+          )}
           {article.status !== "published" && (
             <form action={publishArticleAction}>
               <input type="hidden" name="articleId" value={article.id} />
-              <Button type="submit" disabled={!verified} title={!verified ? "Verify your email to publish" : undefined}>
+              <Button type="submit" disabled={!canPublish} title={publishDisabledReason}>
                 Publish
               </Button>
             </form>
@@ -91,29 +123,64 @@ export default async function EditArticlePage({
         </div>
       </div>
 
+      {(article.reviewStatus === "changes_requested" || article.reviewStatus === "rejected") && article.reviewNote && (
+        <Banner>
+          {article.reviewStatus === "rejected" ? "Rejected" : "Changes requested"}: {article.reviewNote}
+        </Banner>
+      )}
+      {article.reviewStatus === "in_review" && <Banner variant="success">Submitted — awaiting review.</Banner>}
+
+      {article.status !== "published" && (
+        <Card style={{ padding: "18px 20px" }}>
+          <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>Scheduled publishing</h3>
+          {article.scheduledAt ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12.5 }}>
+                Scheduled to publish {new Date(article.scheduledAt).toLocaleString()}
+              </span>
+              <form action={cancelScheduledPublishAction}>
+                <input type="hidden" name="articleId" value={article.id} />
+                <Button type="submit" variant="outline">
+                  Cancel schedule
+                </Button>
+              </form>
+            </div>
+          ) : (
+            <form action={scheduleArticleAction} style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+              <input type="hidden" name="articleId" value={article.id} />
+              <input type="datetime-local" name="scheduledAt" required disabled={!canPublish} />
+              <Button type="submit" variant="outline" disabled={!canPublish} title={publishDisabledReason}>
+                Schedule
+              </Button>
+            </form>
+          )}
+        </Card>
+      )}
+
       <Card style={{ padding: "22px" }}>
-        <form action={updateArticleAction} style={{ display: "grid", gap: "14px" }}>
+        <ArticleEditorClient
+          articleId={article.id}
+          initialTitle={article.title}
+          initialBody={article.body}
+          initialExcerpt={article.excerpt ?? ""}
+          initialTags={article.tags.join(", ")}
+          initialTopic={article.topic ?? ""}
+          initialPreviewHtml={preview}
+        />
+      </Card>
+
+      <Card style={{ padding: "18px 20px" }}>
+        <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>Article URL</h3>
+        <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--ink-faint)" }}>
+          keenafricans.{rootDomain}/articles/<strong>{article.slug}</strong>
+          {article.status === "published" && " — changing this after publishing keeps the old link working (it redirects here)."}
+        </p>
+        <form action={updateArticleSlugAction} style={{ display: "flex", gap: "10px", alignItems: "center" }}>
           <input type="hidden" name="articleId" value={article.id} />
-          <Field label="Title">
-            <Input name="title" defaultValue={article.title} required />
-          </Field>
-          <Field label="Meta description (for search engines and link previews)">
-            <Input name="excerpt" defaultValue={article.excerpt ?? ""} maxLength={300} />
-          </Field>
-          <Field label="Tags (comma-separated)">
-            <Input name="tags" defaultValue={article.tags.join(", ")} placeholder="azure, terraform, security" />
-          </Field>
-          <Field label="Body (Markdown)">
-            <textarea
-              name="body"
-              defaultValue={article.body}
-              required
-              rows={20}
-              className={ui.input}
-              style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}
-            />
-          </Field>
-          <Button type="submit">Save</Button>
+          <Input name="slug" defaultValue={article.slug} required pattern="[a-z0-9]+(-[a-z0-9]+)*" style={{ flex: 1 }} />
+          <Button type="submit" variant="outline">
+            Update URL
+          </Button>
         </form>
       </Card>
 
@@ -142,13 +209,6 @@ export default async function EditArticlePage({
           </Button>
         </form>
       </Card>
-
-      {preview && (
-        <Card style={{ padding: "22px" }}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700 }}>Preview (as last saved)</h3>
-          <div className={ui.subCell} dangerouslySetInnerHTML={{ __html: preview }} />
-        </Card>
-      )}
     </div>
   );
 }

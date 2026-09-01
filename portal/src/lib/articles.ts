@@ -1,5 +1,6 @@
 import { Marked } from "marked";
 import sanitizeHtml from "sanitize-html";
+import type { ArticleTopic } from "@prisma/client";
 import { withRls } from "@/lib/rls";
 import { AuthorizationError, PERMISSIONS, hasPermission, type AuthzActor } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
@@ -41,6 +42,44 @@ export class ArticleNotFoundError extends Error {
   constructor(message = "Article not found") {
     super(message);
     this.name = "ArticleNotFoundError";
+  }
+}
+
+/**
+ * Session 38 (Keen Africans — Editor Workflow). Thrown by publishArticle()/
+ * scheduleArticle() when an article HAS entered the review workflow
+ * (reviewStatus !== 'not_submitted') but hasn't reached 'approved' yet.
+ * An article that never touches review (the default, direct-publish path)
+ * never triggers this — see assertReviewApproved()'s own comment.
+ */
+export class ReviewNotApprovedError extends Error {
+  constructor(message = "This article must be approved by a reviewer before it can be published") {
+    super(message);
+    this.name = "ReviewNotApprovedError";
+  }
+}
+
+/** Session 38 (Keen Africans — Editor Workflow). Thrown by submitForReview()/approveArticle()/requestChanges()/rejectArticle() when called from a reviewStatus that doesn't allow the requested transition. */
+export class InvalidReviewTransitionError extends Error {
+  constructor(message = "That review action isn't valid for this article's current state") {
+    super(message);
+    this.name = "InvalidReviewTransitionError";
+  }
+}
+
+/** Session 38 (Keen Africans — Editor Workflow). Thrown by updateArticleSlug() for a malformed or already-taken slug. */
+export class InvalidSlugError extends Error {
+  constructor(message = "That URL isn't available — try a different one") {
+    super(message);
+    this.name = "InvalidSlugError";
+  }
+}
+
+/** Session 38 (Keen Africans — Editor Workflow). Thrown by scheduleArticle() when the requested time isn't in the future. */
+export class InvalidScheduleError extends Error {
+  constructor(message = "Scheduled publish time must be in the future") {
+    super(message);
+    this.name = "InvalidScheduleError";
   }
 }
 
@@ -188,6 +227,66 @@ async function uniqueSlug(title: string): Promise<string> {
   }
 }
 
+const SLUG_FORMAT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_PREVIOUS_SLUGS = 10;
+
+/**
+ * Session 38 (Keen Africans — Editor Workflow). An author-chosen slug (as
+ * opposed to uniqueSlug()'s title-derived, auto-suffixed one above) — this
+ * session's brief asks us to decide whether slug editing is allowed at
+ * all. Decision: yes, at any article status, with the already-published
+ * case handled by recording the old slug in `previousSlugs` (see
+ * schema.prisma's Article.previousSlugs comment) so an already-indexed URL
+ * 301-redirects instead of 404ing — see resolveRedirectSlug() below and
+ * the public article route's use of it.
+ */
+export async function updateArticleSlug(articleId: string, requestedSlug: string, actor: AuthzActor) {
+  const article = await requireArticleOwnerOrManage(articleId, actor);
+
+  const candidate = requestedSlug.trim().toLowerCase();
+  if (!SLUG_FORMAT.test(candidate)) {
+    throw new InvalidSlugError("URLs can only contain lowercase letters, numbers, and hyphens");
+  }
+  if (candidate === article.slug) return article;
+
+  const taken = await withRls({}, (tx) =>
+    tx.article.findFirst({ where: { slug: candidate, id: { not: articleId } }, select: { id: true } })
+  );
+  if (taken) throw new InvalidSlugError("That URL is already taken by another article");
+
+  const previousSlugs = Array.from(new Set([...article.previousSlugs, article.slug])).slice(-MAX_PREVIOUS_SLUGS);
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({ where: { id: articleId }, data: { slug: candidate, previousSlugs } })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "article.slug_changed",
+    entityType: "Article",
+    entityId: articleId,
+    metadata: { from: article.slug, to: candidate },
+  });
+
+  return updated;
+}
+
+/**
+ * Public, anonymous lookup for the article route's 404 fallback: is this an
+ * OLD slug of a still-published article? Returns the current slug to
+ * redirect to, or null (genuinely unknown / never published under this
+ * slug / the article that used to own it is no longer published).
+ */
+export async function resolveRedirectSlug(oldSlug: string): Promise<string | null> {
+  const article = await withRls({}, (tx) =>
+    tx.article.findFirst({
+      where: { previousSlugs: { has: oldSlug }, status: "published" },
+      select: { slug: true },
+    })
+  );
+  return article?.slug ?? null;
+}
+
 // --- Rate limiting (Session 34 abuse-model decision) --------------------
 //
 // Reuses src/lib/rate-limit.ts's countRecentAuditEvents (audit_events is
@@ -222,11 +321,32 @@ async function requireArticleOwnerOrManage(articleId: string, actor: AuthzActor)
 
 // --- Author-facing CRUD -------------------------------------------------
 
+/**
+ * Session 38 (Keen Africans — Editor Workflow). The curated Topic list —
+ * see schema.prisma's ArticleTopic comment for why this is its own small
+ * enum, not Education Core's Topic/Skill table. To extend it: add a new
+ * migration (`ALTER TYPE "ArticleTopic" ADD VALUE '...'`, its own
+ * migration/transaction — same enum-value restriction every other value
+ * addition in this codebase hits) and add the label below; nothing else
+ * needs to change (the editor/admin UI both render off this map).
+ */
+export const ARTICLE_TOPIC_LABELS: Record<ArticleTopic, string> = {
+  cloud: "Cloud",
+  ai: "AI",
+  engineering: "Engineering",
+  entrepreneurship: "Entrepreneurship",
+  career: "Career",
+  business: "Business",
+  culture: "Culture",
+};
+export const ARTICLE_TOPICS = Object.keys(ARTICLE_TOPIC_LABELS) as ArticleTopic[];
+
 export interface CreateArticleInput {
   title: string;
   body?: string;
   excerpt?: string;
   tags?: string[];
+  topic?: ArticleTopic | null;
 }
 
 function normalizeTags(tags: string[] | undefined): string[] {
@@ -257,6 +377,7 @@ export async function createArticle(input: CreateArticleInput, actor: AuthzActor
         body: input.body ?? "",
         excerpt: input.excerpt?.trim() || null,
         tags: normalizeTags(input.tags),
+        topic: input.topic ?? null,
         authorName,
       },
     })
@@ -269,6 +390,7 @@ export async function createArticle(input: CreateArticleInput, actor: AuthzActor
 
 export interface UpdateArticleInput {
   title?: string;
+  topic?: ArticleTopic | null;
   body?: string;
   excerpt?: string;
   tags?: string[];
@@ -285,6 +407,7 @@ export async function updateArticle(articleId: string, input: UpdateArticleInput
         ...(input.body !== undefined ? { body: input.body } : {}),
         ...(input.excerpt !== undefined ? { excerpt: input.excerpt.trim() || null } : {}),
         ...(input.tags !== undefined ? { tags: normalizeTags(input.tags) } : {}),
+        ...(input.topic !== undefined ? { topic: input.topic } : {}),
       },
     })
   );
@@ -293,26 +416,145 @@ export async function updateArticle(articleId: string, input: UpdateArticleInput
   return article;
 }
 
-/** Self-service publish. Requires a verified email — see this session's abuse-model decision (module header). */
-export async function publishArticle(articleId: string, actor: AuthzActor) {
-  await requireArticleOwnerOrManage(articleId, actor);
+/**
+ * Session 38 (Keen Africans — Editor Workflow). Gate shared by
+ * publishArticle() and scheduleArticle(): an article that never entered
+ * the review workflow (reviewStatus still 'not_submitted', the default)
+ * publishes exactly as it always has — no gate at all, which is what
+ * keeps direct-publish available as the default for every Keen African
+ * (confirmed with the site owner rather than assumed — see
+ * docs/KEEN_AFRICANS.md). An article that HAS entered review must reach
+ * 'approved' before a plain author can publish it; articles.manage/
+ * super_admin bypass this exactly like they bypass the email-verification
+ * gate below (an admin can always publish on someone's behalf).
+ */
+function assertReviewApproved(article: { reviewStatus: string }, actor: AuthzActor): void {
+  if (actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE)) return;
+  if (article.reviewStatus !== "not_submitted" && article.reviewStatus !== "approved") {
+    throw new ReviewNotApprovedError();
+  }
+}
 
+async function assertEmailVerifiedToPublish(actor: AuthzActor): Promise<void> {
   const user = await withRls(actorRlsCtx(actor), (tx) =>
     tx.user.findUnique({ where: { id: actor.id }, select: { emailVerifiedAt: true } })
   );
   if (!actor.isSuperAdmin && !hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE) && !user?.emailVerifiedAt) {
     throw new EmailNotVerifiedError();
   }
+}
 
-  const article = await withRls(actorRlsCtx(actor), (tx) =>
+/** Self-service publish. Requires a verified email — see this session's abuse-model decision (module header) — and, for an article that entered the review workflow, an 'approved' reviewStatus (see assertReviewApproved()). */
+export async function publishArticle(articleId: string, actor: AuthzActor) {
+  const article = await requireArticleOwnerOrManage(articleId, actor);
+  assertReviewApproved(article, actor);
+  await assertEmailVerifiedToPublish(actor);
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
     tx.article.update({
       where: { id: articleId },
-      data: { status: "published", publishedAt: new Date() },
+      // scheduledAt cleared: an immediate publish supersedes any pending
+      // schedule — see schema.prisma's Article.scheduledAt comment.
+      data: { status: "published", publishedAt: new Date(), scheduledAt: null },
     })
   );
 
   await recordAuditEvent({ actorId: actor.id, action: "article.published", entityType: "Article", entityId: articleId });
-  return article;
+  return updated;
+}
+
+/**
+ * Session 38 (Keen Africans — Editor Workflow). Publish-at-a-future-time.
+ * Same authorization/verification/review gates as immediate publish above
+ * (this IS a publish, just a deferred one) — status stays 'draft' (so the
+ * article is NOT yet publicly visible) until flipDueScheduledArticles()
+ * below flips it once scheduledAt is due. See that function's own comment
+ * for why an on-read check, not a cron job, is this codebase's mechanism
+ * here (no job-runner convention exists to reuse).
+ */
+export async function scheduleArticle(articleId: string, scheduledAt: Date, actor: AuthzActor) {
+  if (scheduledAt.getTime() <= Date.now()) {
+    throw new InvalidScheduleError();
+  }
+  const article = await requireArticleOwnerOrManage(articleId, actor);
+  assertReviewApproved(article, actor);
+  await assertEmailVerifiedToPublish(actor);
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({ where: { id: articleId }, data: { scheduledAt } })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "article.publish_scheduled",
+    entityType: "Article",
+    entityId: articleId,
+    metadata: { scheduledAt: scheduledAt.toISOString() },
+  });
+  return updated;
+}
+
+/** Session 38 (Keen Africans — Editor Workflow). Cancels a pending scheduled publish set by scheduleArticle() above — a no-op if none is pending. */
+export async function cancelScheduledPublish(articleId: string, actor: AuthzActor) {
+  const article = await requireArticleOwnerOrManage(articleId, actor);
+  if (!article.scheduledAt) return article;
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({ where: { id: articleId }, data: { scheduledAt: null } })
+  );
+  await recordAuditEvent({ actorId: actor.id, action: "article.publish_schedule_cancelled", entityType: "Article", entityId: articleId });
+  return updated;
+}
+
+/**
+ * Session 38 (Keen Africans — Editor Workflow). The "on-read check" this
+ * session's brief explicitly allows in place of a cron/job-runner (this
+ * codebase has none to reuse — see docs/KEEN_AFRICANS.md). Flips any
+ * article whose scheduledAt has arrived from draft to published, under a
+ * synthesized system context carrying only articles.manage (never a real
+ * actor's own permission set — same "narrow system context" shape
+ * certificates.ts's systemCertificateCtx()/progress.ts's
+ * systemProgressCtx() already use), since the caller triggering this check
+ * (an anonymous public read, or another author's own dashboard load) has
+ * no ownership relationship to whichever articles happen to be due.
+ * Called from every public/author read path below. Cheap on the common
+ * case (zero due rows) thanks to the (status, scheduled_at) index.
+ */
+function systemArticlesCtx() {
+  return { isSuperAdmin: false, permissions: [PERMISSIONS.ARTICLES_MANAGE] };
+}
+
+export async function flipDueScheduledArticles(): Promise<void> {
+  const due = await withRls(systemArticlesCtx(), (tx) =>
+    tx.article.findMany({
+      where: { status: "draft", scheduledAt: { lte: new Date() } },
+      select: { id: true, authorId: true, scheduledAt: true },
+    })
+  );
+  if (due.length === 0) return;
+
+  await withRls(systemArticlesCtx(), (tx) =>
+    Promise.all(
+      due.map((a) =>
+        tx.article.update({
+          where: { id: a.id },
+          data: { status: "published", publishedAt: a.scheduledAt!, scheduledAt: null },
+        })
+      )
+    )
+  );
+
+  await Promise.all(
+    due.map((a) =>
+      recordAuditEvent({
+        actorId: a.authorId,
+        action: "article.published",
+        entityType: "Article",
+        entityId: a.id,
+        metadata: { scheduled: true },
+      })
+    )
+  );
 }
 
 /** Self-service — returns a published article to draft. Distinct from adminUnpublishArticle below (moderation). */
@@ -320,7 +562,9 @@ export async function unpublishArticle(articleId: string, actor: AuthzActor) {
   await requireArticleOwnerOrManage(articleId, actor);
 
   const article = await withRls(actorRlsCtx(actor), (tx) =>
-    tx.article.update({ where: { id: articleId }, data: { status: "draft" } })
+    // scheduledAt cleared defensively — an already-published article
+    // shouldn't carry a stale pending-schedule value.
+    tx.article.update({ where: { id: articleId }, data: { status: "draft", scheduledAt: null } })
   );
 
   await recordAuditEvent({ actorId: actor.id, action: "article.unpublished", entityType: "Article", entityId: articleId });
@@ -337,6 +581,142 @@ export async function archiveArticle(articleId: string, actor: AuthzActor) {
 
   await recordAuditEvent({ actorId: actor.id, action: "article.archived", entityType: "Article", entityId: articleId });
   return article;
+}
+
+// --- Review workflow (Session 38 — Editor Workflow) ----------------------
+//
+// Entirely OPT-IN: an article's reviewStatus starts and stays
+// 'not_submitted' unless its own author calls submitForReview() — nothing
+// here runs automatically, and publishArticle()'s direct-publish path
+// keeps working unchanged for an article that never does (see
+// assertReviewApproved() above). Reviewer actions (approve/reject/request
+// changes) require articles.manage, same key as adminUnpublishArticle
+// below and the same "no KEEN_AFRICAN/TEACHER/STUDENT role holds it"
+// guarantee — a plain author can never approve their own or anyone else's
+// article. Every transition is audited, same standard as every other
+// moderation-adjacent action in this codebase.
+//
+// State machine:
+//   not_submitted -> in_review               (submitForReview, author)
+//   in_review     -> approved                (approveArticle, articles.manage)
+//   in_review     -> changes_requested        (requestChanges, articles.manage)
+//   in_review     -> rejected                 (rejectArticle, articles.manage)
+//   changes_requested -> in_review            (submitForReview again, author)
+//   rejected      -> in_review                (submitForReview again, author)
+//   approved      -> (publishArticle/scheduleArticle succeed for the author)
+
+/** Author submits a draft for review — from 'not_submitted' (first submission) or 'changes_requested'/'rejected' (resubmission after revising). */
+export async function submitForReview(articleId: string, actor: AuthzActor) {
+  const article = await requireArticleOwnerOrManage(articleId, actor);
+  if (article.status !== "draft") {
+    throw new InvalidReviewTransitionError("Only a draft article can be submitted for review");
+  }
+  if (!["not_submitted", "changes_requested", "rejected"].includes(article.reviewStatus)) {
+    throw new InvalidReviewTransitionError();
+  }
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({
+      where: { id: articleId },
+      data: { reviewStatus: "in_review", reviewNote: null, reviewedAt: null, reviewedBy: null },
+    })
+  );
+
+  await recordAuditEvent({ actorId: actor.id, action: "article.review_submitted", entityType: "Article", entityId: articleId });
+  return updated;
+}
+
+async function requireInReview(articleId: string, actor: AuthzActor) {
+  if (!actor.isSuperAdmin && !hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE)) {
+    throw new AuthorizationError("Not authorized");
+  }
+  const article = await withRls(actorRlsCtx(actor), (tx) => tx.article.findUnique({ where: { id: articleId } }));
+  if (!article) throw new ArticleNotFoundError();
+  if (article.reviewStatus !== "in_review") {
+    throw new InvalidReviewTransitionError("This article isn't awaiting review");
+  }
+  return article;
+}
+
+/** Reviewer (articles.manage) approves an in-review article. Does NOT publish it — the author (or the reviewer, who also holds publish rights) still calls publishArticle()/scheduleArticle() explicitly. */
+export async function approveArticle(articleId: string, actor: AuthzActor) {
+  const article = await requireInReview(articleId, actor);
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({
+      where: { id: articleId },
+      data: { reviewStatus: "approved", reviewNote: null, reviewedAt: new Date(), reviewedBy: actor.id },
+    })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "article.review_approved",
+    entityType: "Article",
+    entityId: articleId,
+    metadata: { authorId: article.authorId },
+  });
+  return updated;
+}
+
+/** Reviewer (articles.manage) sends an in-review article back to the author with a required note. Author edits and resubmits via submitForReview(). */
+export async function requestChanges(articleId: string, note: string, actor: AuthzActor) {
+  const trimmed = note.trim();
+  if (!trimmed) throw new Error("A note is required so the author knows what to change");
+  const article = await requireInReview(articleId, actor);
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({
+      where: { id: articleId },
+      data: { reviewStatus: "changes_requested", reviewNote: trimmed, reviewedAt: new Date(), reviewedBy: actor.id },
+    })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "article.review_changes_requested",
+    entityType: "Article",
+    entityId: articleId,
+    metadata: { authorId: article.authorId, note: trimmed },
+  });
+  return updated;
+}
+
+/** Reviewer (articles.manage) rejects an in-review article with a required reason. Author may still revise and resubmit — rejection is not terminal (see the state machine comment above). */
+export async function rejectArticle(articleId: string, reason: string, actor: AuthzActor) {
+  const trimmed = reason.trim();
+  if (!trimmed) throw new Error("A reason is required to reject an article");
+  const article = await requireInReview(articleId, actor);
+
+  const updated = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.update({
+      where: { id: articleId },
+      data: { reviewStatus: "rejected", reviewNote: trimmed, reviewedAt: new Date(), reviewedBy: actor.id },
+    })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "article.review_rejected",
+    entityType: "Article",
+    entityId: articleId,
+    metadata: { authorId: article.authorId, reason: trimmed },
+  });
+  return updated;
+}
+
+/** Reviewer queue — every author's in-review articles. Mirrors listAllPublishedArticlesForAdmin()'s shape below. */
+export async function listArticlesPendingReview(actor: AuthzActor) {
+  if (!actor.isSuperAdmin && !hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE)) {
+    throw new AuthorizationError("Not authorized");
+  }
+  return withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.findMany({
+      where: { reviewStatus: "in_review" },
+      orderBy: { updatedAt: "asc" },
+      include: { author: { select: { id: true, name: true, email: true } } },
+    })
+  );
 }
 
 /**
@@ -443,6 +823,7 @@ export async function removeCoverImage(articleId: string, actor: AuthzActor) {
 
 /** Author's own dashboard — every status, own articles only (or any author's, for articles.manage/super_admin). */
 export async function listMyArticles(actor: AuthzActor) {
+  await flipDueScheduledArticles();
   return withRls(actorRlsCtx(actor), (tx) =>
     tx.article.findMany({ where: { authorId: actor.id }, orderBy: { updatedAt: "desc" } })
   );
@@ -453,6 +834,7 @@ export async function listAllPublishedArticlesForAdmin(actor: AuthzActor) {
   if (!actor.isSuperAdmin && !hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE)) {
     throw new AuthorizationError("Not authorized");
   }
+  await flipDueScheduledArticles();
   return withRls(actorRlsCtx(actor), (tx) =>
     tx.article.findMany({
       where: { status: "published" },
@@ -463,6 +845,7 @@ export async function listAllPublishedArticlesForAdmin(actor: AuthzActor) {
 }
 
 export async function getArticleForEdit(articleId: string, actor: AuthzActor) {
+  await flipDueScheduledArticles();
   return requireArticleOwnerOrManage(articleId, actor);
 }
 
@@ -485,6 +868,7 @@ const PUBLIC_PAGE_SIZE = 20;
  * this file, not left coexisting with the new mechanism.
  */
 export async function listPublishedArticles(opts: { page?: number; tag?: string } = {}) {
+  await flipDueScheduledArticles();
   const page = Math.max(1, opts.page ?? 1);
   const where = {
     status: "published" as const,
@@ -514,6 +898,7 @@ export async function listPublishedArticles(opts: { page?: number; tag?: string 
 
 /** Public article page — published only, no login. Returns null for anything else (draft/archived/unknown slug) so the route can 404 uniformly rather than leaking existence. */
 export async function getPublicArticleBySlug(slug: string) {
+  await flipDueScheduledArticles();
   const article = await withRls({}, (tx) => tx.article.findFirst({ where: { slug, status: "published" } }));
   if (!article) return null;
 

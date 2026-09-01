@@ -26,7 +26,15 @@ type Status =
   // OrganizationMembership.status / OrganizationInvitation.status.
   | "pending"
   | "invited"
-  | "removed";
+  | "removed"
+  // Added by Session 38 (Keen Africans — Editor Workflow) for
+  // Article.reviewStatus. "not_submitted" intentionally has no badge — the
+  // editor UI simply doesn't show a review badge at all in that state (see
+  // ArticleEditorClient.tsx), since it's not a real workflow step.
+  | "in_review"
+  | "changes_requested"
+  | "approved"
+  | "rejected";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -51,6 +59,10 @@ const LABEL: Record<Status, string> = {
   pending: "Pending",
   invited: "Invited",
   removed: "Removed",
+  in_review: "In review",
+  changes_requested: "Changes requested",
+  approved: "Approved",
+  rejected: "Rejected",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -77,6 +89,10 @@ export function StatusBadge({ status }: { status: Status }) {
     pending: styles["badge-paused"],
     invited: styles["badge-draft"],
     removed: styles["badge-suspended"],
+    in_review: styles["badge-paused"],
+    changes_requested: styles["badge-paused"],
+    approved: styles["badge-active"],
+    rejected: styles["badge-suspended"],
   }[status];
 
   return (
