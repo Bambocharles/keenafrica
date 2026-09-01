@@ -77,12 +77,28 @@ async function assertNotRateLimited(actorId: string | null, ipAddress: string | 
 
 // --- Create (anonymous-capable) --------------------------------------
 
+/**
+ * Session 43 (Comments & Reactions) extends this with a third
+ * entityType — 'comment' — per that session's own explicit "comments are
+ * reportable through Session 41's existing mechanism" requirement. A
+ * comment that's already been soft-deleted (see src/lib/comments.ts) is
+ * treated as not-found here — nothing left to report.
+ */
 async function assertTargetExists(entityType: ReportEntityType, entityId: string): Promise<void> {
   const exists =
     entityType === "article"
       ? await withRls({}, (tx) => tx.article.findUnique({ where: { id: entityId }, select: { id: true } }))
-      : await withRls({}, (tx) => tx.profile.findUnique({ where: { userId: entityId }, select: { id: true } }));
+      : entityType === "profile"
+        ? await withRls({}, (tx) => tx.profile.findUnique({ where: { userId: entityId }, select: { id: true } }))
+        : await withRls({}, (tx) => tx.comment.findFirst({ where: { id: entityId, deletedAt: null }, select: { id: true } }));
   if (!exists) throw new ReportTargetNotFoundError();
+}
+
+/** The AuditEvent entityType for a given ReportEntityType — 'article'/'profile' map to the Article/User rows they key on directly; 'comment' reports its own Comment id. */
+function auditEntityType(entityType: ReportEntityType): string {
+  if (entityType === "article") return "Article";
+  if (entityType === "profile") return "User";
+  return "Comment";
 }
 
 export interface CreateReportInput {
@@ -93,10 +109,11 @@ export interface CreateReportInput {
 
 /**
  * Anyone — including an anonymous reader (actor === null) — may file a
- * report. `entityId` is the Article's id for entityType 'article', or the
+ * report. `entityId` is the Article's id for entityType 'article', the
  * target User's id for entityType 'profile' (matching how every other
  * Keen Africans moderation surface — suspension, verification — keys on
- * userId, not Profile's own row id).
+ * userId, not Profile's own row id), or the Comment's own id for
+ * entityType 'comment' (Session 43).
  */
 export async function createReport(
   input: CreateReportInput,
@@ -128,7 +145,7 @@ export async function createReport(
   await recordAuditEvent({
     actorId: actor?.id ?? null,
     action: "report.created",
-    entityType: input.entityType === "article" ? "Article" : "User",
+    entityType: auditEntityType(input.entityType),
     entityId: input.entityId,
     ipAddress,
   });
@@ -220,7 +237,7 @@ export async function resolveReport(reportId: string, actor: AuthzActor, note?: 
   await recordAuditEvent({
     actorId: actor.id,
     action: "report.resolved",
-    entityType: report.entityType === "article" ? "Article" : "User",
+    entityType: auditEntityType(report.entityType),
     entityId: report.entityId,
     metadata: { reportId },
   });
@@ -241,7 +258,7 @@ export async function dismissReport(reportId: string, actor: AuthzActor, note?: 
   await recordAuditEvent({
     actorId: actor.id,
     action: "report.dismissed",
-    entityType: report.entityType === "article" ? "Article" : "User",
+    entityType: auditEntityType(report.entityType),
     entityId: report.entityId,
     metadata: { reportId },
   });

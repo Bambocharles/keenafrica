@@ -13,6 +13,7 @@ import {
 } from "@/lib/articles";
 import { VerificationNotFoundError, VerificationStateError, approveVerification, rejectVerification } from "@/lib/verification";
 import { InvalidReportTransitionError, ReportNotFoundError, dismissReport, resolveReport } from "@/lib/reports";
+import { CommentNotFoundError, deleteComment } from "@/lib/comments";
 import type { ProfileBadge } from "@prisma/client";
 import { PROFILE_BADGES, setProfileBadge, setProfileFeatured } from "@/lib/profiles";
 import { suspendUser, reinstateUser } from "@/lib/users";
@@ -30,6 +31,7 @@ function toError(err: unknown): string {
   if (err instanceof VerificationStateError) return "invalid_verification_transition";
   if (err instanceof ReportNotFoundError) return "report_not_found";
   if (err instanceof InvalidReportTransitionError) return "report_already_reviewed";
+  if (err instanceof CommentNotFoundError) return "comment_not_found";
   return "action_failed";
 }
 
@@ -174,6 +176,26 @@ export async function dismissReportAction(formData: FormData) {
   let error: string | null = null;
   try {
     await dismissReport(reportId, actor, note);
+  } catch (err) {
+    error = toError(err);
+  }
+  revalidatePath("/keen-africans");
+  if (error) redirect(`/keen-africans?error=${error}`);
+}
+
+/**
+ * Session 43 (Comments & Reactions). Platform-wide comment moderation from
+ * the Reports card, for a 'comment'-entityType report — deleteComment()
+ * itself is articles.manage-gated (one of its three self-service tiers,
+ * see that module's own header) and independently enforced at the RLS
+ * layer, not just by this page being reachable.
+ */
+export async function adminDeleteCommentAction(formData: FormData) {
+  const actor = await requireActor();
+  const commentId = String(formData.get("commentId") ?? "");
+  let error: string | null = null;
+  try {
+    await deleteComment(commentId, actor);
   } catch (err) {
     error = toError(err);
   }

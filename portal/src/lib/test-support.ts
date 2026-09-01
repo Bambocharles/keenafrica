@@ -153,6 +153,36 @@ export async function cleanupTestCertificates(studentUserIds: string[]): Promise
  * are all ON DELETE NO ACTION, same convention as every other cleanup
  * helper here).
  */
+/**
+ * Deletes a set of test-created Comment rows, including any Report rows
+ * filed against them (polymorphic entityId, no FK — same convention
+ * cleanupTestArticles' own Report cleanup uses) — call this before
+ * cleanupTestArticles()/cleanupTestUsers() for any users referenced as
+ * comment author/deleter (keen_africans_comments migration's FKs are all
+ * ON DELETE NO ACTION, same convention as every other cleanup helper
+ * here).
+ */
+export async function cleanupTestComments(commentIds: string[]): Promise<void> {
+  if (commentIds.length === 0) return;
+  await prisma.report.deleteMany({ where: { entityType: "comment", entityId: { in: commentIds } } });
+  await prisma.comment.deleteMany({ where: { id: { in: commentIds } } });
+}
+
+/** Deletes any Comment rows (and their reports) on a set of test-created articles — call BEFORE those Article rows are deleted, since comments.article_id has no FK cascade. */
+async function cleanupCommentsByArticleIds(articleIds: string[]): Promise<void> {
+  if (articleIds.length === 0) return;
+  const commentIds = (
+    await prisma.comment.findMany({ where: { articleId: { in: articleIds } }, select: { id: true } })
+  ).map((c) => c.id);
+  await cleanupTestComments(commentIds);
+}
+
+/** Deletes any ArticleReaction rows for a set of test users — call before cleanupTestUsers() deletes the User rows (keen_africans_article_reactions migration's FK is ON DELETE NO ACTION, same convention as every other cleanup helper here). */
+export async function cleanupTestReactions(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.articleReaction.deleteMany({ where: { userId: { in: userIds } } });
+}
+
 export async function cleanupTestArticles(articleIds: string[]): Promise<void> {
   if (articleIds.length === 0) return;
   const coverAssetIds = (
@@ -165,6 +195,11 @@ export async function cleanupTestArticles(articleIds: string[]): Promise<void> {
   // rows against an article have no FK (polymorphic entityId, see
   // schema.prisma's Report comment), so nothing else cleans these up.
   await prisma.report.deleteMany({ where: { entityType: "article", entityId: { in: articleIds } } });
+  // Session 43 (Comments & Reactions) — comments/reactions on a test
+  // article have no FK cascade either, so clean them up before the
+  // article row itself.
+  await cleanupCommentsByArticleIds(articleIds);
+  await prisma.articleReaction.deleteMany({ where: { articleId: { in: articleIds } } });
   await prisma.article.deleteMany({ where: { id: { in: articleIds } } });
   await cleanupTestAssets(coverAssetIds);
 }
@@ -222,6 +257,19 @@ export async function cleanupTestFollows(userIds: string[]): Promise<void> {
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
   await cleanupTestFollows(userIds);
+  // Session 43 (Comments & Reactions) — must run before cleanupTestReports
+  // below only in the sense that both must precede the User deletes; a
+  // comment's own Report rows are cleaned as part of cleanupTestComments
+  // itself (entityId there is a commentId, not a userId, so
+  // cleanupTestReports(userIds) alone would never catch them).
+  await cleanupTestReactions(userIds);
+  const authoredOrDeletedCommentIds = (
+    await prisma.comment.findMany({
+      where: { OR: [{ authorId: { in: userIds } }, { deletedBy: { in: userIds } }] },
+      select: { id: true },
+    })
+  ).map((c) => c.id);
+  await cleanupTestComments(authoredOrDeletedCommentIds);
   await cleanupTestReports(userIds);
   await cleanupTestNotifications(userIds);
   await cleanupTestNotificationPreferences(userIds);

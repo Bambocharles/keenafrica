@@ -1581,3 +1581,236 @@ None.
   and database (`portal_dev_session42`) are left in place, not cleaned
   up — safe to remove once this branch is merged, or reused as-is if
   Session 42 gets a follow-up.
+
+## Comments & Reactions (Session 43)
+
+Branch `session-43-keen-africans-comments-reactions`, off `origin/main`
+(confirmed via `git merge-base --is-ancestor` that Sessions 34-42 were
+all already merged before starting — origin/main's HEAD was `b785469`
+"Merge pull request #80 from Bambocharles/session-42-keen-africans-follow-reputation"),
+in its own git worktree
+(`~/keenafrica/.worktrees/session-43-keen-africans-comments-reactions`)
+against an isolated `portal_dev_session43` database (cloned from the
+shared `portal_dev`). Committed locally, not pushed/PR'd — same
+convention every prior Keen Africans session followed.
+
+### The shared sanitize-html pipeline — genuinely shared, not duplicated
+
+This session's brief's central rule: comments must render through the
+exact same `renderArticleBodyHtml()` pipeline article bodies use, with no
+second rendering path. Concretely:
+
+- `src/lib/articles.ts`'s `renderArticleBodyHtml()` is completely
+  unchanged by this session — zero new parameters, zero comment-specific
+  branches inside it.
+- `Comment.body` is stored as plain Markdown text, exactly like
+  `Article.body` — `src/lib/comments.ts` never touches `marked` or
+  `sanitize-html` itself, and imports neither package.
+- The UI layer calls the identical function for both: the article page
+  calls `renderArticleBodyHtml(article.body)`, and the new
+  `CommentSection.tsx` component calls
+  `renderArticleBodyHtml(comment.body)` for each comment — both imported
+  from the same `src/lib/articles.ts` export.
+- Proven, not just asserted: `src/lib/comments.test.ts` has a dedicated
+  "renderArticleBodyHtml applied to comment bodies" describe block that
+  creates a real `Comment` row containing a raw `<script>` tag /
+  `onerror=` / `javascript:` payload (the same shapes
+  `articles.test.ts` already used against article bodies) and asserts
+  they're stripped — then this was re-verified live against a real
+  running dev server: a comment body containing
+  `<script>alert(document.cookie)</script>` rendered with the script tag
+  completely absent from the served HTML (see "Live verification"
+  below).
+
+### The `Comment` entity
+
+`prisma/schema.prisma`'s `Comment`: `id`, `articleId`, `authorId`,
+`authorName` (denormalized snapshot, same "stability over always-fresh"
+trade-off as `Article.authorName`), `body`, `deletedAt`/`deletedBy`,
+`createdAt`/`updatedAt`. Never a hard row `DELETE` (no `DELETE` RLS
+policy) — a "deleted" comment is an application-layer soft-delete, same
+append-only-history convention as `Article`/`Asset`/`Report`. This is
+concretely load-bearing here: a `Report` filed against a comment
+(`ReportEntityType.comment`, added by its own migration — enum-value
+additions must run in their own transaction, same restriction every
+prior enum extension in this codebase hit) must keep pointing at
+something even after the comment is removed, so a moderator reviewing
+the report can still see what was said and who removed it.
+
+**Deletion has three self-service tiers** — the exact wording of this
+session's own "Owns" bullet ("authors can delete comments on their own
+articles; `articles.manage` holders can remove any comment"), read
+together with the acceptance criteria's "deleted by their author":
+
+1. The comment's own author (self-delete).
+2. The **article's** own author — moderating comments on their own
+   article, the common "blog owner can remove a comment under their own
+   post" pattern. This is genuinely a comment-thread moderation power,
+   distinct from and in addition to (1).
+3. `articles.manage`/`super_admin` — platform-wide moderation, same key
+   every other Keen Africans moderation surface uses.
+
+All three are enforced in `src/lib/comments.ts`'s
+`requireCommentDeletable()` AND independently at the RLS layer
+(`comments_update`'s three `OR` branches, the article-author one via a
+subquery against `articles` — same "ownership enforced in application
+code AND RLS" standard every prior session's ownership check meets).
+Proven both ways: `comments.test.ts`'s unit tests and
+`comments-reactions-rls.integration.test.ts`'s real non-superuser-role
+tests each cover all three tiers plus the negative case (an unrelated
+Keen African can do neither).
+
+### Authorization gate — reusing, not reimplementing
+
+Two checks, both reused rather than duplicated:
+
+- **"Is this actor even a registered, engaging Keen African?"** — the
+  same signal `createArticle()` itself uses: holding `articles.write`
+  (or `super_admin`). Deliberately NOT `articles.manage` alone — an
+  `ADMIN` who isn't also a registered Keen African cannot comment/react,
+  matching `createArticle()`'s own asymmetry between authoring and
+  moderating.
+- **Email verification** — `src/lib/articles.ts`'s
+  `assertEmailVerifiedToPublish()` was renamed to `assertEmailVerified()`
+  and exported (it was module-private before this session), specifically
+  so `comments.ts`/`reactions.ts` could import and call the exact same
+  function — same bypasses (`isSuperAdmin`, `articles.manage`), same
+  `EmailNotVerifiedError` type, zero duplicated logic. This is the
+  literal fulfillment of this session's own "reuse the same
+  email-verification gate Session 34 built for publishing" rule.
+
+### The `ArticleReaction` entity — a single reaction type
+
+Per this session's explicit "do not build a multi-emoji reaction system
+unless asked": one row per `(articleId, userId)`, same
+per-target-per-user uniqueness and self-service-only shape as `Follow`
+(Session 42). Unlike `Comment`, "unreacting" is a real hard `DELETE` —
+a reaction carries no moderation-relevant content of its own worth
+preserving once removed, unlike a comment's body.
+
+### Rate limiting
+
+Both comment creation and reactions reuse `src/lib/rate-limit.ts`'s
+`countRecentAuditEvents()` — no new limiter mechanism, same convention
+article creation/reports/login all use:
+
+- Comments: 20/hour/account (`COMMENT_CREATE_WINDOW`) — more generous
+  than article creation (8/hour) since comments are lower-stakes,
+  higher-frequency engagement.
+- Reactions: 30/hour/account (`REACTION_WINDOW`) — a reaction is a
+  single click, not authored content, so this is more generous still.
+  The per-`(article, user)` unique constraint alone only stops re-liking
+  the SAME article; the rate limiter is what bounds rapid reacting
+  across many different articles (or rapid toggle-spamming one article,
+  since each fresh react after an unreact records its own
+  `reaction.created` audit event).
+
+### UI
+
+`src/app/keenafricans/CommentSection.tsx` (comment list + create form,
+rendered on the public article page below the existing `<ReportForm>`)
+and `ReactionButton.tsx` (a like/unlike toggle in the byline, next to
+`FollowButton`) — both plain `<form action={...}>` Server Actions, no
+client JS, same shape every existing Keen Africans public form uses.
+Four new Server Actions in `src/app/keenafricans/actions.ts`:
+`commentAction`, `deleteCommentAction`, `reactAction`, `unreactAction`.
+
+**A pre-existing widget's contract was extended, not just reused**:
+`<ReportForm>` previously accepted only `entityType: "article" |
+"profile"` — Session 43 adds `"comment"`, and (since a single article
+page can now render MULTIPLE `<ReportForm>`s — the article's own, plus
+one per comment) `reportAction`'s redirect now echoes `entityId` back
+(`reportedEntityId`/`reportErrorEntityId`) so each form's "thanks, sent
+to moderators" confirmation is scoped to the ONE entity actually
+reported, not shown on every report widget on the page.
+
+Admin console (`/admin/(protected)/keen-africans`): the existing
+"Reports" card's per-row rendering now handles `entityType === "comment"`
+(labeled "Comment report", with a "Remove comment" action wired to a new
+`adminDeleteCommentAction` — a thin wrapper around `deleteComment()`,
+same shape every other admin action in this console already is). No new
+admin page — comments have no dedicated moderation queue of their own,
+only the existing Reports card, matching this session's "lightweight
+engagement" scope.
+
+### Migrations
+
+Three, in order: `20260901280000_keen_africans_comment_report_entity_type`
+(adds `'comment'` to `ReportEntityType`, its own transaction — Postgres
+requires this), `20260901290000_keen_africans_comments` (the `comments`
+table + its three-tier RLS), `20260901300000_keen_africans_article_reactions`
+(the `article_reactions` table + its RLS).
+
+### Tests
+
+New files: `src/lib/comments.test.ts` (19 cases), `src/lib/reactions.test.ts`
+(12 cases), `src/lib/comments-reactions-rls.integration.test.ts` (17
+cases against the real non-superuser `portal_rls_test` role), plus 2 new
+cases added to the existing `src/lib/reports.test.ts` (a comment is
+reportable; `ReportTargetNotFoundError` for an unknown comment id).
+
+Full suite: **829/829 passing** on a clean run (779 baseline + 50 new).
+`npx tsc --noEmit`: clean. One re-run hit the SAME pre-existing flake
+every prior session since Session 38/41 has documented
+(`notifications.test.ts`'s `CoursePublished`/`StudentEnrolled` cases
+under full concurrent-suite load) — confirmed to pass reliably in
+isolation, unrelated to this session's changes.
+
+**Live-verified against a real running dev server, real HTTP** (no
+browser tool in this sandbox): registered two real accounts via the
+real `createArticle`/`publishArticle`/`createComment`/`reactToArticle`
+functions (same "call the real functions directly" technique prior
+sessions used when curl's authenticated-POST path proved unreliable —
+see Session 36's own note on that), one comment body deliberately
+containing `<script>alert(document.cookie)</script>`. Fetched the
+article page anonymously (`curl -H "Host: keenafricans.portal.local"`):
+200, correct title, "Comments (1)" and "Sign in to react (1)" both
+rendering the real counts, the comment body rendered with the link
+`rel="noopener noreferrer ugc" target="_blank"` intact and the
+`<script>` tag completely absent (zero `<script`/`onerror`/`javascript:`
+anywhere in the response), and a per-comment `<ReportForm
+entityType="comment">` present with the correct `entityId`. All
+live-verification fixtures deleted afterward (article, comments,
+reactions, profiles, audit events, roles, users — confirmed zero rows
+remain).
+
+### Known limitations
+
+- No notification when a comment/reaction is posted, or when a comment
+  is reported — same "moderators/authors only learn by checking"
+  limitation Session 41 already documented for reports generally. A
+  `comment.created`/`report.created` notification for the article's
+  author is a reasonable, undone follow-up.
+- No comment editing — an author can delete and re-post, but there is
+  no `updateComment()`. Not required by this session's acceptance
+  criteria.
+- No nested/threaded replies — a flat list, oldest-first, same
+  "lightweight engagement" scope this session's mission explicitly
+  calls for.
+- The admin console's comment moderation is reachable only through a
+  reported comment's "Remove comment" button in the Reports card — an
+  `articles.manage` holder cannot browse an article's full comment
+  thread from the admin side independently of a report being filed.
+  Acceptable for this session's minimal-v1 scope; a dedicated
+  comment-moderation queue is a reasonable follow-up if volume warrants
+  it.
+
+### Blockers
+
+None.
+
+### Required next-session actions
+
+- **Whoever wants comment/reaction notifications**: `comment.created`
+  (to the article's author) and `report.created` for a comment (to
+  `articles.manage` holders) are reasonable, undone follow-ups — same
+  pattern Session 39's `DomainEventMap` already established.
+- **Whoever has merge authority**: review and merge/deploy
+  `session-43-keen-africans-comments-reactions` — complete and tested
+  but deliberately left unpushed, matching every prior Keen Africans
+  session's own convention.
+- **Whoever runs this sandbox next**: this session's isolated worktree
+  (`~/keenafrica/.worktrees/session-43-keen-africans-comments-reactions`)
+  and database (`portal_dev_session43`) are left in place, not cleaned
+  up — safe to remove once this branch is merged, or reused as-is if
+  Session 43 gets a follow-up.

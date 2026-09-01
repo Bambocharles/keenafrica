@@ -515,6 +515,15 @@ model User {
   following Follow[] @relation("FollowFollower")
   followers Follow[] @relation("FollowFollowing")
 
+  // Session 43 (Comments & Reactions). commentsRemoved is only ever
+  // populated for a moderation removal (the comment's own author deleting
+  // their own comment does not set deletedBy to anything worth a separate
+  // relation — see Comment's own comment for why deletedBy is still
+  // recorded in that case too, for a consistent audit shape).
+  comments         Comment[]         @relation("CommentAuthor")
+  commentsRemoved  Comment[]         @relation("CommentDeleter")
+  articleReactions ArticleReaction[] @relation("ArticleReactionUser")
+
   @@map("users")
 }
 
@@ -1927,6 +1936,10 @@ model Article {
   moderator  User?  @relation("ArticleModerator", fields: [moderatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
   reviewer   User?  @relation("ArticleReviewer", fields: [reviewedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
+  // Session 43 (Comments & Reactions).
+  comments  Comment[]
+  reactions ArticleReaction[]
+
   @@index([authorId])
   @@index([status, publishedAt])
   @@index([status, scheduledAt])
@@ -2111,6 +2124,13 @@ model KeenAfricanVerification {
 enum ReportEntityType {
   article
   profile
+  // Session 43 (Comments & Reactions). Added by its own migration
+  // (Postgres requires an enum value addition to run in its own
+  // transaction, separate from any statement that might use it — same
+  // restriction every other enum-value addition in this codebase has
+  // hit). entityId for this value is a Comment's own id, not a userId or
+  // articleId.
+  comment
 }
 
 enum ReportStatus {
@@ -2137,6 +2157,76 @@ model Report {
   @@index([entityType, entityId])
   @@index([status])
   @@map("reports")
+}
+
+// Session 43 (Comments & Reactions). A comment on a published Article.
+// `body` is Markdown text rendered through the EXACT same
+// renderArticleBodyHtml() (marked -> sanitize-html) pipeline
+// src/lib/articles.ts uses for article bodies — see that function's own
+// comment and src/lib/comments.ts's header for why this session
+// deliberately introduces no second rendering path.
+//
+// Never a hard row DELETE (no DELETE RLS policy — see the
+// keen_africans_comments migration) — a "deleted" comment is an
+// application-layer soft-delete (deletedAt/deletedBy set), same
+// append-only-history convention as Article/Asset/Report. This matters
+// concretely here: a Report against a comment (ReportEntityType.comment
+// above) must keep pointing at something even after the comment is
+// removed, so a moderator reviewing the report can still see what was
+// said and who removed it.
+//
+// authorName is a denormalized snapshot, same "stability over
+// always-fresh" trade-off as Article.authorName — set once at creation by
+// src/lib/comments.ts's createComment() (via profiles.ts's
+// resolveAuthorName()), never re-derived later.
+model Comment {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  articleId  String    @map("article_id") @db.Uuid
+  authorId   String    @map("author_id") @db.Uuid
+  authorName String    @map("author_name")
+  body       String
+  // Set by src/lib/comments.ts's deleteComment() — by the comment's own
+  // author (self-delete), the parent article's own author (moderating
+  // their own article's comment section, see Comment's own "Owns" bullet
+  // in sessions/43-keen-africans-comments-reactions.md), or an
+  // articles.manage/super_admin holder (platform-wide moderation). Always
+  // recorded, even for a self-delete, so every removal has a consistent
+  // audit shape.
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedBy String?   @map("deleted_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  author  User    @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  deleter User?   @relation("CommentDeleter", fields: [deletedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([articleId, createdAt])
+  @@index([authorId])
+  @@map("comments")
+}
+
+// Session 43 (Comments & Reactions). A single reaction type ("like") per
+// this session's own explicit "do not build a multi-emoji reaction system
+// unless asked" rule — one row per (article, user), toggled on/off.
+// Unlike Comment above, "unreacting" is a real hard DELETE, not a
+// soft-delete — same shape and reasoning as Follow (Session 42): a
+// reaction carries no moderation-relevant content of its own worth
+// preserving once removed, so there is nothing for a Report to point back
+// at the way there is for a Comment's body.
+model ArticleReaction {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  articleId String   @map("article_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user    User    @relation("ArticleReactionUser", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([articleId, userId])
+  @@index([articleId])
+  @@index([userId])
+  @@map("article_reactions")
 }
 
 // Session 42 (Follow & Author Reputation Display). A follower/following

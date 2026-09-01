@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { AuthorizationError } from "@/lib/authz";
-import { createArticle } from "@/lib/articles";
+import { createArticle, publishArticle } from "@/lib/articles";
+import { createComment } from "@/lib/comments";
 import { ensureProfile } from "@/lib/profiles";
 import {
   InvalidReportTransitionError,
@@ -16,7 +17,14 @@ import {
   listReports,
   resolveReport,
 } from "@/lib/reports";
-import { actorFromUser, cleanupTestArticles, cleanupTestReports, cleanupTestUsers, createTestUser } from "@/lib/test-support";
+import {
+  actorFromUser,
+  cleanupTestArticles,
+  cleanupTestComments,
+  cleanupTestReports,
+  cleanupTestUsers,
+  createTestUser,
+} from "@/lib/test-support";
 
 /**
  * Session 41 (Admin Moderation, Reporting & Verification Review). Covers
@@ -27,8 +35,10 @@ import { actorFromUser, cleanupTestArticles, cleanupTestReports, cleanupTestUser
 
 const createdUserIds: string[] = [];
 const createdArticleIds: string[] = [];
+const createdCommentIds: string[] = [];
 
 afterAll(async () => {
+  await cleanupTestComments(createdCommentIds);
   await cleanupTestReports(createdUserIds);
   await cleanupTestArticles(createdArticleIds);
   await cleanupTestUsers(createdUserIds);
@@ -89,6 +99,30 @@ describe("createReport — anonymous-capable, rate-limited", () => {
   it("throws ReportTargetNotFoundError for a profile that doesn't exist", async () => {
     await expect(
       createReport({ entityType: "profile", entityId: "00000000-0000-0000-0000-000000000000", reason: "spam" }, null, randomIp())
+    ).rejects.toThrow(ReportTargetNotFoundError);
+  });
+
+  it("Session 43 (Comments & Reactions): a logged-in reader can report a comment", async () => {
+    const { user: authorUser, actor: author } = await keenAfrican();
+    await prisma.user.update({ where: { id: authorUser.id }, data: { emailVerifiedAt: new Date() } });
+    const article = await createArticle({ title: `Comment Report Target ${Date.now()}-${Math.random()}` }, author);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, author);
+
+    const { user: commenterUser, actor: commenter } = await keenAfrican();
+    await prisma.user.update({ where: { id: commenterUser.id }, data: { emailVerifiedAt: new Date() } });
+    const comment = await createComment(article.id, "reportable comment", commenter);
+    createdCommentIds.push(comment.id);
+    const { actor: reporter } = await keenAfrican();
+
+    await expect(
+      createReport({ entityType: "comment", entityId: comment.id, reason: "harassment" }, reporter, randomIp())
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws ReportTargetNotFoundError for a comment that doesn't exist", async () => {
+    await expect(
+      createReport({ entityType: "comment", entityId: "00000000-0000-0000-0000-000000000000", reason: "spam" }, null, randomIp())
     ).rejects.toThrow(ReportTargetNotFoundError);
   });
 

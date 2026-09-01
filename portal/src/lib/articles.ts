@@ -439,7 +439,16 @@ function assertReviewApproved(article: { reviewStatus: string }, actor: AuthzAct
   }
 }
 
-async function assertEmailVerifiedToPublish(actor: AuthzActor): Promise<void> {
+/**
+ * The email-verification gate (Session 34's abuse-model decision — module
+ * header). Exported (not module-private) because Session 43 (Comments &
+ * Reactions) reuses this EXACT function — same bypasses (isSuperAdmin,
+ * articles.manage), same error type — for its own "only a logged-in,
+ * email-verified Keen African may comment or react" rule, per that
+ * session's own explicit "reuse the same email-verification gate" brief.
+ * Not renamed to something publish-specific for that reason.
+ */
+export async function assertEmailVerified(actor: AuthzActor): Promise<void> {
   const user = await withRls(actorRlsCtx(actor), (tx) =>
     tx.user.findUnique({ where: { id: actor.id }, select: { emailVerifiedAt: true } })
   );
@@ -452,7 +461,7 @@ async function assertEmailVerifiedToPublish(actor: AuthzActor): Promise<void> {
 export async function publishArticle(articleId: string, actor: AuthzActor) {
   const article = await requireArticleOwnerOrManage(articleId, actor);
   assertReviewApproved(article, actor);
-  await assertEmailVerifiedToPublish(actor);
+  await assertEmailVerified(actor);
 
   const updated = await withRls(actorRlsCtx(actor), (tx) =>
     tx.article.update({
@@ -482,7 +491,7 @@ export async function scheduleArticle(articleId: string, scheduledAt: Date, acto
   }
   const article = await requireArticleOwnerOrManage(articleId, actor);
   assertReviewApproved(article, actor);
-  await assertEmailVerifiedToPublish(actor);
+  await assertEmailVerified(actor);
 
   const updated = await withRls(actorRlsCtx(actor), (tx) =>
     tx.article.update({ where: { id: articleId }, data: { scheduledAt } })
