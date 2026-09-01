@@ -114,7 +114,12 @@ export default async function KeenAfricansRegisterPage({
           </button>
         </form>
 
-        <p className={styles.subtitle} style={{ marginTop: "16px", marginBottom: 0 }}>
+        <p className={styles.subtitle} style={{ marginTop: "14px", marginBottom: 0 }}>
+          By creating an account you agree to our <a href="/terms">Terms of Service</a> and{" "}
+          <a href="/privacy">Privacy Policy</a>.
+        </p>
+
+        <p className={styles.subtitle} style={{ marginTop: "10px", marginBottom: 0 }}>
           Already have an account? <a href="/login">Log in</a>
         </p>
       </div>

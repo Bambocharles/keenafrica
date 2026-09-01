@@ -108,6 +108,9 @@ export default async function KeenAfricansLoginPage({
         <p className={styles.subtitle} style={{ marginTop: "16px", marginBottom: 0 }}>
           New here? <a href="/register">Become a Keen African</a>
         </p>
+        <p className={styles.subtitle} style={{ marginTop: "10px", marginBottom: 0 }}>
+          <a href="/terms">Terms</a> &middot; <a href="/privacy">Privacy</a>
+        </p>
       </div>
     </div>
   );
