@@ -65,7 +65,11 @@ export type NotificationTypeValue =
   // Session 40 (Keen Africans — LinkedIn Verification). The "verification
   // status" value Session 39's own docstring anticipated — see the
   // listener below and events.ts's VerificationStatusChanged comment.
-  | "verification_status_changed";
+  | "verification_status_changed"
+  // Session 42 (Follow & Author Reputation Display). The "follow" value
+  // Session 39's own docstring anticipated — see the listener below and
+  // events.ts's UserFollowed comment.
+  | "user_followed";
 
 const ACTIVE_ENROLLMENT_STATUSES = ["active", "completed"] as const;
 
@@ -580,6 +584,40 @@ onDomainEvent("VerificationStatusChanged", async ({ userId, status, reason }) =>
   });
 });
 
+onDomainEvent("UserFollowed", async ({ followerId, followedUserId }) => {
+  // Session 42 (Follow & Author Reputation Display). The "follow" listener
+  // Session 39's own docstring anticipated. Re-fetches the Follow row for
+  // its own id/createdAt (never trusts an already-loaded row across the
+  // module boundary — see events.ts's own "Payload discipline" rule) to
+  // build a dedupe key on the relationship's own real occurrence: a
+  // follower who unfollows and re-follows the same account produces a
+  // NEW Follow row (a fresh id/createdAt, since unfollow is a real DELETE
+  // — see schema.prisma's Follow comment), so this correctly notifies
+  // again each time, same convention as every other listener here.
+  const [follow, followerProfile] = await Promise.all([
+    withRls(SYSTEM_CTX, (tx) =>
+      tx.follow.findUnique({
+        where: { followerId_followingId: { followerId, followingId: followedUserId } },
+        select: { id: true, createdAt: true },
+      })
+    ),
+    withRls(SYSTEM_CTX, (tx) => tx.profile.findUnique({ where: { userId: followerId }, select: { displayName: true } })),
+  ]);
+  if (!follow) return;
+
+  const followerName = followerProfile?.displayName ?? "Someone";
+
+  await createNotification({
+    recipientId: followedUserId,
+    type: "user_followed",
+    title: `${followerName} followed you`,
+    body: `${followerName} started following you on Keen Africans.`,
+    entityType: "user",
+    entityId: followerId,
+    dedupeKey: `follow:${follow.id}`,
+  });
+});
+
 // --- Read path: the in-app notification center ----------------------------
 
 const MAX_PAGE_SIZE = 100;
@@ -724,6 +762,12 @@ export function notificationHref(n: Pick<NotificationSummary, "type" | "entityTy
     case "account_suspended":
     case "role_changed":
     case "project_milestone_updated":
+    // Session 42 (Follow & Author Reputation Display). Same "no href" call
+    // as verification_status_changed above — the recipient sees who
+    // followed them from the notification body text; linking to the
+    // follower's profile would need a username, which this pure function
+    // has no DB access to resolve from a bare user id.
+    case "user_followed":
       return null;
     default:
       return null;

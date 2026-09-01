@@ -1006,6 +1006,41 @@ export async function getPublicArticleBySlug(slug: string) {
 }
 
 /**
+ * Session 42 (Follow & Author Reputation Display). A minimal view counter
+ * — see schema.prisma's Article.viewCount comment for why this is the
+ * canonical mechanism (Session 44/Discovery had not shipped a
+ * view-tracking mechanism of its own as of this session — checked first,
+ * per this session's own "coordinate, don't build it twice" instruction).
+ *
+ * Deliberately a SEPARATE call from getPublicArticleBySlug() above, not a
+ * side effect folded into that read: the public article page calls
+ * getPublicArticleBySlug() twice per real visit (once from
+ * generateMetadata(), once from the page component body — a pre-existing
+ * pattern, not introduced by this session), and folding the increment into
+ * the read would double-count a single page view. Callers must call this
+ * exactly once, from the page component body only. No dedup by reader/IP/
+ * session — a deliberately minimal counter, not a full analytics
+ * mechanism; see docs/KEEN_AFRICANS.md's "Known limitations."
+ *
+ * Reuses the existing systemArticlesCtx() (articles.manage, no real actor)
+ * — the same narrow system context flipDueScheduledArticles() already uses
+ * for anonymous-driven writes to this table — rather than inventing a new
+ * elevated-write mechanism. Best-effort: a failure here must never break
+ * the page render itself, same "catch and log, don't let a side effect
+ * break the primary request" convention src/lib/events.ts's
+ * onDomainEvent() already establishes.
+ */
+export async function recordArticleView(articleId: string): Promise<void> {
+  try {
+    await withRls(systemArticlesCtx(), (tx) =>
+      tx.article.update({ where: { id: articleId }, data: { viewCount: { increment: 1 } } })
+    );
+  } catch (err) {
+    console.error("[articles] recordArticleView failed", err);
+  }
+}
+
+/**
  * Public, unauthenticated cover-image bytes for a published article — the
  * one deliberate exception to every other Asset download route in this
  * codebase requiring a real AuthzActor. Safe specifically because

@@ -13,7 +13,8 @@ import {
 } from "@/lib/articles";
 import { VerificationNotFoundError, VerificationStateError, approveVerification, rejectVerification } from "@/lib/verification";
 import { InvalidReportTransitionError, ReportNotFoundError, dismissReport, resolveReport } from "@/lib/reports";
-import { setProfileFeatured } from "@/lib/profiles";
+import type { ProfileBadge } from "@prisma/client";
+import { PROFILE_BADGES, setProfileBadge, setProfileFeatured } from "@/lib/profiles";
 import { suspendUser, reinstateUser } from "@/lib/users";
 
 async function requireActor() {
@@ -224,6 +225,29 @@ export async function setFeaturedAction(formData: FormData) {
   let error: string | null = null;
   try {
     await setProfileFeatured(userId, featured, actor);
+  } catch (err) {
+    error = toError(err);
+  }
+  revalidatePath(`/keen-africans/users/${userId}`);
+  if (error) redirect(`/keen-africans/users/${userId}?error=${error}`);
+}
+
+/**
+ * Session 42 (Follow & Author Reputation Display). The "Top Contributor" /
+ * "Community Mentor" editorial label — same thin-wrapper shape as
+ * setFeaturedAction above. An empty/unrecognized `badge` value clears it
+ * (the admin form's "None" option), same shape as setProfileBadge()'s own
+ * `null` contract.
+ */
+export async function setBadgeAction(formData: FormData) {
+  const actor = await requireActor();
+  const userId = String(formData.get("userId") ?? "");
+  const raw = String(formData.get("badge") ?? "");
+  const badge = (PROFILE_BADGES as readonly string[]).includes(raw) ? (raw as ProfileBadge) : null;
+
+  let error: string | null = null;
+  try {
+    await setProfileBadge(userId, badge, actor);
   } catch (err) {
     error = toError(err);
   }

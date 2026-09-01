@@ -1,0 +1,15 @@
+-- Session 42 (Follow & Author Reputation Display). A minimal view counter
+-- on Article — see schema.prisma's Article.viewCount comment and
+-- src/lib/articles.ts's recordArticleView() for the full design. Checked
+-- first: Session 44 (Discovery) had not shipped as of this session (no
+-- branch/worktree existed, confirmed against the shared sandbox), so this
+-- is the canonical view-counting mechanism, not a second one alongside an
+-- existing one.
+--
+-- No RLS change needed: recordArticleView() writes through
+-- src/lib/articles.ts's existing systemArticlesCtx() (permissions:
+-- ['articles.manage'], no real actor — the same narrow system context
+-- flipDueScheduledArticles() already uses for anonymous-driven writes to
+-- this table), which articles_update's existing policy already grants
+-- unconditionally.
+ALTER TABLE "articles" ADD COLUMN "view_count" INTEGER NOT NULL DEFAULT 0;

@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type ProfileBadge } from "@prisma/client";
 import { withRls } from "@/lib/rls";
 import { requirePermission, PERMISSIONS, type AuthzActor } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
@@ -6,6 +6,23 @@ import { actorRlsCtx } from "@/lib/courses";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
 import { getStorageDriver } from "@/lib/storage";
 import { getVerifiedUserIds } from "@/lib/verification";
+
+/**
+ * Session 42 (Follow & Author Reputation Display). Labels for the small
+ * curated ProfileBadge enum — see schema.prisma's own comment for why this
+ * is a separate concept from `featured` and verification. Same
+ * "everything the editor/public page renders reads off this one map"
+ * extension contract as articles.ts's ARTICLE_TOPIC_LABELS: to add a new
+ * badge, add a migration (`ALTER TYPE "ProfileBadge" ADD VALUE '...'` — its
+ * own migration/transaction, same enum-value restriction every other
+ * value addition in this codebase hits) and a label here; nothing else
+ * needs to change.
+ */
+export const PROFILE_BADGE_LABELS: Record<ProfileBadge, string> = {
+  top_contributor: "Top Contributor",
+  community_mentor: "Community Mentor",
+};
+export const PROFILE_BADGES = Object.keys(PROFILE_BADGE_LABELS) as ProfileBadge[];
 
 /**
  * Public Profile & Account Identity (Session 36). Profile is a separate
@@ -421,6 +438,33 @@ export async function setProfileFeatured(targetUserId: string, featured: boolean
     action: featured ? "profile.featured" : "profile.unfeatured",
     entityType: "Profile",
     entityId: profile.id,
+  });
+
+  return profile;
+}
+
+/**
+ * Session 42 (Follow & Author Reputation Display). The "Top Contributor" /
+ * "Community Mentor" editorial label — same articles.manage gate and
+ * "thin wrapper, no new permission key" shape as setProfileFeatured()
+ * directly above. `badge: null` clears it. Writes through the SAME
+ * profiles_update articles.manage branch Session 40's migration already
+ * added for `featured` — no RLS change was needed for this column at all
+ * (see the keen_africans_profile_editorial_badge migration's own comment).
+ */
+export async function setProfileBadge(targetUserId: string, badge: ProfileBadge | null, actor: AuthzActor) {
+  requirePermission(actor, PERMISSIONS.ARTICLES_MANAGE);
+
+  const profile = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.profile.update({ where: { userId: targetUserId }, data: { editorialBadge: badge } })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: badge ? "profile.badge_set" : "profile.badge_cleared",
+    entityType: "Profile",
+    entityId: profile.id,
+    metadata: badge ? { badge } : undefined,
   });
 
   return profile;

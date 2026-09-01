@@ -93,6 +93,16 @@ export interface DomainEventMap {
   // and has no natural notification recipient beyond the account owner,
   // who already sees it immediately on their own /account page).
   VerificationStatusChanged: { userId: string; status: "verified" | "rejected"; actorId: string; reason?: string };
+  // Added by Session 42 (Follow & Author Reputation Display), the "follow"
+  // sibling event Session 39's own docstring anticipated and deliberately
+  // left unadded. Emitted only by src/lib/follows.ts's followUser() — never
+  // by unfollowUser() (no "someone unfollowed you" notification exists).
+  // Deliberately just the two ids, not the Follow row itself — per this
+  // file's own "Payload discipline" rule, the listener re-fetches the row
+  // under its own RLS context to get the dedupe key (the relationship's own
+  // id/createdAt), rather than trusting an already-loaded row passed across
+  // the module boundary.
+  UserFollowed: { followerId: string; followedUserId: string };
 }
 
 export type DomainEventName = keyof DomainEventMap;

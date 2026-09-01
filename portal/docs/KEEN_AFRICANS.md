@@ -1286,3 +1286,298 @@ None.
   and database (`portal_dev_session41`) are left in place, not cleaned
   up — safe to remove once this branch is merged, or reused as-is if
   Session 41 gets a follow-up.
+
+## Follow & Author Reputation Display (Session 42)
+
+Branch `session-42-keen-africans-follow-reputation`, off `origin/main`
+(confirmed via `git merge-base --is-ancestor` that Sessions 34-41 were all
+already merged before starting — origin/main's HEAD was
+`e7023e6` "Merge pull request #79 from
+Bambocharles/session-41-keen-africans-admin-moderation" — so this session
+built the full scope rather than treating Session 41's admin console as
+unavailable), in its own git worktree
+(`~/keenafrica/.worktrees/session-42-keen-africans-follow-reputation`)
+against an isolated `portal_dev_session42` database (cloned from the
+shared `portal_dev`). Committed locally, not pushed/PR'd — same
+convention every prior Keen Africans session followed.
+
+### Session 44 check (required before building a view counter)
+
+Sessions/42's own brief requires checking whether Session 44 (Discovery)
+already shipped a view-tracking mechanism before building one here. It
+had not: no `session-44-*` git branch, remote branch, or worktree existed
+anywhere in this shared sandbox (`git branch -a` / `git worktree list`
+checked directly), and `Article`/`prisma/schema.prisma` had no view/count
+column of any kind prior to this session's own migration. This session's
+`Article.viewCount` is therefore the canonical, first view-counting
+mechanism — a future Session 44 should extend it, not add a second one.
+
+### The `Follow` entity
+
+`prisma/schema.prisma`'s `Follow`: `id`, `followerId`, `followingId`
+(both FKs to `User`), `createdAt`. A follower/following relationship
+between two canonical Users — platform-generic, not a Keen-Africans-only
+table, but the only entry points into it (the follow/unfollow button on
+the public profile page and the article byline, `src/lib/follows.ts`)
+require the target to already have a `Profile` row, which in practice
+scopes following to Keen Africans authors without a role check of its
+own (same "Profile as the public-safe boundary" reasoning Session 36
+established).
+
+**The "can't follow yourself" guarantee is enforced three separate
+ways**, matching this codebase's "app layer AND DB layer" standard for
+every ownership check:
+1. A table `CHECK` constraint (`follows_no_self_follow_check`) — applies
+   even under the `isSuperAdmin` RLS bypass, since a `CHECK` constraint
+   is not an RLS policy.
+2. The `follows_insert` RLS policy's own `WITH CHECK`.
+3. `src/lib/follows.ts`'s `followUser()` itself
+   (`CannotFollowSelfError`), before either DB layer is ever reached.
+
+**"Can't double-follow"** is a `@@unique([followerId, followingId])`
+constraint at the DB layer, plus `followUser()` throwing
+`AlreadyFollowingError` (checked explicitly, not just caught as a unique-
+violation) so a client can tell "already following" apart from any other
+failure.
+
+**Unfollow is a real `DELETE`** — the one deliberate exception to this
+codebase's usual "never hard-delete" convention (articles/certificates/
+audit are all append-only): a follow relationship carries no history
+worth preserving. `unfollowUser()` is idempotent (no error when not
+currently following — a double-click race is not a failure worth
+surfacing).
+
+Migration: `20260901240000_keen_africans_follows` — the table, the
+`CHECK` constraint, and RLS (`follows_select` unconditionally open —
+follower/following counts and the relationship itself are public
+reputation signals, same "no draft/private state to protect" reasoning
+`profiles_select` already established; `follows_insert` self-only, `WITH
+CHECK` forbidding self-follow; `follows_delete` self-only; no `UPDATE`
+policy — a follow row is only ever created or deleted). No RLS change was
+needed on any other table.
+
+### Follow contract (`src/lib/follows.ts`)
+
+- `followUser(targetUserId, actor)` → throws `CannotFollowSelfError`,
+  `FollowTargetNotFoundError` (no `Profile` row for the target), or
+  `AlreadyFollowingError`; otherwise creates the row, audits
+  `follow.created`, and emits `UserFollowed`.
+- `unfollowUser(targetUserId, actor)` → `{ removed: boolean }`,
+  idempotent, audits `follow.removed` only when a row was actually
+  deleted.
+- `isFollowing(followerId, followingId)` → public/anonymous read (`false`
+  for an `undefined`/`null` followerId, so callers can pass
+  `session?.user?.id` directly with no extra branching).
+- `getFollowerCount(userId)` / `getFollowingCount(userId)` → public reads.
+- `getAuthorReputation(userId)` → `{ articleCount, totalViews,
+  followerCount, followingCount }` — `articleCount`/`totalViews` are
+  aggregated directly off `Article` (published only), `followerCount`/
+  `followingCount` off `Follow`. No permission required — every number in
+  it is independently already public (published article counts on the
+  listing page, `viewCount` once this session's migration lands, follower
+  counts via `follows_select`).
+
+No new permission key: any authenticated platform user (not only
+`KEEN_AFRICAN` role holders — Follow is platform-generic, and the public
+profile/article pages are readable by anyone, including a signed-in
+Teacher/Student/Sponsor user from the shared identity system) may follow/
+unfollow. There is nothing ownership-scoped to check beyond identity,
+same "every authenticated user is entitled to this" shape
+`src/lib/profiles.ts`'s own self-update functions already document.
+
+### Where view counts come from
+
+`Article.viewCount` (migration `20260901250000_keen_africans_article_
+view_count`), incremented by `src/lib/articles.ts`'s new
+`recordArticleView(articleId)`. Called exactly once per real render, from
+`keenafricans.<root>/articles/[id]/page.tsx`'s page component body
+**only** — never from that same file's `generateMetadata()`, which calls
+`getPublicArticleBySlug()` independently for the same request (a
+pre-existing pattern from Session 34, not introduced here); folding the
+increment into that shared read would double-count a single page view.
+Reuses the existing `systemArticlesCtx()` (`articles.manage`, no real
+actor — the same narrow system context `flipDueScheduledArticles()`
+already uses for anonymous-driven writes to this table), so no RLS
+change was needed for this column at all. Best-effort: a failure inside
+`recordArticleView()` is caught and logged, never thrown, so a
+view-count write failure can never break the article page render itself.
+
+**Deliberately minimal, per this session's own brief**: no dedup by
+reader/session/IP, no bot filtering — every real page load increments
+the counter by exactly one, including a search-engine crawler's. Live-
+verified against a real running dev server (see "Verification" below)
+that three sequential real page loads produced exactly three increments,
+not six (i.e. `generateMetadata()`'s own independent read does NOT
+double-count).
+
+### Editorial badges — genuinely separate from verification and from `featured`
+
+`ProfileBadge` (`top_contributor`, `community_mentor` today) — a small
+curated Postgres enum, same "curated list, not a permissions concept"
+shape `ArticleTopic` already established, **not** a reuse of `featured`
+(Session 40's own separate "editorially featured content" flag) or
+`KeenAfricanVerification` (Session 40's LinkedIn-reviewed identity
+badge). `Profile.editorialBadge` (migration
+`20260901260000_keen_africans_profile_editorial_badge`) is nullable,
+set/cleared only by `src/lib/profiles.ts`'s `setProfileBadge()`
+(`articles.manage`-gated — the same key `setProfileFeatured()` already
+uses, no new permission key). Writes through the SAME `profiles_update`
+`articles.manage` branch Session 40's own migration already added for
+`featured` — no RLS change was needed for this column at all.
+
+Rendered by the same shared `VerificationBadge.tsx` component that
+already renders the verified checkmark/member label/Featured pill (kept
+as one shared renderer so the badge model can never visually drift
+between the profile page and the article byline), as a fourth,
+deliberately distinct treatment: no checkmark glyph, no green tone (never
+resembles `.verifiedBadge`), its own muted slate color (never resembles
+`.featuredBadge`'s gold). Profile-page-only, same precedent Session 40
+already set for `featured` (neither is passed on the article byline's
+own `VerificationBadge` call). `PROFILE_BADGE_LABELS`
+(`src/lib/profiles.ts`) is the one place the label copy lives — to add a
+badge, add a migration (`ALTER TYPE "ProfileBadge" ADD VALUE '...'` —
+its own migration/transaction, same enum-value restriction every other
+addition in this codebase hits) and a label there; nothing else needs to
+change.
+
+Admin UI: `/admin/(protected)/keen-africans/users/[id]` (Session 41's
+console) gained a "Save badge" `<Select>` form (`setBadgeAction`) right
+next to the existing Featured toggle, plus the reputation numbers
+(articles/views/followers/following) and a badge chip in the header —
+all thin wrappers around already-permissioned functions, no new
+authorization model. Deliberately minimal, per this session's own "keep
+this minimal unless the site owner has asked for more."
+
+### Reputation summary on the profile page
+
+`keenafricans.<root>/u/[username]` now renders "N articles · N views · N
+followers" (via `getAuthorReputation()`) directly below the profession/
+country line, styled as **plain text, no pill/badge chrome at all** — the
+session brief's own explicit rule ("reputation signals, not identity
+signals") made literal: these numbers can never be visually mistaken for
+the verified checkmark, the Featured pill, or an editorial badge.
+
+### Follow/unfollow UI
+
+`FollowButton.tsx` (`src/app/keenafricans/`) — the one shared renderer
+for both slots this session fills (the profile page's header, the
+article byline), same "one component, no drift" shape as
+`VerificationBadge.tsx`/`ReportForm.tsx`. A plain `<form
+action={followAction/unfollowAction}>` toggle, no client JS — consistent
+with this codebase's existing preference (`ReportForm.tsx`'s own header
+comment: client components only for genuinely client-only work like the
+clipboard API). Renders nothing at all when viewing your own profile/
+byline (`isSelf`) rather than offering a control that could only ever
+fail; renders "Sign in to follow" for an anonymous/logged-out reader.
+`followAction`/`unfollowAction` (`src/app/keenafricans/actions.ts`) are
+the actual authorization boundary (`src/lib/follows.ts`), not the
+component — same "Server Action does the real work, the form is just a
+plain POST" shape `reportAction` already established.
+
+### Notifications — the exact contract Session 39 reserved
+
+`docs/NOTIFICATIONS.md`'s "Extension points" section explicitly reserved
+this: a `user_followed` `NotificationType` (migration
+`20260901270000_keen_africans_notification_type_user_followed`, its own
+transaction), a `UserFollowed` domain event (`src/lib/events.ts`) —
+`{ followerId, followedUserId }`, emitted only by `followUser()`, never
+by `unfollowUser()` (there is no "someone unfollowed you" signal) — and a
+listener (`src/lib/notifications.ts`) notifying `followedUserId`, never
+the follower. Dedupe is keyed on the `Follow` row's own id
+(`follow:${follow.id}`, re-fetched under the listener's own system RLS
+context rather than trusting an already-loaded row across the module
+boundary — this file's own "payload discipline" convention), so an
+unfollow → re-follow cycle (a fresh row, since unfollow is a real
+`DELETE`) correctly produces a second, independent notification.
+
+### Tests
+
+779/779 passing (748 baseline confirmed against an unmodified checkout
+of this session's own isolated database before starting, + 31 new across
+`follows.test.ts` (13 — can't-follow-self, can't-double-follow, unfollow
+idempotency, the `UserFollowed` emit/no-emit-on-unfollow, reputation
+aggregation), `follows-rls.integration.test.ts` (10, the real
+non-superuser-role proof: anonymous SELECT allowed, self-only INSERT/
+DELETE, the CHECK constraint rejecting a self-follow even under the
+super_admin RLS bypass, the unique constraint rejecting a double-follow
+at the DB layer), `notifications.test.ts` (+3 —
+`UserFollowed`→`user_followed`, including the dedupe/no-notification-on-
+unfollow cases), `articles.test.ts` (+2 — `recordArticleView`), and
+`profiles.test.ts` (+3 — `setProfileBadge`, including proof it never
+touches `featured`)). `tsc --noEmit` clean.
+
+Two pre-existing, already-documented flakes were observed under full
+concurrent-suite load, neither caused by this session (both reproduce
+identically in isolated re-runs passing cleanly, and both were already
+flagged by Sessions 38/41's own handoffs before this session touched
+anything): `assessment-rls.integration.test.ts`'s Session 31 query-plan
+regression assertion, and `notifications.test.ts`'s
+`CoursePublished`/`StudentEnrolled` timing-sensitive cases.
+
+**Live-verified against a real running dev server, real HTTP** (no
+browser tool in this sandbox — same limitation every prior session's
+notes describe; a scratch script, deleted after use, called the real
+`createArticle`/`publishArticle`/`recordArticleView`/`followUser`/
+`setProfileBadge`/`getAuthorReputation` functions directly under real
+actors, the same technique the founding-article import script and
+Sessions 38/40/41 all used): confirmed via `curl` with `Host:
+keenafricans.portal.local` that the public profile page renders real
+"1 article · 3 views · 1 follower" reputation text, the "Top Contributor"
+editorial badge (visually distinct `<span>`, no checkmark, no green/gold
+color — confirmed in the raw HTML), the plain "Keen African" member
+label (no verified checkmark, since the test account was never
+verified), and "Sign in to follow" for an anonymous request; confirmed
+the article page renders with no errors and the byline's own "Sign in to
+follow" prompt; confirmed three sequential real page loads of the same
+article increased `Article.viewCount` from 3 (the script's own direct
+calls) to exactly 6, not 9 — proving `generateMetadata()`'s independent
+read never double-counts. All scratch fixtures (6 test users, their
+profile/article/follow/audit/notification rows) were cleaned up
+afterward, confirmed zero matching rows remain. The authenticated
+follow→"Following" button-state toggle itself was **not** re-verified
+over real HTTP (a Credentials-provider login round trip via `curl`
+against this app's Auth.js config did not resolve cleanly in the time
+available) — that path is instead covered by `follows.test.ts` calling
+`followUser()`/`unfollowUser()` directly plus the fact that
+`getPublicProfileByUsername`'s real `isFollowing()` read (exercised by
+the same live script) confirmed `true` for a real follow relationship;
+`FollowButton.tsx`'s `following ? ... : ...` branch is a trivial,
+type-checked ternary with no logic of its own to fail independently.
+
+### Known limitations
+
+- **View counting has no dedup** — a bot, a crawler, or the same reader
+  reloading the page ten times all count as ten views. Deliberately
+  minimal per this session's own brief; a future session (Discovery,
+  reporting/analytics) is the natural owner of anything more precise.
+- **No follower/following list pages** — the profile page shows counts
+  only, not who follows whom. Not required by this session's acceptance
+  criteria (article/view/follower counts + a working follow button); a
+  reasonable Session 44 (Discovery) extension.
+- **The reviewer/admin badge form has no confirmation dialog** and is
+  reachable by any `articles.manage` holder, same trust level as the
+  adjacent Featured toggle — no new authorization surface introduced.
+- **The authenticated follow→unfollow toggle's real-HTTP round trip**
+  was not independently curl-verified this session (see "Verification"
+  above) — worth a real browser pass if one becomes available.
+
+### Blockers
+
+None.
+
+### Required next-session actions
+
+- **Session 44 (Discovery)**: `Article.viewCount` is now the canonical
+  view-counting mechanism — extend it (e.g. a "most viewed" sort/filter)
+  rather than adding a second counter. Follower/following LIST pages (not
+  just counts) are a natural Discovery-adjacent feature if the site owner
+  wants them.
+- **Whoever has merge authority**: review and merge/deploy
+  `session-42-keen-africans-follow-reputation` — complete and tested but
+  deliberately left unpushed, matching every prior Keen Africans
+  session's own convention.
+- **Whoever runs this sandbox next**: this session's isolated worktree
+  (`~/keenafrica/.worktrees/session-42-keen-africans-follow-reputation`)
+  and database (`portal_dev_session42`) are left in place, not cleaned
+  up — safe to remove once this branch is merged, or reused as-is if
+  Session 42 gets a follow-up.

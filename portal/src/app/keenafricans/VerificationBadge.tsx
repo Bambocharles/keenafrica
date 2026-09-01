@@ -1,3 +1,5 @@
+import { PROFILE_BADGE_LABELS } from "@/lib/profiles";
+import type { ProfileBadge } from "@prisma/client";
 import styles from "./site.module.css";
 
 /**
@@ -7,7 +9,7 @@ import styles from "./site.module.css";
  * header) — one place, so the two-tier model can never visually drift
  * between the two pages.
  *
- * Three deliberately distinct, non-conflatable treatments, per this
+ * Four deliberately distinct, non-conflatable treatments, per this
  * session's own "Must NOT visually conflate" rule:
  *  - `verified` (checkmark, primary color) supersedes `member` — a
  *    Verified Keen African is never ALSO shown the plain label, avoiding
@@ -17,6 +19,13 @@ import styles from "./site.module.css";
  *  - `featured` (a small pill, distinct color and shape from the
  *    checkmark, own label "Featured") — a fully separate editorial flag,
  *    can coexist with either of the above.
+ *  - `editorialBadge` (Session 42 — "Top Contributor" / "Community
+ *    Mentor," a small pill styled distinctly from BOTH the checkmark AND
+ *    the Featured pill: no checkmark glyph, no green tone, its own muted
+ *    slate color — per sessions/42's own explicit "never let this
+ *    resemble the Session 40 verification badge" rule. Profile-page-only,
+ *    same precedent Session 40 already set for `featured` (neither is
+ *    passed on the article byline's own VerificationBadge call).
  *
  * The verified badge's `title` attribute carries the exact public
  * explanation from this session's brief, verbatim in spirit — this is the
@@ -26,12 +35,14 @@ export function VerificationBadge({
   member,
   verified,
   featured,
+  editorialBadge,
 }: {
   member: boolean;
   verified: boolean;
   featured?: boolean;
+  editorialBadge?: ProfileBadge | null;
 }) {
-  if (!member && !verified && !featured) return null;
+  if (!member && !verified && !featured && !editorialBadge) return null;
 
   return (
     <>
@@ -48,6 +59,11 @@ export function VerificationBadge({
       {featured && (
         <span className={styles.featuredBadge} title="Editorially featured by Keen Africa">
           Featured
+        </span>
+      )}
+      {editorialBadge && (
+        <span className={styles.editorialBadge} title="An editorial recognition from the Keen Africans team">
+          {PROFILE_BADGE_LABELS[editorialBadge]}
         </span>
       )}
     </>

@@ -10,6 +10,7 @@ import {
   getPublicProfileByUsername,
   getUsernamesByUserIds,
   resolveAuthorName,
+  setProfileBadge,
   setProfileFeatured,
   updateProfile,
 } from "@/lib/profiles";
@@ -236,5 +237,52 @@ describe("setProfileFeatured — articles.manage-gated editorial flag", () => {
 
     const unfeatured = await setProfileFeatured(actor.id, false, adminActor);
     expect(unfeatured.featured).toBe(false);
+  });
+});
+
+/**
+ * Session 42 (Follow & Author Reputation Display). Same articles.manage
+ * gate and "no self-service" shape as setProfileFeatured() above — a
+ * genuinely separate concept from both `featured` and verification (see
+ * schema.prisma's ProfileBadge comment).
+ */
+describe("setProfileBadge — articles.manage-gated editorial label", () => {
+  it("a plain Keen African cannot set their own badge", async () => {
+    const actor = await keenAfrican();
+    await ensureProfile(actor, { name: "Cannot Self-Badge" });
+    await expect(setProfileBadge(actor.id, "top_contributor", actor)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("an ADMIN (articles.manage) can set and clear the badge, and it's audited", async () => {
+    const actor = await keenAfrican();
+    await ensureProfile(actor, { name: "Badge Candidate" });
+    const admin = await createTestUser({ roles: ["ADMIN"] });
+    createdUserIds.push(admin.id);
+    const adminActor = await actorFromUser(admin.id);
+
+    const badged = await setProfileBadge(actor.id, "community_mentor", adminActor);
+    expect(badged.editorialBadge).toBe("community_mentor");
+
+    const audit = await prisma.auditEvent.findFirst({
+      where: { action: "profile.badge_set", entityId: badged.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit).toBeTruthy();
+
+    const cleared = await setProfileBadge(actor.id, null, adminActor);
+    expect(cleared.editorialBadge).toBeNull();
+  });
+
+  it("is fully independent of `featured` and verification — setting one never touches the others", async () => {
+    const actor = await keenAfrican();
+    await ensureProfile(actor, { name: "Independent Signals" });
+    const admin = await createTestUser({ roles: ["ADMIN"] });
+    createdUserIds.push(admin.id);
+    const adminActor = await actorFromUser(admin.id);
+
+    await setProfileFeatured(actor.id, true, adminActor);
+    const badged = await setProfileBadge(actor.id, "top_contributor", adminActor);
+    expect(badged.featured).toBe(true);
+    expect(badged.editorialBadge).toBe("top_contributor");
   });
 });

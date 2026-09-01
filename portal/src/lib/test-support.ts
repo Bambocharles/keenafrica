@@ -206,8 +206,22 @@ export async function cleanupTestReports(userIds: string[]): Promise<void> {
   });
 }
 
+/**
+ * Deletes any Follow rows where a set of test users are either the
+ * follower or the followed account — call this before cleanupTestUsers()
+ * deletes the User rows (keen_africans_follows migration's FKs are all ON
+ * DELETE NO ACTION, same convention as every other cleanup helper here).
+ */
+export async function cleanupTestFollows(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.follow.deleteMany({
+    where: { OR: [{ followerId: { in: userIds } }, { followingId: { in: userIds } }] },
+  });
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
+  await cleanupTestFollows(userIds);
   await cleanupTestReports(userIds);
   await cleanupTestNotifications(userIds);
   await cleanupTestNotificationPreferences(userIds);

@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
-import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
+import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, recordArticleView, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
+import { isFollowing } from "@/lib/follows";
 import { ShareLinks } from "./ShareLinks";
 import { LegalFooter } from "../../LegalFooter";
 import { VerificationBadge } from "../../VerificationBadge";
 import { ReportForm } from "../../ReportForm";
+import { FollowButton } from "../../FollowButton";
 import styles from "../../site.module.css";
 
 /**
@@ -66,13 +68,20 @@ export default async function ArticlePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ reported?: string; reportError?: string }>;
+  searchParams: Promise<{ reported?: string; reportError?: string; followError?: string }>;
 }) {
   const slug = (await params).id;
   const article = await loadArticle(slug);
   const session = await auth();
   const signedIn = canAccessKeenAfricanPortal(session?.user);
-  const { reported, reportError } = await searchParams;
+  const { reported, reportError, followError } = await searchParams;
+
+  // Session 42 (Follow & Author Reputation Display). Exactly one call per
+  // real render, from the page body only — never from generateMetadata()
+  // above, which would double-count a single visit (see recordArticleView()'s
+  // own comment). Fire against the article's real id, not the slug.
+  await recordArticleView(article.id);
+  const viewerFollowingAuthor = await isFollowing(session?.user?.id, article.authorId);
 
   const html = renderArticleBodyHtml(article.body);
   const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
@@ -106,6 +115,14 @@ export default async function ArticlePage({
             )}
             <VerificationBadge member={article.author.member} verified={article.author.verified} />
             {article.publishedAt && <time dateTime={article.publishedAt.toISOString()}>{new Date(article.publishedAt).toLocaleDateString()}</time>}
+            <FollowButton
+              targetUserId={article.authorId}
+              isSelf={session?.user?.id === article.authorId}
+              signedIn={!!session?.user}
+              following={viewerFollowingAuthor}
+              returnTo={`/articles/${article.slug}`}
+              followError={followError}
+            />
           </div>
           <ShareLinks url={articleUrl} title={article.title} />
         </header>
