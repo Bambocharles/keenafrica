@@ -1,14 +1,18 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { canAccessKeenAfricanPortal } from "@/lib/authz";
+import { PERMISSIONS, canAccessKeenAfricanPortal, hasPermission } from "@/lib/authz";
 import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, recordArticleView, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
 import { isFollowing } from "@/lib/follows";
+import { listCommentsForArticle } from "@/lib/comments";
+import { getReactionCount, hasReacted } from "@/lib/reactions";
 import { ShareLinks } from "./ShareLinks";
 import { LegalFooter } from "../../LegalFooter";
 import { VerificationBadge } from "../../VerificationBadge";
 import { ReportForm } from "../../ReportForm";
 import { FollowButton } from "../../FollowButton";
+import { ReactionButton } from "../../ReactionButton";
+import { CommentSection } from "../../CommentSection";
 import styles from "../../site.module.css";
 
 /**
@@ -68,20 +72,44 @@ export default async function ArticlePage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ reported?: string; reportError?: string; followError?: string }>;
+  searchParams: Promise<{
+    reported?: string;
+    reportedEntityId?: string;
+    reportError?: string;
+    reportErrorEntityId?: string;
+    followError?: string;
+    commentError?: string;
+    commentDeleteError?: string;
+    reactionError?: string;
+  }>;
 }) {
   const slug = (await params).id;
   const article = await loadArticle(slug);
   const session = await auth();
   const signedIn = canAccessKeenAfricanPortal(session?.user);
-  const { reported, reportError, followError } = await searchParams;
+  const {
+    reported,
+    reportedEntityId,
+    reportError,
+    reportErrorEntityId,
+    followError,
+    commentError,
+    commentDeleteError,
+    reactionError,
+  } = await searchParams;
 
   // Session 42 (Follow & Author Reputation Display). Exactly one call per
   // real render, from the page body only — never from generateMetadata()
   // above, which would double-count a single visit (see recordArticleView()'s
   // own comment). Fire against the article's real id, not the slug.
   await recordArticleView(article.id);
-  const viewerFollowingAuthor = await isFollowing(session?.user?.id, article.authorId);
+  const [viewerFollowingAuthor, comments, reactionCount, viewerReacted] = await Promise.all([
+    isFollowing(session?.user?.id, article.authorId),
+    listCommentsForArticle(article.id),
+    getReactionCount(article.id),
+    hasReacted(session?.user?.id, article.id),
+  ]);
+  const canManageComments = !!session?.user && (session.user.isSuperAdmin || hasPermission(session.user, PERMISSIONS.ARTICLES_MANAGE));
 
   const html = renderArticleBodyHtml(article.body);
   const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
@@ -123,6 +151,14 @@ export default async function ArticlePage({
               returnTo={`/articles/${article.slug}`}
               followError={followError}
             />
+            <ReactionButton
+              articleId={article.id}
+              signedIn={!!session?.user}
+              reacted={viewerReacted}
+              count={reactionCount}
+              returnTo={`/articles/${article.slug}`}
+              reactionError={reactionError}
+            />
           </div>
           <ShareLinks url={articleUrl} title={article.title} />
         </header>
@@ -149,10 +185,25 @@ export default async function ArticlePage({
             entityType="article"
             entityId={article.id}
             returnTo={`/articles/${article.slug}`}
-            reported={reported === "1"}
-            reportError={reportError}
+            reported={reported === "1" && reportedEntityId === article.id}
+            reportError={reportErrorEntityId === article.id ? reportError : undefined}
           />
         </footer>
+
+        <CommentSection
+          articleId={article.id}
+          articleAuthorId={article.authorId}
+          comments={comments}
+          viewerId={session?.user?.id}
+          signedIn={!!session?.user}
+          canManage={canManageComments}
+          returnTo={`/articles/${article.slug}`}
+          commentError={commentError}
+          commentDeleteError={commentDeleteError}
+          reportedEntityId={reportedEntityId}
+          reportErrorEntityId={reportErrorEntityId}
+          reportError={reportError}
+        />
       </article>
 
       <LegalFooter />

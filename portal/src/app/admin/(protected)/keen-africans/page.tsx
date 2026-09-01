@@ -10,6 +10,7 @@ import {
 import { listPendingVerificationReviews } from "@/lib/verification";
 import { listReports } from "@/lib/reports";
 import {
+  adminDeleteCommentAction,
   adminUnpublishArticleAction,
   approveArticleAction,
   approveVerificationAction,
@@ -32,6 +33,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_verification_transition: "That account's verification status already changed — refresh and try again.",
   report_not_found: "That report no longer exists.",
   report_already_reviewed: "That report was already reviewed — refresh to see the current queue.",
+  comment_not_found: "That comment is already gone.",
   action_failed: "Could not complete that action.",
 };
 
@@ -113,7 +115,7 @@ export default async function AdminKeenAfricansPage({
               {pendingReports.map((r) => (
                 <Card key={r.id} style={{ padding: "14px 16px" }}>
                   <div className={ui.nameCell}>
-                    {r.entityType === "article" ? "Article report" : "Profile report"}
+                    {r.entityType === "article" ? "Article report" : r.entityType === "profile" ? "Profile report" : "Comment report"}
                     {r.entityType === "article" && (
                       <>
                         {" "}
@@ -144,6 +146,14 @@ export default async function AdminKeenAfricansPage({
                         Dismiss
                       </Button>
                     </form>
+                    {r.entityType === "comment" && (
+                      <form action={adminDeleteCommentAction}>
+                        <input type="hidden" name="commentId" value={r.entityId} />
+                        <Button type="submit" variant="danger">
+                          Remove comment
+                        </Button>
+                      </form>
+                    )}
                   </div>
                 </Card>
               ))}

@@ -9,6 +9,12 @@ import styles from "./ReportForm.module.css";
  * rate-limited server-side (src/lib/reports.ts, reusing
  * src/lib/rate-limit.ts) so this can't become its own abuse vector.
  */
+const ENTITY_LABEL: Record<"article" | "profile" | "comment", string> = {
+  article: "article",
+  profile: "profile",
+  comment: "comment",
+};
+
 export function ReportForm({
   entityType,
   entityId,
@@ -16,7 +22,7 @@ export function ReportForm({
   reported,
   reportError,
 }: {
-  entityType: "article" | "profile";
+  entityType: "article" | "profile" | "comment";
   entityId: string;
   returnTo: string;
   reported?: boolean;
@@ -36,7 +42,7 @@ export function ReportForm({
 
   return (
     <details className={styles.wrap}>
-      <summary className={styles.trigger}>Report this {entityType === "article" ? "article" : "profile"}</summary>
+      <summary className={styles.trigger}>Report this {ENTITY_LABEL[entityType]}</summary>
       {reportError && errorMessage[reportError] && <p className={styles.notice}>{errorMessage[reportError]}</p>}
       <form action={reportAction} className={styles.form}>
         <input type="hidden" name="entityType" value={entityType} />
