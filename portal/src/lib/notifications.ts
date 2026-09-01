@@ -61,7 +61,11 @@ export type NotificationTypeValue =
   // Session 39 (Keen Africans — Notifications). See schema.prisma's
   // NotificationType comment and docs/NOTIFICATIONS.md's "Extension
   // points" for why this is the only value this session adds.
-  | "article_unpublished_by_admin";
+  | "article_unpublished_by_admin"
+  // Session 40 (Keen Africans — LinkedIn Verification). The "verification
+  // status" value Session 39's own docstring anticipated — see the
+  // listener below and events.ts's VerificationStatusChanged comment.
+  | "verification_status_changed";
 
 const ACTIVE_ENROLLMENT_STATUSES = ["active", "completed"] as const;
 
@@ -538,6 +542,41 @@ onDomainEvent("ArticleUnpublishedByAdmin", async ({ articleId, authorId }) => {
     // each time (same "timestamp column as the real occurrence key"
     // convention as course_published's publishedAt above).
     dedupeKey: `article:${articleId}:unpublished_by_admin:${article.moderatedAt.toISOString()}`,
+  });
+});
+
+onDomainEvent("VerificationStatusChanged", async ({ userId, status, reason }) => {
+  // Session 40 (Keen Africans — LinkedIn Verification). The
+  // "verification status" listener Session 39's own docstring
+  // anticipated. Never fires for the self-service connect transition
+  // (unverified/rejected -> linkedin_connected) — see events.ts's
+  // VerificationStatusChanged comment for why: only a reviewer decision
+  // (approve/reject) emits this.
+  const row = await withRls(SYSTEM_CTX, (tx) =>
+    tx.keenAfricanVerification.findUnique({ where: { userId }, select: { reviewedAt: true } })
+  );
+  if (!row?.reviewedAt) return;
+
+  const title = status === "verified" ? "You're now a Verified Keen African" : "Your LinkedIn verification wasn't approved";
+  const body =
+    status === "verified"
+      ? "A reviewer approved your connected LinkedIn profile. The Verified Keen African badge now shows on your profile and articles."
+      : reason
+        ? `A reviewer didn't approve your connected LinkedIn profile: ${reason}. You can reconnect LinkedIn to try again.`
+        : "A reviewer didn't approve your connected LinkedIn profile. You can reconnect LinkedIn to try again.";
+
+  await createNotification({
+    recipientId: userId,
+    type: "verification_status_changed",
+    title,
+    body,
+    entityType: "user",
+    entityId: userId,
+    // approveVerification()/rejectVerification() set a fresh reviewedAt on
+    // every call, so a reject -> reconnect -> re-review cycle correctly
+    // produces a new notification each time, same convention as
+    // ArticleUnpublishedByAdmin's moderatedAt-keyed dedupe above.
+    dedupeKey: `verification:${userId}:${status}:${row.reviewedAt.toISOString()}`,
   });
 });
 

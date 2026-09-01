@@ -1,0 +1,11 @@
+-- Session 40 (Keen Africans — LinkedIn Verification). Adds the
+-- 'verification_status_changed' NotificationType value, split into its own
+-- migration/transaction — Postgres cannot use a new enum value in the same
+-- transaction that adds it (same requirement documented on every prior
+-- NotificationType/AssetEntityType addition, e.g. the
+-- 'article_unpublished_by_admin' migration this one follows).
+--
+-- This is the ONLY new NotificationType value this session adds. See
+-- schema.prisma's NotificationType comment and docs/NOTIFICATIONS.md's
+-- "Extension points" section, which already anticipated this exact value.
+ALTER TYPE "NotificationType" ADD VALUE 'verification_status_changed';

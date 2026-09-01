@@ -84,6 +84,15 @@ export interface DomainEventMap {
   // "Extension points" section for the sibling events (review workflow,
   // verification status, follow) intentionally NOT added here yet.
   ArticleUnpublishedByAdmin: { articleId: string; authorId: string; actorId: string };
+  // Added by Session 40 (Keen Africans — LinkedIn Verification), the
+  // "verification status" sibling event Session 39's own docstring
+  // anticipated and deliberately left unadded. Emitted by
+  // src/lib/verification.ts's approveVerification()/rejectVerification() —
+  // never by the self-service connectLinkedIn() (that transition,
+  // unverified/rejected -> linkedin_connected, is not a reviewer decision
+  // and has no natural notification recipient beyond the account owner,
+  // who already sees it immediately on their own /account page).
+  VerificationStatusChanged: { userId: string; status: "verified" | "rejected"; actorId: string; reason?: string };
 }
 
 export type DomainEventName = keyof DomainEventMap;

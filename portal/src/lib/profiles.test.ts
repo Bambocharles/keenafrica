@@ -1,13 +1,16 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
+import { AuthorizationError } from "@/lib/authz";
 import {
   ProfileNotFoundError,
   UsernameTakenError,
   ensureProfile,
+  getMemberLabelUserIds,
   getMyProfile,
   getPublicProfileByUsername,
   getUsernamesByUserIds,
   resolveAuthorName,
+  setProfileFeatured,
   updateProfile,
 } from "@/lib/profiles";
 import { createArticle, publishArticle } from "@/lib/articles";
@@ -172,5 +175,66 @@ describe("getUsernamesByUserIds", () => {
     const map = await getUsernamesByUserIds([actor.id, noProfileUser.id]);
     expect(map.get(actor.id)).toBe(profile.username);
     expect(map.has(noProfileUser.id)).toBe(false);
+  });
+});
+
+/**
+ * Session 40 (Keen Africans — LinkedIn Verification). The "Keen African"
+ * public membership label's denormalized source — see profiles.ts's
+ * ensureProfile() comment and email-verification.ts's
+ * confirmEmailVerification() for the two write sites this covers.
+ */
+describe("ensureProfile — email-verification sync (Session 40)", () => {
+  it("seeds emailVerified=true at creation when the account was already email-verified (the Google-signup ordering)", async () => {
+    const actor = await keenAfrican(true);
+    const profile = await ensureProfile(actor, { name: "Already Verified" });
+    expect(profile.emailVerified).toBe(true);
+  });
+
+  it("seeds emailVerified=false at creation for a not-yet-verified account", async () => {
+    const actor = await keenAfrican(false);
+    const profile = await ensureProfile(actor, { name: "Not Yet Verified" });
+    expect(profile.emailVerified).toBe(false);
+  });
+});
+
+describe("getMemberLabelUserIds", () => {
+  it("returns only accounts whose profile has emailVerified=true", async () => {
+    const verifiedActor = await keenAfrican(true);
+    await ensureProfile(verifiedActor, { name: "Verified Member" });
+    const unverifiedActor = await keenAfrican(false);
+    await ensureProfile(unverifiedActor, { name: "Unverified Member" });
+
+    const ids = await getMemberLabelUserIds([verifiedActor.id, unverifiedActor.id]);
+    expect(ids.has(verifiedActor.id)).toBe(true);
+    expect(ids.has(unverifiedActor.id)).toBe(false);
+  });
+});
+
+describe("setProfileFeatured — articles.manage-gated editorial flag", () => {
+  it("a plain Keen African cannot feature anyone, including themselves", async () => {
+    const actor = await keenAfrican();
+    await ensureProfile(actor, { name: "Cannot Self-Feature" });
+    await expect(setProfileFeatured(actor.id, true, actor)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("an ADMIN (articles.manage) can feature and unfeature a profile, and it's audited", async () => {
+    const actor = await keenAfrican();
+    await ensureProfile(actor, { name: "Featured Candidate" });
+    const admin = await createTestUser({ roles: ["ADMIN"] });
+    createdUserIds.push(admin.id);
+    const adminActor = await actorFromUser(admin.id);
+
+    const featured = await setProfileFeatured(actor.id, true, adminActor);
+    expect(featured.featured).toBe(true);
+
+    const audit = await prisma.auditEvent.findFirst({
+      where: { action: "profile.featured", entityId: featured.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit).toBeTruthy();
+
+    const unfeatured = await setProfileFeatured(actor.id, false, adminActor);
+    expect(unfeatured.featured).toBe(false);
   });
 });

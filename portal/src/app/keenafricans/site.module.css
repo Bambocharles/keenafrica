@@ -341,6 +341,59 @@
   color: var(--ink, #16191f);
 }
 
+/* Session 40 (Keen Africans — LinkedIn Verification). Three deliberately
+   distinct treatments — see VerificationBadge.tsx's own header comment for
+   why they can never look like each other. */
+.memberLabel {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #6a7580);
+}
+
+.verifiedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: middle;
+  margin-left: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f5b4c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .verifiedBadge {
+    color: #4fd1a5;
+  }
+}
+
+.featuredBadge {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7a5a12;
+  background: #f4e0ad;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .featuredBadge {
+    color: #f4e0ad;
+    background: #4a3a12;
+  }
+}
+
 .profileMeta {
   font-size: 13px;
   color: var(--muted, #6a7580);

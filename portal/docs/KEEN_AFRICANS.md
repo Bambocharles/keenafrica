@@ -677,3 +677,348 @@ autosaved state.
   Session 39 appears to be independently working on Keen Africans
   notifications per migration files observed in this shared sandbox,
   worth checking before adding review-workflow notifications separately).
+
+## LinkedIn Identity Verification (Session 40)
+
+The "Verified Keen African" badge — a real LinkedIn account connection
+reviewed by a human, never government ID/document collection, and never
+an automatic grant from connecting alone.
+
+### The technical constraint, confirmed against LinkedIn's current docs, not assumed
+
+Fetched LinkedIn's current, Microsoft-Learn-hosted "Sign In with LinkedIn
+using OpenID Connect" documentation directly before designing anything.
+Confirmed: the only supported product is OIDC with exactly three scopes —
+`openid`, `profile`, `email` — granting name/given_name/family_name/
+picture/email/email_verified/locale. The classic `r_liteprofile`/
+`r_emailaddress` scopes are retired for new apps. The docs' own explicit
+note: **"Sign In with LinkedIn using OpenID Connect does not verify user
+identities and should not be marketed as such."** There is no scope,
+claim, or endpoint anywhere in this product that exposes whether LinkedIn
+itself has verified a member's identity/workplace to a third party. This
+is the entire reason the feature is a human-review workflow, not an
+automatic badge — see sessions/40's own "technical constraint" section,
+which this confirms rather than assumes.
+
+`next-auth`'s built-in `LinkedIn` provider (`node_modules/@auth/core/
+providers/linkedin.js`) is already `type: "oidc"`, `issuer:
+"https://www.linkedin.com/oauth"` — the current product, not the
+deprecated one. With no explicit `authorization.params.scope` override,
+Auth.js's generic OIDC provider defaults to requesting exactly `"openid
+profile email"` (`node_modules/@auth/core/lib/utils/providers.js`) — the
+full set LinkedIn's docs list as supported, nothing more. `src/lib/
+auth.ts` adds `LinkedIn({ clientId, clientSecret })` with no scope
+override, alongside the existing `Google({...})` provider.
+
+### The state machine
+
+```
+(no row) --connectLinkedIn()--> linkedin_connected
+                                       |    ^
+                       approveVerification()  connectLinkedIn() (reconnect)
+                                       |    |
+                                       v    |
+                                    verified
+                                       |
+                       rejectVerification() [also the "revoke" path]
+                                       |
+                                       v
+                                    rejected --connectLinkedIn()--> linkedin_connected
+```
+
+"Unverified" is the ABSENCE of a `KeenAfricanVerification` row, not a
+stored enum value — `VerificationStatus` has only three values
+(`linkedin_connected`, `verified`, `rejected`), matching the brief's own
+four-state description with unverified represented as "no row yet."
+Reconnecting LinkedIn always resets status to `linkedin_connected`
+regardless of the row's prior state — including from `verified` — a
+deliberate safety default: relinking a DIFFERENT LinkedIn account while
+already verified demotes back to pending review rather than silently
+keeping the old badge attached to an unreviewed identity.
+
+### Data model — a separate table from `Profile`, not new columns on it
+
+`KeenAfricanVerification` (`keen_african_verifications`, 1:1 with `User`)
+holds `status`, the LinkedIn snapshot (`linkedinProviderAccountId`/
+`linkedinName`/`linkedinPictureUrl`/`connectedAt`), and reviewer-only
+fields (`reviewedAt`/`reviewedBy`/`reviewNote`). Kept off `Profile`
+deliberately: `profiles_select` is unconditionally open (Session 36's own
+design — see that session's doc section), and this table's reviewer-only
+columns must never be blanket-public the way Profile's are. Instead,
+`keen_african_verifications_select`'s RLS policy has ONE narrow public
+branch — `status = 'verified'` — the badge state itself being the only
+public fact; every real caller (`src/lib/verification.ts`'s
+`getVerifiedUserIds()`) still only ever `select`s `{ userId: true }` even
+though that public branch technically permits reading the whole row (same
+"RLS is row-level, the application's own column selection is the other
+half of the guarantee" limitation `articles_update`'s own comment already
+documents). Mirrors Session 36's own `Profile`-vs-`User` split reasoning
+almost exactly.
+
+Separately, `Profile` gained two small, genuinely public columns:
+`emailVerified` (denormalized from `users.email_verified_at` — drives the
+plain "Keen African" label; synced by `ensureProfile()` at creation and by
+`email-verification.ts`'s `confirmEmailVerification()` for a profile that
+already existed) and `featured` (the fully separate editorial flag, data
+model only — see below).
+
+### The two-tier public badge, rendered from one shared component
+
+`src/app/keenafricans/VerificationBadge.tsx` — the ONE place both filled
+badge slots (`u/[username]/page.tsx`'s profile header,
+`articles/[id]/page.tsx`'s byline — Session 36's own reserved
+`data-verification-badge-slot` hooks, now replaced) render from, so the
+model can never visually drift between the two pages:
+
+- **`verified` → "Verified Keen African ✓"** (checkmark, primary/green
+  color). `title` attribute carries the exact public copy from the
+  session brief verbatim: *"This badge confirms Keen Africa has verified
+  the identity associated with this account via a connected LinkedIn
+  profile. It does not mean Keen Africa endorses this person's views,
+  employer, qualifications, or content."*
+- **`member` (no `verified`) → "Keen African"** (plain text, muted color,
+  no checkmark). Shown for any registered, email-verified account.
+- **`verified` supersedes `member`** — never both at once (no "Keen
+  African · Verified Keen African ✓" double-label). A rejected or
+  pending-review account shows neither — internal pipeline states never
+  leak as public checkmarks, per the brief's explicit rule.
+- **`featured`** (independent pill, gold, own "Featured" label, own
+  `title`) — can coexist with either of the above, visually distinct by
+  design.
+
+### Permissions — a new, deliberately separate key
+
+`verification.review` (`PERMISSIONS.VERIFICATION_REVIEW`), NOT a reuse of
+`articles.manage`. sessions/41's own brief explicitly asks not to assume
+article moderators and identity reviewers are the same people without
+confirming with the site owner — kept as its own key so that can be
+decided later with zero migration. Today only ADMIN/SUPER_ADMIN hold it
+(via `ALL_PERMISSION_KEYS`, same as every other admin-only capability) —
+seeded, confirmed live (`[roles-permissions] 8 role(s), 25 permission(s)
+present`).
+
+Enforced in TWO independent layers, same standard as every other
+sensitive action in this codebase:
+- **Application layer**: `approveVerification()`/`rejectVerification()`/
+  `listPendingVerificationReviews()` all call `requirePermission(actor,
+  PERMISSIONS.VERIFICATION_REVIEW)`.
+- **RLS layer** (the actual acceptance-criterion guarantee — "only an
+  authorized reviewer can grant or revoke VERIFIED"): the
+  `keen_african_verifications_self_connect`/`_self_reconnect` policies'
+  `WITH CHECK` pins any self-issued write to `status = 'linkedin_connected'`
+  — literally impossible for a self actor to reach `'verified'` via a
+  crafted request, independent of what the application layer checks. The
+  separate `keen_african_verifications_review` policy is the only one that
+  can move a row to `{verified, rejected}`, gated on the permission.
+  Proven directly against the real non-superuser `portal_rls_test` role in
+  `verification-rls.integration.test.ts` (12 cases).
+
+`users_select` gained one additional OR branch
+(`verification.review`-holders can read any user's basic identity) — today
+a no-op in practice (every current holder already has `users.read` too via
+`ALL_PERMISSION_KEYS`) but added now so a FUTURE narrower reviewer role
+(verification.review only, no users.read — exactly the split Session 41
+might introduce) doesn't silently break `listPendingVerificationReviews()`'s
+`include: { user }`. `profiles_update` similarly gained an
+`articles.manage` branch, needed for `setProfileFeatured()` (see below) to
+write another Keen African's `Profile` row at all — previously self-only/
+super_admin, since nothing before this session ever needed an admin-side
+write to someone else's profile.
+
+### `src/lib/verification.ts` — the full API
+
+- `connectLinkedIn(actor, input)` — NOT a caller-facing API (same
+  "notifications.ts's `createNotification()`" convention). Called only
+  from `oauth-identity.ts`'s `resolveLinkedInSignIn()`, in its self-service
+  link branch.
+- `getOwnVerification(actor)` — self-scoped, no permission required, for
+  the `/account` "Identity verification" section.
+- `listPendingVerificationReviews(actor)`, `approveVerification(userId,
+  actor)`, `rejectVerification(userId, actor, reason)` —
+  `verification.review`-gated. `rejectVerification` deliberately covers
+  BOTH "reject a pending review" and "revoke an already-VERIFIED account"
+  (valid from either `linkedin_connected` or `verified`) — the acceptance
+  criterion's "grant or revoke" is one state transition with one
+  authorization rule, not two functions.
+- `getVerifiedUserIds(userIds)` — the public batch lookup, anonymous-safe
+  (see the RLS section above).
+
+### LinkedIn OAuth/identity linking — extends Session 19's pattern, doesn't fork it
+
+`src/lib/oauth-identity.ts`'s `resolveGoogleSignIn()`/`signInAsExisting()`/
+`auditRejection()` were generalized to take a `provider` parameter (only
+used for audit metadata) rather than duplicated; `resolveLinkedInSignIn()`
+reuses the exact same `UserIdentity` table, the exact same link-intent
+cookie mechanism, and the exact same numbered account-linking rule
+(existing identity → sign in; link-intent → self-service connect;
+existing password account, no link → reject, never silently merge;
+no signup role → reject) `resolveGoogleSignIn()`'s own docstring
+documents. The one deliberate difference: **LinkedIn is never a signup
+entrypoint on this platform** — `signupRole` is never supplied for
+LinkedIn (there is no `keenafricans.<root>`-style "the LinkedIn subdomain
+IS the role" mapping the way Google has for teacher/student/keenafricans),
+so a first-time LinkedIn sign-in with no link-intent cookie always rejects
+with `no_self_service_signup`. LinkedIn OAuth on this platform exists for
+exactly one purpose: an already-authenticated Keen African proving control
+of a real LinkedIn account.
+
+`src/lib/auth.ts`'s `signIn` callback gained a `linkedin` branch
+(mirroring the `google` branch) that redirects errors to `/account`
+(never `/login` — LinkedIn is only ever reached from the `/account`
+"Connect LinkedIn" button, an already-authenticated context).
+
+### The `/account` "Identity verification" section
+
+`src/app/keenafricans/(protected)/account/`: a "Connect LinkedIn" button
+(`connectLinkedInAction` — mints the link-intent cookie, hands off to
+`signIn("linkedin", ...)`, identical shape to the existing student/
+teacher/sponsor `connectGoogleAction`), the current status
+(`LINKEDIN_CONNECTED`/`VERIFIED`/`REJECTED` rendered in plain English),
+the connected LinkedIn name/date, the reviewer's note when rejected, and a
+"Reconnect" action once connected. Deliberately built here (Account,
+private) rather than on `/profile` (public) — the LinkedIn connection
+itself and any reviewer note are not public information, only the
+resulting `verified` boolean is.
+
+### The minimal reviewer queue — Session 41's UI territory, built minimally since it hadn't shipped
+
+`/admin/(protected)/keen-africans` gained a "Verification review" section
+(gated on `verification.review` — independently from the existing
+`articles.manage`-gated sections on the same page, so a future narrower
+reviewer-only account sees just this section) listing accounts in
+`linkedin_connected` status with their connected LinkedIn name/photo link
+and Approve/Reject actions. Explicitly documented in this session's own
+brief as the minimal version to hand off to Session 41's fuller
+moderation console, not a competing implementation of it.
+
+### Notifications — the value Session 39's own docstring already anticipated
+
+`docs/NOTIFICATIONS.md`'s "Extension points" section (written by Session
+39) named the exact contract this session fills: a
+`verification_status_changed` `NotificationType` (own migration, same
+"can't use a new enum value in the same transaction that adds it" rule),
+a `VerificationStatusChanged` domain event (`{userId, status, actorId,
+reason?}`), and a listener notifying the profile owner. Emitted ONLY by
+`approveVerification()`/`rejectVerification()` — never by the self-service
+`connectLinkedIn()` (that transition has no natural third-party recipient;
+the account owner already sees it immediately on their own `/account`
+page).
+
+### The "Featured" editorial flag — data model only, per the brief's own allowance
+
+`Profile.featured` (boolean, public, `articles.manage`-gated via
+`setProfileFeatured()`) — fully independent of verification, rendered
+with a visually distinct pill (gold, no checkmark, own label) so it can
+never be mistaken for the verification badge. No dedicated admin UI (the
+brief explicitly allows deferring this: "actual editorial UI can be
+minimal or deferred") — reachable only via the function today, covered by
+unit tests (authorization + audit).
+
+### Migrations (in order)
+
+- `20260901210000_keen_africans_verification` — `VerificationStatus`
+  enum, `keen_african_verifications` table + its four RLS policies (select/
+  self_connect/self_reconnect/review), the two new `Profile` columns
+  (`email_verified`, `featured`), and the `users_select`/`profiles_update`
+  policy amendments described above.
+- `20260901220000_keen_africans_notification_type_verification_status_changed`
+  — the `NotificationType` enum value, its own transaction (same rule
+  every prior enum-value addition in this codebase follows).
+
+### Tests
+
+- `src/lib/verification.test.ts` (17 cases) — the full state machine at
+  the application layer: connect/reconnect (including the "relink demotes
+  from verified" case), approve/reject authorization and state
+  preconditions, the reviewer queue's filtering, and the public
+  `getVerifiedUserIds()` lookup.
+- `src/lib/verification-rls.integration.test.ts` (12 cases) — the
+  independent Postgres-level proof, against the real non-superuser
+  `portal_rls_test` role: a crafted self-issued UPDATE can never reach
+  `'verified'` (the acceptance criterion's actual DB-level guarantee), an
+  outsider can't touch someone else's row at all, `verification.review`
+  can move a row to `verified`/`rejected` but not to an arbitrary status on
+  someone else's row, and the one public SELECT branch (`status =
+  'verified'`) works exactly as `getVerifiedUserIds()` relies on it.
+- `src/lib/oauth-identity.test.ts` gained 6 LinkedIn cases: self-service
+  connect (+ the verification-status side effect), a repeat sign-in NOT
+  re-touching verification status, "never a signup entrypoint" (rejects
+  even for a brand-new email with no link-intent), conflicting-link
+  rejection, suspended-account rejection, and Google+LinkedIn coexisting
+  independently on one account.
+- `src/lib/profiles.test.ts` gained 5 cases (the `emailVerified` sync at
+  `ensureProfile()` creation time, `getMemberLabelUserIds()`, and
+  `setProfileFeatured()`'s authorization + audit).
+- `src/lib/email-verification.test.ts` gained 1 case (the `Profile.
+  emailVerified` sync for a profile that already existed pre-verification).
+- **712/712 passing** (671 baseline — confirmed directly against an
+  unmodified checkout of the same shared dev database, side by side — + 41
+  new: 17 + 12 + 6 + 5 + 1 across the five files above; grown from Session
+  38's own 644/644 figure by Sessions 39's intervening work), `tsc
+  --noEmit` clean across the whole project.
+- One pre-existing, unrelated flake confirmed NOT caused by this session:
+  `assessment-rls.integration.test.ts`'s Session-31 query-plan regression
+  test failed both on this session's branch AND on a completely
+  unmodified checkout of the same shared dev database (verified directly,
+  side by side) — a Postgres query-planner/statistics artifact on this
+  long-lived, heavily-used shared instance, not anything this session
+  touched (this session never opens `assessments.ts` or that test file).
+  Same flake Session 38's own handoff already flagged.
+- **Live-verified against a real running dev server** (no browser tool in
+  this sandbox — real functions called directly under real actors, the
+  same technique every prior Keen Africans session's notes describe, then
+  confirmed via real `curl` HTTP requests, `Host: keenafricans.portal.local`):
+  registered a real account, connected LinkedIn (`connectLinkedIn()`),
+  approved it as an ADMIN actor, and confirmed `GET /u/<username>` (200)
+  renders `<span class="...verifiedBadge..." title="This badge confirms
+  Keen Africa has verified...">Verified Keen African ✓</span>` with the
+  exact public copy. Separately registered and email-verified (but never
+  LinkedIn-connected) an account, published a real article through it via
+  `createArticle`/`publishArticle`, and confirmed both `GET /u/<username>`
+  and `GET /articles/<slug>` (both 200) render the plain `Keen African`
+  label with NO checkmark. Confirmed a rejected/never-email-verified
+  fixture's profile page renders neither label — internal pipeline states
+  never leak as any public badge. All live-verification fixtures cleaned
+  up afterward (verified zero `live-check-%` rows remain).
+
+### Known limitations
+
+- **`LINKEDIN_CLIENT_ID`/`LINKEDIN_CLIENT_SECRET` are not yet set in
+  production** — this session shipped the mechanism; provisioning the real
+  LinkedIn Developer Portal app (with the "Sign In with LinkedIn using
+  OpenID Connect" product enabled) and setting the credential is a
+  deploy-time follow-up, same shape Session 22 did for `GOOGLE_CLIENT_ID`.
+  See `docs/ENVIRONMENT.md`.
+- **No email/notification for the self-service "LinkedIn connected,
+  pending review" transition** — deliberate (see the Notifications
+  section above), but worth reconsidering if reviewers want an inbound
+  signal rather than checking the queue page.
+- **The reviewer queue has no filtering/search** — a flat, oldest-first
+  list, same minimal-v1 shape Session 34's own article moderation queue
+  started with. Session 41's own territory to build a real console on top
+  of `listPendingVerificationReviews()`.
+- **No "unlink LinkedIn" self-service action** — same gap Session 19's own
+  handoff already flagged for Google; connecting a different LinkedIn
+  account (which demotes an existing `verified` status) is the only
+  self-service path today.
+
+### Blockers
+
+None.
+
+### Required next-session actions
+
+- **Session 41 (Admin Moderation, Reporting & Verification Review)**: the
+  verification review queue exists as a minimal v1
+  (`/admin/(protected)/keen-africans`'s new "Verification review"
+  section) — extend it, don't reinvent it. `verification.review` is
+  already its own permission key, decoupled from `articles.manage`,
+  ready for the site owner's answer on whether reviewers and article
+  moderators should be the same people.
+- **Whoever provisions production LinkedIn OAuth**: register the redirect
+  URI, enable the OIDC product, set `LINKEDIN_CLIENT_ID`/
+  `LINKEDIN_CLIENT_SECRET` in `portal-secrets` — see
+  `docs/ENVIRONMENT.md`'s new row.
+- **Whoever owns Notifications next**: nothing outstanding from this
+  session — `verification_status_changed` is fully wired, closing the
+  extension point Session 39's own docstring left open.

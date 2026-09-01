@@ -2,15 +2,26 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { PERMISSIONS, hasPermission } from "@/lib/authz";
 import { listAllPublishedArticlesForAdmin, listArticlesPendingReview } from "@/lib/articles";
-import { adminUnpublishArticleAction, approveArticleAction, rejectArticleAction, requestChangesAction } from "./actions";
+import { listPendingVerificationReviews } from "@/lib/verification";
+import {
+  adminUnpublishArticleAction,
+  approveArticleAction,
+  approveVerificationAction,
+  rejectArticleAction,
+  rejectVerificationAction,
+  requestChangesAction,
+} from "./actions";
 import { Banner, Button, Card, EmptyState, SectionHeader } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
 
 const ERROR_MESSAGES: Record<string, string> = {
   reason_required: "A reason is required to unpublish an article.",
   note_required: "A note is required so the author knows what to change.",
-  not_authorized: "You do not have permission to moderate articles (requires articles.manage).",
+  not_authorized: "You do not have permission to do that.",
   invalid_review_transition: "That article isn't awaiting review anymore.",
+  verification_reason_required: "A reason is required to reject or revoke a verification.",
+  verification_not_found: "That account has no pending LinkedIn connection.",
+  invalid_verification_transition: "That account's verification status already changed — refresh and try again.",
   action_failed: "Could not complete that action.",
 };
 
@@ -28,20 +39,76 @@ export default async function AdminKeenAfricansPage({
   const session = await auth();
   if (!session?.user) redirect("/login");
   const user = session.user;
-  if (!user.isSuperAdmin && !hasPermission(user, PERMISSIONS.ARTICLES_MANAGE)) {
+  const canModerateArticles = user.isSuperAdmin || hasPermission(user, PERMISSIONS.ARTICLES_MANAGE);
+  const canReviewVerifications = user.isSuperAdmin || hasPermission(user, PERMISSIONS.VERIFICATION_REVIEW);
+  if (!canModerateArticles && !canReviewVerifications) {
     redirect("/dashboard");
   }
 
   const { error } = await searchParams;
-  const [articles, pendingReview] = await Promise.all([
-    listAllPublishedArticlesForAdmin(user),
-    listArticlesPendingReview(user),
+  const [articles, pendingReview, pendingVerifications] = await Promise.all([
+    canModerateArticles ? listAllPublishedArticlesForAdmin(user) : Promise.resolve([]),
+    canModerateArticles ? listArticlesPendingReview(user) : Promise.resolve([]),
+    canReviewVerifications ? listPendingVerificationReviews(user) : Promise.resolve([]),
   ]);
 
   return (
     <div style={{ display: "grid", gap: "24px" }}>
       {error && <Banner>{ERROR_MESSAGES[error] ?? "Something went wrong."}</Banner>}
 
+      {canReviewVerifications && (
+        <section>
+          <SectionHeader title="Verification review" count={pendingVerifications.length} />
+          <p style={{ fontSize: 12.5, color: "var(--ink-faint)", marginTop: -4, marginBottom: 12 }}>
+            Accounts that connected LinkedIn and are awaiting review. Approving grants the public{" "}
+            <strong>Verified Keen African ✓</strong> badge; connecting LinkedIn alone never does. This is a minimal
+            v1 queue (Session 40) — a fuller moderation console is Session 41's territory.
+          </p>
+
+          {pendingVerifications.length === 0 ? (
+            <EmptyState title="Nothing awaiting review" />
+          ) : (
+            <div style={{ display: "grid", gap: "10px" }}>
+              {pendingVerifications.map((v) => (
+                <Card key={v.id} style={{ padding: "14px 16px" }}>
+                  <div className={ui.nameCell}>
+                    {v.user.name} ({v.user.email})
+                  </div>
+                  <div className={ui.subCell} style={{ marginBottom: 10 }}>
+                    Connected LinkedIn as <strong>{v.linkedinName ?? "(no name on file)"}</strong>
+                    {v.connectedAt && ` on ${new Date(v.connectedAt).toLocaleDateString()}`}
+                    {v.linkedinPictureUrl && (
+                      <>
+                        {" "}
+                        &middot;{" "}
+                        <a href={v.linkedinPictureUrl} target="_blank" rel="noreferrer">
+                          view photo ↗
+                        </a>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                    <form action={approveVerificationAction}>
+                      <input type="hidden" name="userId" value={v.userId} />
+                      <Button type="submit">Approve</Button>
+                    </form>
+                    <form action={rejectVerificationAction} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <input type="hidden" name="userId" value={v.userId} />
+                      <input type="text" name="reason" required placeholder="Reason for rejecting" className={ui.input} />
+                      <Button type="submit" variant="danger">
+                        Reject
+                      </Button>
+                    </form>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {canModerateArticles && (
+      <>
       <section>
         <SectionHeader title="Pending review" count={pendingReview.length} />
         <p style={{ fontSize: 12.5, color: "var(--ink-faint)", marginTop: -4, marginBottom: 12 }}>
@@ -139,6 +206,8 @@ export default async function AdminKeenAfricansPage({
           </div>
         )}
       </section>
+      </>
+      )}
     </div>
   );
 }

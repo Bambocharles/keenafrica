@@ -1,10 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { withRls } from "@/lib/rls";
-import type { AuthzActor } from "@/lib/authz";
+import { requirePermission, PERMISSIONS, type AuthzActor } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
 import { actorRlsCtx } from "@/lib/courses";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
 import { getStorageDriver } from "@/lib/storage";
+import { getVerifiedUserIds } from "@/lib/verification";
 
 /**
  * Public Profile & Account Identity (Session 36). Profile is a separate
@@ -130,6 +131,19 @@ export async function ensureProfile(actor: AuthzActor, input: EnsureProfileInput
   const username = await uniqueUsername(input.name);
   const displayName = input.name.trim() || "Keen African";
 
+  // Session 40 (Keen Africans — LinkedIn Verification). Seeds the public
+  // "Keen African" membership label's denormalized flag from the account's
+  // CURRENT email-verification state at the moment the profile is first
+  // created — covers the Google-signup case (emailVerifiedAt is already
+  // set by oauth-identity.ts's resolveGoogleSignIn() before ensureProfile()
+  // ever runs) without needing to touch that module. A password
+  // registration that verifies its email AFTER this point is covered by
+  // email-verification.ts's confirmEmailVerification() instead — see that
+  // function's own comment for the other half of this sync.
+  const user = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.user.findUnique({ where: { id: actor.id }, select: { emailVerifiedAt: true } })
+  );
+
   try {
     return await withRls(actorRlsCtx(actor), (tx) =>
       tx.profile.create({
@@ -138,6 +152,7 @@ export async function ensureProfile(actor: AuthzActor, input: EnsureProfileInput
           username,
           displayName,
           country: input.country?.trim() || null,
+          emailVerified: Boolean(user?.emailVerifiedAt),
         },
       })
     );
@@ -352,6 +367,51 @@ export async function getUsernamesByUserIds(userIds: string[]): Promise<Map<stri
   return new Map(profiles.map((p) => [p.userId, p.username]));
 }
 
+/**
+ * Session 40 (Keen Africans — LinkedIn Verification). Batch lookup for the
+ * public, non-checkmark "Keen African" membership label (article bylines,
+ * profile pages) — anonymous (withRls({})), safe for the same reason
+ * getUsernamesByUserIds() above is: profiles_select is unconditionally
+ * open and this only reads a public-safe column. Distinct from
+ * src/lib/verification.ts's getVerifiedUserIds() — that one drives the
+ * separate "Verified Keen African ✓" badge and reads a different table.
+ * Never both rendered at once — see the two page components' badge slot
+ * for the precedence rule (verified supersedes the plain label).
+ */
+export async function getMemberLabelUserIds(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const rows = await withRls({}, (tx) =>
+    tx.profile.findMany({ where: { userId: { in: userIds }, emailVerified: true }, select: { userId: true } })
+  );
+  return new Set(rows.map((r) => r.userId));
+}
+
+/**
+ * Session 40. The "Featured" editorial flag — fully independent of
+ * verification (see this session's brief: "never let it look like a
+ * verification badge"). articles.manage-gated (the existing editorial/
+ * moderation key, not a new one — this is a lightweight extension of an
+ * existing capability, not a distinct capability worth its own permission
+ * key). No dedicated admin UI yet — deferred per the session brief's own
+ * "actual editorial UI can be minimal or deferred."
+ */
+export async function setProfileFeatured(targetUserId: string, featured: boolean, actor: AuthzActor) {
+  requirePermission(actor, PERMISSIONS.ARTICLES_MANAGE);
+
+  const profile = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.profile.update({ where: { userId: targetUserId }, data: { featured } })
+  );
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: featured ? "profile.featured" : "profile.unfeatured",
+    entityType: "Profile",
+    entityId: profile.id,
+  });
+
+  return profile;
+}
+
 // --- Public reads (no actor — anonymous, always allowed) ------------------
 
 /**
@@ -367,14 +427,17 @@ export async function getPublicProfileByUsername(username: string) {
   const profile = await withRls({}, (tx) => tx.profile.findUnique({ where: { username: username.trim().toLowerCase() } }));
   if (!profile) return null;
 
-  const articles = await withRls({}, (tx) =>
-    tx.article.findMany({
-      where: { authorId: profile.userId, status: "published" },
-      orderBy: { publishedAt: "desc" },
-    })
-  );
+  const [articles, verifiedIds] = await Promise.all([
+    withRls({}, (tx) =>
+      tx.article.findMany({
+        where: { authorId: profile.userId, status: "published" },
+        orderBy: { publishedAt: "desc" },
+      })
+    ),
+    getVerifiedUserIds([profile.userId]),
+  ]);
 
-  return { profile, articles };
+  return { profile, articles, verified: verifiedIds.has(profile.userId) };
 }
 
 /**

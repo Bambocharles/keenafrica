@@ -5,6 +5,7 @@ import { recordAuditEvent } from "@/lib/audit";
 import { registerUserViaProvider, type RegisterableRole } from "@/lib/registration";
 import { OAUTH_LINK_INTENT_COOKIE, verifyLinkIntentValue } from "@/lib/oauth-link-intent";
 import { shouldRequireLoginMfa } from "@/lib/mfa";
+import { connectLinkedIn } from "@/lib/verification";
 
 /**
  * Session 19 (Federated Auth) — the entire Google account-linking rule in
@@ -58,17 +59,25 @@ export type GoogleSignInResult =
   | { outcome: "ok"; userId: string; email: string; name: string; sessionId: string }
   | { outcome: "rejected"; reason: GoogleSignInRejectionReason };
 
-async function auditRejection(reason: GoogleSignInRejectionReason, userId?: string | null): Promise<void> {
+/** Shared by resolveGoogleSignIn/resolveLinkedInSignIn below — the provider name is only ever used for the audit metadata. */
+type OAuthProviderName = "google" | "linkedin";
+
+async function auditRejection(
+  provider: OAuthProviderName,
+  reason: GoogleSignInRejectionReason,
+  userId?: string | null
+): Promise<void> {
   await recordAuditEvent({
     actorId: userId ?? null,
     action: "login.failed",
     entityType: "User",
     entityId: userId ?? null,
-    metadata: { provider: "google", reason },
+    metadata: { provider, reason },
   });
 }
 
 async function signInAsExisting(
+  provider: OAuthProviderName,
   user: { id: string; email: string; name: string; status: string },
   ipAddress?: string | null
 ): Promise<GoogleSignInResult> {
@@ -76,9 +85,10 @@ async function signInAsExisting(
   // and-suspenders only: the keen_africans_account_deletion migration's new
   // user_identities_delete policy lets anonymizeOwnAccount() remove every
   // linked identity in the same call, so this row should never actually
-  // still exist for a deleted account by the time Google sign-in reaches it.
+  // still exist for a deleted account by the time an OAuth sign-in reaches
+  // it (Google or, as of Session 40, LinkedIn).
   if (user.status === "suspended" || user.status === "deleted") {
-    await auditRejection("account_suspended", user.id);
+    await auditRejection(provider, "account_suspended", user.id);
     return { outcome: "rejected", reason: "account_suspended" };
   }
 
@@ -89,7 +99,7 @@ async function signInAsExisting(
     action: "login.succeeded",
     entityType: "User",
     entityId: user.id,
-    metadata: { sessionId: session.id, provider: "google", mfaRequired },
+    metadata: { sessionId: session.id, provider, mfaRequired },
   });
   return { outcome: "ok", userId: user.id, email: user.email, name: user.name, sessionId: session.id };
 }
@@ -106,7 +116,7 @@ async function consumeLinkIntent(): Promise<string | null> {
 export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<GoogleSignInResult> {
   const email = input.email?.trim().toLowerCase();
   if (!email) {
-    await auditRejection("no_email");
+    await auditRejection("google", "no_email");
     return { outcome: "rejected", reason: "no_email" };
   }
 
@@ -123,7 +133,7 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
     if (linkIntentUserId && linkIntentUserId !== existingIdentity.userId) {
       // Someone is authenticated as one account but this Google account is
       // already linked to a DIFFERENT one — never silently re-point a link.
-      await auditRejection("conflicting_link", linkIntentUserId);
+      await auditRejection("google", "conflicting_link", linkIntentUserId);
       return { outcome: "rejected", reason: "conflicting_link" };
     }
 
@@ -134,10 +144,10 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
       })
     );
     if (!user) {
-      await auditRejection("account_suspended", existingIdentity.userId);
+      await auditRejection("google", "account_suspended", existingIdentity.userId);
       return { outcome: "rejected", reason: "account_suspended" };
     }
-    return signInAsExisting(user, input.ipAddress);
+    return signInAsExisting("google", user, input.ipAddress);
   }
 
   if (linkIntentUserId) {
@@ -151,7 +161,7 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
       })
     );
     if (!user) {
-      await auditRejection("account_suspended", linkIntentUserId);
+      await auditRejection("google", "account_suspended", linkIntentUserId);
       return { outcome: "rejected", reason: "account_suspended" };
     }
 
@@ -167,7 +177,7 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
       entityId: user.id,
       metadata: { provider: "google" },
     });
-    return signInAsExisting(user, input.ipAddress);
+    return signInAsExisting("google", user, input.ipAddress);
   }
 
   // No link-intent, no existing identity — a fresh, unauthenticated
@@ -177,12 +187,12 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
     tx.user.findUnique({ where: { email }, select: { id: true } })
   );
   if (existingByEmail) {
-    await auditRejection("email_exists_unlinked", existingByEmail.id);
+    await auditRejection("google", "email_exists_unlinked", existingByEmail.id);
     return { outcome: "rejected", reason: "email_exists_unlinked" };
   }
 
   if (!input.signupRole) {
-    await auditRejection("no_self_service_signup");
+    await auditRejection("google", "no_self_service_signup");
     return { outcome: "rejected", reason: "no_self_service_signup" };
   }
 
@@ -195,7 +205,7 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
     // email_taken here means a genuine race against a concurrent
     // registration between the lookup above and this insert — same
     // rejection an unlinked-existing-account attempt gets.
-    await auditRejection("email_exists_unlinked");
+    await auditRejection("google", "email_exists_unlinked");
     return { outcome: "rejected", reason: "email_exists_unlinked" };
   }
 
@@ -236,6 +246,122 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
   });
 
   return { outcome: "ok", userId: registered.userId, email: registered.email, name: registered.name, sessionId: session.id };
+}
+
+/**
+ * Session 40 (Keen Africans — LinkedIn Verification). Reuses the exact
+ * (provider, providerAccountId) UserIdentity linking table/mechanism
+ * Session 19 built for Google above — same table, same
+ * app.oauth_lookup/link-intent-cookie RLS carve-outs, no second linking
+ * mechanism. Deliberately NARROWER than resolveGoogleSignIn(), by design:
+ * LinkedIn is never a signup entrypoint on this platform (there is no
+ * "the LinkedIn subdomain IS the signup role" mapping the way
+ * teacher/student/keenafricans work for Google — see auth.ts's
+ * subdomainSignupRole()) — `signupRole` simply never gets passed in, so
+ * case 4 (brand-new account via provider) can never fire; a first-time
+ * LinkedIn sign-in with no link-intent cookie always falls through to
+ * "no_self_service_signup". LinkedIn OAuth on this platform exists for
+ * exactly one purpose: an already-authenticated Keen African proving
+ * control of a real LinkedIn account (case 2 below) to move their
+ * verification status forward — see src/lib/verification.ts's
+ * connectLinkedIn(), called ONLY from that case, never from case 1 (a
+ * repeat sign-in via an already-linked LinkedIn identity doesn't re-touch
+ * verification status).
+ *
+ * Cases 1/2/3/5 mirror resolveGoogleSignIn()'s own numbered rule exactly
+ * (see that function's docstring) — same reasoning, same "Must NOT
+ * silently merge accounts on email match" guarantee.
+ */
+export interface LinkedInSignInInput {
+  providerAccountId: string;
+  email: string | null | undefined;
+  name: string | null | undefined;
+  /** LinkedIn's `picture` OIDC claim, if present — snapshotted onto the verification row, never re-fetched live. */
+  pictureUrl: string | null | undefined;
+  ipAddress?: string | null;
+}
+
+export async function resolveLinkedInSignIn(input: LinkedInSignInInput): Promise<GoogleSignInResult> {
+  const email = input.email?.trim().toLowerCase();
+  if (!email) {
+    await auditRejection("linkedin", "no_email");
+    return { outcome: "rejected", reason: "no_email" };
+  }
+
+  const existingIdentity = await withRls({ oauthLookup: true }, (tx) =>
+    tx.userIdentity.findUnique({
+      where: { provider_providerAccountId: { provider: "linkedin", providerAccountId: input.providerAccountId } },
+      select: { userId: true },
+    })
+  );
+
+  const linkIntentUserId = await consumeLinkIntent();
+
+  if (existingIdentity) {
+    if (linkIntentUserId && linkIntentUserId !== existingIdentity.userId) {
+      await auditRejection("linkedin", "conflicting_link", linkIntentUserId);
+      return { outcome: "rejected", reason: "conflicting_link" };
+    }
+
+    const user = await withRls({ userId: existingIdentity.userId }, (tx) =>
+      tx.user.findUnique({
+        where: { id: existingIdentity.userId },
+        select: { id: true, email: true, name: true, status: true },
+      })
+    );
+    if (!user) {
+      await auditRejection("linkedin", "account_suspended", existingIdentity.userId);
+      return { outcome: "rejected", reason: "account_suspended" };
+    }
+    // Repeat sign-in via an already-linked LinkedIn identity — a normal
+    // login, not a (re)connect. Verification status is untouched.
+    return signInAsExisting("linkedin", user, input.ipAddress);
+  }
+
+  if (linkIntentUserId) {
+    // Self-service "connect LinkedIn" — the ONLY path that ever creates a
+    // linkedin UserIdentity row or touches verification status.
+    const user = await withRls({ userId: linkIntentUserId }, (tx) =>
+      tx.user.findUnique({
+        where: { id: linkIntentUserId },
+        select: { id: true, email: true, name: true, status: true },
+      })
+    );
+    if (!user) {
+      await auditRejection("linkedin", "account_suspended", linkIntentUserId);
+      return { outcome: "rejected", reason: "account_suspended" };
+    }
+
+    await withRls({ userId: linkIntentUserId }, (tx) =>
+      tx.userIdentity.create({
+        data: { userId: linkIntentUserId, provider: "linkedin", providerAccountId: input.providerAccountId },
+      })
+    );
+    await recordAuditEvent({
+      actorId: user.id,
+      action: "oauth_identity.linked",
+      entityType: "User",
+      entityId: user.id,
+      metadata: { provider: "linkedin" },
+    });
+
+    await connectLinkedIn(
+      { id: user.id, isSuperAdmin: false, permissions: [] },
+      {
+        providerAccountId: input.providerAccountId,
+        name: input.name?.trim() || null,
+        pictureUrl: input.pictureUrl?.trim() || null,
+      }
+    );
+
+    return signInAsExisting("linkedin", user, input.ipAddress);
+  }
+
+  // No link-intent, no existing identity. LinkedIn is never a signup
+  // entrypoint on this platform (see this function's docstring) — always
+  // "no_self_service_signup", never a fresh-account path.
+  await auditRejection("linkedin", "no_self_service_signup");
+  return { outcome: "rejected", reason: "no_self_service_signup" };
 }
 
 /** Self-scoped read for a profile page's "Connected accounts" section — no permission required, same "always your own id" shape as getOwnProfile(). */

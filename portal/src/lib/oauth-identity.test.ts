@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
-import { resolveGoogleSignIn, listOwnLinkedProviders } from "@/lib/oauth-identity";
+import { resolveGoogleSignIn, resolveLinkedInSignIn, listOwnLinkedProviders } from "@/lib/oauth-identity";
 import { createLinkIntentValue } from "@/lib/oauth-link-intent";
 import { resolveSessionAuthz, revokeSession } from "@/lib/sessions";
 import { actorFromUser, cleanupTestUsers, createTestUser } from "@/lib/test-support";
@@ -42,8 +42,17 @@ async function cleanupIdentities(userIds: string[]): Promise<void> {
   await prisma.userIdentity.deleteMany({ where: { userId: { in: userIds } } });
 }
 
+/** Session 40 — keen_african_verifications has two FK columns to users (userId, reviewedBy); clean up by either before cleanupTestUsers() deletes the User rows. */
+async function cleanupVerifications(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.keenAfricanVerification.deleteMany({
+    where: { OR: [{ userId: { in: userIds } }, { reviewedBy: { in: userIds } }] },
+  });
+}
+
 afterAll(async () => {
   await cleanupIdentities(createdUserIds);
+  await cleanupVerifications(createdUserIds);
   await cleanupTestUsers(createdUserIds);
 });
 
@@ -249,5 +258,155 @@ describe("Session/revocation parity — a Google-originated session behaves exac
     await revokeSession(result.sessionId, actor);
 
     expect(await resolveSessionAuthz(result.sessionId, result.userId)).toBeNull();
+  });
+});
+
+/**
+ * Session 40 (Keen Africans — LinkedIn Verification). resolveLinkedInSignIn()
+ * deliberately reuses resolveGoogleSignIn()'s exact linking mechanism/rule
+ * (cases 1/2/3/5 — see that function's own docstring) but is narrower:
+ * LinkedIn is never a signup entrypoint on this platform (no `signupRole`
+ * is ever supplied), so case 4 can never fire. These tests cover exactly
+ * the behavior that differs from Google, plus the one new side effect —
+ * connecting LinkedIn moves verification status to 'linkedin_connected'.
+ */
+describe("resolveLinkedInSignIn — self-service connect (the only path that ever links LinkedIn)", () => {
+  it("links LinkedIn to the authenticated user's own account AND moves verification status to linkedin_connected", async () => {
+    const passwordUser = await user({ roles: ["KEEN_AFRICAN"] });
+    mockCookieStore.set("oauth_link_intent", createLinkIntentValue(passwordUser.id));
+
+    const providerAccountId = randomUUID();
+    const result = await resolveLinkedInSignIn({
+      providerAccountId,
+      email: "a-different-address@example.com",
+      name: "Ada LinkedIn",
+      pictureUrl: "https://media.licdn.com/ada.jpg",
+    });
+
+    expect(result.outcome).toBe("ok");
+    if (result.outcome !== "ok") return;
+    expect(result.userId).toBe(passwordUser.id);
+
+    const identity = await prisma.userIdentity.findUnique({
+      where: { provider_providerAccountId: { provider: "linkedin", providerAccountId } },
+    });
+    expect(identity?.userId).toBe(passwordUser.id);
+
+    const linked = await listOwnLinkedProviders(passwordUser.id);
+    expect(linked).toEqual(["linkedin"]);
+
+    const verification = await prisma.keenAfricanVerification.findUnique({ where: { userId: passwordUser.id } });
+    expect(verification?.status).toBe("linkedin_connected");
+    expect(verification?.linkedinName).toBe("Ada LinkedIn");
+
+    // Single-use, same as Google's.
+    expect(mockCookieStore.has("oauth_link_intent")).toBe(false);
+  });
+
+  it("a repeat sign-in via an already-linked LinkedIn identity is a normal login — it does NOT re-touch verification status", async () => {
+    const passwordUser = await user({ roles: ["KEEN_AFRICAN"] });
+    mockCookieStore.set("oauth_link_intent", createLinkIntentValue(passwordUser.id));
+    const providerAccountId = randomUUID();
+
+    const first = await resolveLinkedInSignIn({
+      providerAccountId,
+      email: "first@example.com",
+      name: "Ada LinkedIn",
+      pictureUrl: null,
+    });
+    expect(first.outcome).toBe("ok");
+
+    // Approve it, so a regression that re-runs connectLinkedIn() on every
+    // sign-in would be visible (it would demote 'verified' back to
+    // 'linkedin_connected' — see verification.ts's own documented "relink
+    // demotes" behavior, which must NOT fire for a plain repeat login).
+    const admin = await user({ roles: ["ADMIN"] });
+    const { approveVerification } = await import("@/lib/verification");
+    await approveVerification(passwordUser.id, await actorFromUser(admin.id));
+
+    const second = await resolveLinkedInSignIn({
+      providerAccountId,
+      email: "first@example.com",
+      name: "Ada LinkedIn",
+      pictureUrl: null,
+    });
+    expect(second.outcome).toBe("ok");
+    if (second.outcome !== "ok") return;
+    expect(second.userId).toBe(passwordUser.id);
+
+    const verification = await prisma.keenAfricanVerification.findUnique({ where: { userId: passwordUser.id } });
+    expect(verification?.status).toBe("verified");
+  });
+
+  it("is never a signup entrypoint — no link-intent, no existing identity always rejects, even for a brand-new email", async () => {
+    const result = await resolveLinkedInSignIn({
+      providerAccountId: randomUUID(),
+      email: `linkedin-fresh-${randomUUID()}@example.com`,
+      name: "Nobody",
+      pictureUrl: null,
+    });
+    expect(result).toEqual({ outcome: "rejected", reason: "no_self_service_signup" });
+
+    // Confirm no account was created for that email.
+    const matching = await prisma.user.findMany({
+      where: { email: `linkedin-fresh-${randomUUID()}@example.com` },
+    });
+    expect(matching).toHaveLength(0);
+  });
+
+  it("rejects (never silently re-points) when the LinkedIn account is already linked to a DIFFERENT user", async () => {
+    const owner = await user();
+    const otherUser = await user();
+    const providerAccountId = randomUUID();
+    await prisma.userIdentity.create({ data: { userId: owner.id, provider: "linkedin", providerAccountId } });
+
+    mockCookieStore.set("oauth_link_intent", createLinkIntentValue(otherUser.id));
+
+    const result = await resolveLinkedInSignIn({
+      providerAccountId,
+      email: owner.email,
+      name: owner.name,
+      pictureUrl: null,
+    });
+
+    expect(result).toEqual({ outcome: "rejected", reason: "conflicting_link" });
+
+    const identity = await prisma.userIdentity.findUnique({
+      where: { provider_providerAccountId: { provider: "linkedin", providerAccountId } },
+    });
+    expect(identity?.userId).toBe(owner.id);
+  });
+
+  it("rejects sign-in for a linked identity whose account is suspended", async () => {
+    const suspended = await user({ status: "suspended" });
+    const providerAccountId = randomUUID();
+    await prisma.userIdentity.create({ data: { userId: suspended.id, provider: "linkedin", providerAccountId } });
+
+    const result = await resolveLinkedInSignIn({
+      providerAccountId,
+      email: suspended.email,
+      name: suspended.name,
+      pictureUrl: null,
+    });
+
+    expect(result).toEqual({ outcome: "rejected", reason: "account_suspended" });
+  });
+
+  it("Google and LinkedIn identities coexist independently on the same account", async () => {
+    const passwordUser = await user();
+    await prisma.userIdentity.create({ data: { userId: passwordUser.id, provider: "google", providerAccountId: randomUUID() } });
+
+    mockCookieStore.set("oauth_link_intent", createLinkIntentValue(passwordUser.id));
+    const linkedinProviderAccountId = randomUUID();
+    const result = await resolveLinkedInSignIn({
+      providerAccountId: linkedinProviderAccountId,
+      email: "whatever@example.com",
+      name: passwordUser.name,
+      pictureUrl: null,
+    });
+    expect(result.outcome).toBe("ok");
+
+    const linked = await listOwnLinkedProviders(passwordUser.id);
+    expect(linked.sort()).toEqual(["google", "linkedin"]);
   });
 });

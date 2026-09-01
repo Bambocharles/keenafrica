@@ -203,6 +203,15 @@ enum NotificationType {
   // docs/NOTIFICATIONS.md's "Extension points" section for the exact
   // contract each of those sessions should add instead.
   article_unpublished_by_admin
+  // Session 40 (Keen Africans — LinkedIn Verification). The "verification
+  // status" value the Session 39 comment above anticipated. Own migration
+  // — see the same "can't use a new enum value in the transaction that
+  // adds it" rule. Emitted for both a review approval and a rejection
+  // (src/lib/notifications.ts's listener branches on the driving event's
+  // own `status` field for the title/body — see events.ts's
+  // VerificationStatusChanged comment for why connectLinkedIn() itself
+  // never emits this).
+  verification_status_changed
 }
 
 // --- Organization Core (Session 17) --------------------------------------
@@ -368,19 +377,19 @@ model OrganizationInvitation {
 }
 
 model User {
-  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email        String     @unique @db.Citext
+  id              String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email           String     @unique @db.Citext
   // Nullable as of Session 19 (Federated Auth) — a user created via Google
   // sign-in has no password at all (never store/derive one from an OAuth
   // token). src/lib/auth.ts's Credentials authorize() treats a null hash as
   // "password login unavailable for this account", not a crash; every other
   // writer (createUser/registerUser/resetPassword/seed tasks) still always
   // sets a real hash.
-  passwordHash String?    @map("password_hash")
-  name         String
-  isSuperAdmin Boolean    @default(false) @map("is_super_admin")
-  status       UserStatus @default(active)
-  suspendedAt  DateTime?  @map("suspended_at") @db.Timestamptz(6)
+  passwordHash    String?    @map("password_hash")
+  name            String
+  isSuperAdmin    Boolean    @default(false) @map("is_super_admin")
+  status          UserStatus @default(active)
+  suspendedAt     DateTime?  @map("suspended_at") @db.Timestamptz(6)
   // Session 37 (Keen Africans — Account & Security). Set once by
   // src/lib/users.ts's anonymizeOwnAccount() at the moment self-service
   // account deletion runs — see that function's own comment for the full
@@ -389,7 +398,7 @@ model User {
   // itself is never hard-deleted (users_delete stays super_admin-only,
   // unchanged — see identity_security_foundation migration's own note that
   // account deletion was out of scope until this session).
-  anonymizedAt DateTime?  @map("anonymized_at") @db.Timestamptz(6)
+  anonymizedAt    DateTime?  @map("anonymized_at") @db.Timestamptz(6)
   // Session 34 (Keen Africans) — set once by
   // src/lib/email-verification.ts's confirmEmailVerification(). Not tied to
   // any particular role/portal (denormalized onto the canonical User, same
@@ -398,9 +407,9 @@ model User {
   // self-registered Keen African's first publish. Nullable/unset for every
   // account created before this session and for admin/seed-provisioned
   // accounts — nothing else in the platform currently reads this column.
-  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(6)
-  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   memberships              ProjectMembership[]
   projectDocumentsUploaded ProjectDocument[]
@@ -408,7 +417,7 @@ model User {
   sessions                 Session[]
   passwordResetTokens      PasswordResetToken[]
   emailVerificationTokens  EmailVerificationToken[]
-  auditEventsAsActor       AuditEvent[]         @relation("AuditActor")
+  auditEventsAsActor       AuditEvent[]             @relation("AuditActor")
 
   coursesCreated          Course[]        @relation("CourseCreator")
   cohortTeaching          CohortTeacher[]
@@ -435,7 +444,7 @@ model User {
 
   lessonProgress LessonProgress[]
 
-  notificationsReceived Notification[]
+  notificationsReceived   Notification[]
   notificationPreferences NotificationPreference[]
 
   certificatesAsStudent Certificate[] @relation("CertificateStudent")
@@ -476,6 +485,13 @@ model User {
   // unlike articles.ts's authorNamesByIds() workaround this session
   // replaces for article bylines.
   profile Profile? @relation("UserProfile")
+
+  // Session 40 (Keen Africans — LinkedIn Verification). Same optional-1:1
+  // shape as profile/totpCredential above — see KeenAfricanVerification's
+  // own comment for why this is a separate table from Profile rather than
+  // more columns there.
+  verification          KeenAfricanVerification?  @relation("UserVerification")
+  verificationsReviewed KeenAfricanVerification[] @relation("VerificationReviewer")
 
   @@map("users")
 }
@@ -1813,10 +1829,10 @@ enum ArticleTopic {
 }
 
 model Article {
-  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  authorId         String        @map("author_id") @db.Uuid
-  title            String
-  slug             String        @unique
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authorId       String              @map("author_id") @db.Uuid
+  title          String
+  slug           String              @unique
   // Session 38 (Keen Africans — Editor Workflow). Every slug this article
   // has ever been published under, oldest first, capped at 10 — populated
   // by src/lib/articles.ts's updateArticleSlug() whenever the slug
@@ -1824,15 +1840,15 @@ model Article {
   // previously-indexed URL to the current one instead of 404ing (see
   // resolveRedirectSlug()). Harmless/unused for an article that never had
   // its slug edited.
-  previousSlugs    String[]      @default([]) @map("previous_slugs")
-  body             String
-  excerpt          String?
-  tags             String[]      @default([])
+  previousSlugs  String[]            @default([]) @map("previous_slugs")
+  body           String
+  excerpt        String?
+  tags           String[]            @default([])
   // Session 38 (Keen Africans — Editor Workflow). Discovery aid, not a
   // permissions concept — see ArticleTopic's own comment. Nullable: never
   // required, and every pre-existing article has none.
-  topic            ArticleTopic?
-  status           ContentStatus @default(draft)
+  topic          ArticleTopic?
+  status         ContentStatus       @default(draft)
   // Session 38 (Keen Africans — Editor Workflow). See ArticleReviewStatus's
   // own comment for why this is a separate enum/field from `status`.
   // reviewNote holds the reviewer's most recent reason (rejection or
@@ -1840,10 +1856,10 @@ model Article {
   // and when, mirroring moderatedAt/moderatedBy/moderationNote's shape
   // below but for the pre-publish workflow rather than the post-publish
   // safety valve.
-  reviewStatus     ArticleReviewStatus @default(not_submitted) @map("review_status")
-  reviewNote       String?             @map("review_note")
-  reviewedAt       DateTime?           @map("reviewed_at") @db.Timestamptz(6)
-  reviewedBy       String?             @map("reviewed_by") @db.Uuid
+  reviewStatus   ArticleReviewStatus @default(not_submitted) @map("review_status")
+  reviewNote     String?             @map("review_note")
+  reviewedAt     DateTime?           @map("reviewed_at") @db.Timestamptz(6)
+  reviewedBy     String?             @map("reviewed_by") @db.Uuid
   // Session 38 (Keen Africans — Editor Workflow). Scheduled publishing.
   // Set by scheduleArticle() (a future timestamp only); status remains
   // 'draft' the whole time it's pending — a scheduled article is NOT
@@ -1853,7 +1869,7 @@ model Article {
   // reuse instead) flips status to 'published' once scheduledAt is due.
   // Cleared (set back to null) by publishArticle() (immediate publish
   // supersedes it), unpublishArticle(), and cancelScheduledPublish().
-  scheduledAt      DateTime?           @map("scheduled_at") @db.Timestamptz(6)
+  scheduledAt    DateTime?           @map("scheduled_at") @db.Timestamptz(6)
   // Session 36 (Keen Africans — Profile & Identity). Denormalized snapshot
   // of the author's display name at creation time, same "stability over
   // always-fresh" trade-off as Certificate.studentNameSnapshot below — set
@@ -1863,16 +1879,16 @@ model Article {
   // every public read (listPublishedArticles/getPublicArticleBySlug) — see
   // that function's own comment for why the workaround is no longer needed
   // at all (Profile, unlike User, has a fully public SELECT policy).
-  authorName       String        @map("author_name")
-  coverAssetId     String?       @map("cover_asset_id") @db.Uuid
-  publishedAt      DateTime?     @map("published_at") @db.Timestamptz(6)
-  moderatedAt      DateTime?     @map("moderated_at") @db.Timestamptz(6)
-  moderatedBy      String?       @map("moderated_by") @db.Uuid
-  moderationNote   String?       @map("moderation_note")
-  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  authorName     String              @map("author_name")
+  coverAssetId   String?             @map("cover_asset_id") @db.Uuid
+  publishedAt    DateTime?           @map("published_at") @db.Timestamptz(6)
+  moderatedAt    DateTime?           @map("moderated_at") @db.Timestamptz(6)
+  moderatedBy    String?             @map("moderated_by") @db.Uuid
+  moderationNote String?             @map("moderation_note")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  author     User  @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  author     User   @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   coverAsset Asset? @relation("ArticleCover", fields: [coverAssetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   moderator  User?  @relation("ArticleModerator", fields: [moderatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
   reviewer   User?  @relation("ArticleReviewer", fields: [reviewedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -1919,6 +1935,24 @@ model Profile {
   websiteUrl    String?  @map("website_url")
   xUrl          String?  @map("x_url")
   avatarAssetId String?  @map("avatar_asset_id") @db.Uuid
+  // Session 40 (Keen Africans — LinkedIn Verification). Denormalized from
+  // users.email_verified_at — see src/lib/profiles.ts's ensureProfile()
+  // (seeds this from the user's own row at creation) and
+  // src/lib/email-verification.ts's confirmEmailVerification() (flips it
+  // true for a profile that already existed pre-verification). Kept here,
+  // not read live off "users" at render time, for the same reason every
+  // other public-page read in this file avoids "users": that table has no
+  // anonymous SELECT branch by design. Drives the public, non-checkmark
+  // "Keen African" membership label — see docs/KEEN_AFRICANS.md's
+  // Verification section for the full two-tier badge model.
+  emailVerified Boolean  @default(false) @map("email_verified")
+  // Session 40. Editorial flag, fully independent of verification —
+  // src/lib/profiles.ts's setProfileFeatured() (articles.manage-gated).
+  // Rendered with a deliberately different label/style than the
+  // verification checkmark (see the "Must NOT" in
+  // sessions/40-keen-africans-linkedin-verification.md: never let this
+  // look like a verification badge).
+  featured      Boolean  @default(false)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -1927,4 +1961,69 @@ model Profile {
 
   @@index([userId])
   @@map("profiles")
+}
+
+// Session 40 (Keen Africans — LinkedIn Verification).
+//
+// LinkedIn's "Sign In with LinkedIn using OpenID Connect" (the current,
+// only supported product — the legacy r_liteprofile/r_emailaddress scopes
+// are retired) grants name/email/photo only; there is no scope or API
+// surface exposing whether LinkedIn itself has verified a member's
+// identity to a third party (confirmed against LinkedIn's current
+// Microsoft-Learn-hosted API docs — see docs/KEEN_AFRICANS.md). So this is
+// a real human-review workflow, not an automatic badge:
+//
+//   unverified -> linkedin_connected -> verified
+//                        ^                |
+//                        `---- rejected --'
+//
+// unverified has no row at all (see getVerificationStatus()). A row is
+// created the moment someone self-service-connects LinkedIn
+// (src/lib/verification.ts's connectLinkedIn()) and only ever holds
+// linkedin_connected at that point (enforced at the RLS layer, not just in
+// application code — see the keen_africans_verification migration's
+// keen_african_verifications_self_connect policy: a self-issued write can
+// never result in any other status). Only an actor holding
+// verification.review (or super_admin) can move a row to verified/
+// rejected (keen_african_verifications_review policy).
+//
+// Kept as its own table, separate from Profile, deliberately: this table
+// carries reviewer-only information (reviewedBy, reviewNote) that must
+// never be blanket-public the way Profile's columns are (profiles_select
+// is unconditionally open) — see keen_africans_verification migration's
+// header for the full reasoning, which mirrors Session 36's own
+// Profile-vs-User table split.
+enum VerificationStatus {
+  linkedin_connected
+  verified
+  rejected
+}
+
+model KeenAfricanVerification {
+  id     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String             @unique @map("user_id") @db.Uuid
+  status VerificationStatus
+
+  // Snapshot of the connected LinkedIn identity at the moment of connect/
+  // reconnect — exactly what "Sign In with LinkedIn using OpenID Connect"
+  // returns (name/picture claims), never re-fetched live. This is what a
+  // reviewer's lightweight check looks at; not stored anywhere else.
+  linkedinProviderAccountId String?   @map("linkedin_provider_account_id")
+  linkedinName              String?   @map("linkedin_name")
+  linkedinPictureUrl        String?   @map("linkedin_picture_url")
+  connectedAt               DateTime? @map("connected_at") @db.Timestamptz(6)
+
+  reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  reviewedBy String?   @map("reviewed_by") @db.Uuid
+  reviewNote String?   @map("review_note")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user     User  @relation("UserVerification", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer User? @relation("VerificationReviewer", fields: [reviewedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([status])
+  @@map("keen_african_verifications")
 }

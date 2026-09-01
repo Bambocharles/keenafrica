@@ -3,10 +3,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { auth } from "@/lib/auth";
+import { auth, signIn } from "@/lib/auth";
 import { requestPasswordReset } from "@/lib/password-reset";
 import { sendMail } from "@/lib/mailer";
 import { setNotificationPreference } from "@/lib/notifications";
+import { OAUTH_LINK_INTENT_COOKIE, createLinkIntentValue } from "@/lib/oauth-link-intent";
 
 /**
  * Self-service password reset — moved here from the dashboard's old
@@ -74,4 +75,30 @@ export async function updateArticleUnpublishedPreferenceAction(formData: FormDat
   const enabled = formData.get("articleUnpublishedByAdmin") === "on";
   await setNotificationPreference(actor, "article_unpublished_by_admin", enabled);
   revalidatePath("/account");
+}
+
+/**
+ * Session 40 (Keen Africans — LinkedIn Verification). Self-service
+ * "connect LinkedIn" — identical shape to Session 19's connectGoogleAction
+ * (see e.g. src/app/student/(protected)/profile/actions.ts): mints a
+ * short-lived, signed link-intent cookie identifying THIS authenticated
+ * user, then hands off to the LinkedIn OAuth flow. src/lib/oauth-
+ * identity.ts's resolveLinkedInSignIn() reads that cookie to link the
+ * account and moves verification status to 'linkedin_connected' — see its
+ * own doc comment.
+ */
+export async function connectLinkedInAction() {
+  const session = await auth();
+  if (!session?.user) throw new Error("Not authenticated");
+
+  const store = await cookies();
+  store.set(OAUTH_LINK_INTENT_COOKIE, createLinkIntentValue(session.user.id), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 300,
+    path: "/",
+  });
+
+  await signIn("linkedin", { redirectTo: "/account?linkedinConnected=1" });
 }

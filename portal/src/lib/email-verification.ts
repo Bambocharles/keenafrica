@@ -82,6 +82,14 @@ export async function confirmEmailVerification(rawToken: string): Promise<Confir
   await withRls({ userId: record.userId, emailVerificationLookup: true }, async (tx) => {
     await tx.user.update({ where: { id: record.userId }, data: { emailVerifiedAt: new Date() } });
     await tx.emailVerificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } });
+    // Session 40 (Keen Africans — LinkedIn Verification). Denormalized sync
+    // for the public "Keen African" membership label — see
+    // profiles.ts's ensureProfile() for the other half (seeds this at
+    // profile-creation time for the ordering where a profile already
+    // exists before email verification completes). updateMany (not
+    // update) because a profile might not exist yet at this exact
+    // moment — a safe no-op in that case, not an error.
+    await tx.profile.updateMany({ where: { userId: record.userId }, data: { emailVerified: true } });
   });
 
   await recordAuditEvent({

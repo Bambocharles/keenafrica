@@ -122,6 +122,15 @@ export const PERMISSIONS = {
   // valve this session's brief requires.
   ARTICLES_WRITE: "articles.write",
   ARTICLES_MANAGE: "articles.manage",
+  // Added by Session 40 (Keen Africans — LinkedIn Verification). A
+  // deliberately SEPARATE key from articles.manage, not a reuse of it —
+  // sessions/41-keen-africans-admin-moderation.md's own brief explicitly
+  // asks not to assume article moderators and identity reviewers are the
+  // same people without confirming with the site owner. Kept decoupled so
+  // that can be decided later (a distinct reviewer role/person) with zero
+  // migration; today ADMIN/SUPER_ADMIN hold both keys via
+  // ALL_PERMISSION_KEYS, same as every other admin-only capability.
+  VERIFICATION_REVIEW: "verification.review",
 } as const;
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 

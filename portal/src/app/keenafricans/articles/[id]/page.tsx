@@ -5,6 +5,7 @@ import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, renderArticleBodyHtml, resolveRedirectSlug } from "@/lib/articles";
 import { ShareLinks } from "./ShareLinks";
 import { LegalFooter } from "../../LegalFooter";
+import { VerificationBadge } from "../../VerificationBadge";
 import styles from "../../site.module.css";
 
 /**
@@ -99,8 +100,7 @@ export default async function ArticlePage({
             ) : (
               <span>{article.author.name}</span>
             )}
-            {/* Verification badge slot — deliberately empty, Session 40's territory. */}
-            <span data-verification-badge-slot aria-hidden />
+            <VerificationBadge member={article.author.member} verified={article.author.verified} />
             {article.publishedAt && <time dateTime={article.publishedAt.toISOString()}>{new Date(article.publishedAt).toLocaleDateString()}</time>}
           </div>
           <ShareLinks url={articleUrl} title={article.title} />
