@@ -134,7 +134,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Deny login without distinguishing it from a bad password in the
         // response — a suspended account shouldn't be discoverable by an
         // unauthenticated caller any more than a nonexistent one is.
-        if (user.status === "suspended") {
+        // 'deleted' (Session 37) is treated the same way here — belt-and-
+        // suspenders only: anonymizeOwnAccount() already clears
+        // passwordHash, so `valid` above is already false for a deleted
+        // account regardless of this check.
+        if (user.status === "suspended" || user.status === "deleted") {
           await recordAuditEvent({
             actorId: user.id,
             action: "login.denied_suspended",

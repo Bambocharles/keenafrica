@@ -293,6 +293,48 @@ export async function removeAvatar(actor: AuthzActor) {
 }
 
 /**
+ * Account & Security (Session 37) — the Profile half of self-service
+ * account deletion. Called by src/lib/articles.ts's
+ * deleteOwnKeenAfricanAccount() BEFORE that function's call to
+ * src/lib/users.ts's anonymizeOwnAccount() (the actual point of no return —
+ * see that function's own comment for why the reversible, self-scoped
+ * steps run first). Scrubs every public-facing field except `username`:
+ * the profile URL (`/u/<username>`) stays live and resolvable rather than
+ * 404ing — every article byline link pointing at it keeps working, now
+ * showing the anonymized name instead. A no-op if the account somehow has
+ * no profile row yet (defensive only — ensureProfile() runs on every
+ * keenafricans protected page load, same fallback shape resolveAuthorName()
+ * above already uses).
+ */
+export async function anonymizeOwnProfile(actor: AuthzActor, anonymizedName: string): Promise<void> {
+  const profile = await withRls(actorRlsCtx(actor), (tx) => tx.profile.findUnique({ where: { userId: actor.id } }));
+  if (!profile) return;
+
+  if (profile.avatarAssetId) {
+    await removeAvatar(actor);
+  }
+
+  await withRls(actorRlsCtx(actor), (tx) =>
+    tx.profile.update({
+      where: { id: profile.id },
+      data: {
+        displayName: anonymizedName,
+        bio: null,
+        country: null,
+        profession: null,
+        interests: [],
+        linkedinUrl: null,
+        githubUrl: null,
+        websiteUrl: null,
+        xUrl: null,
+      },
+    })
+  );
+
+  await recordAuditEvent({ actorId: actor.id, action: "profile.anonymized", entityType: "Profile", entityId: profile.id });
+}
+
+/**
  * Batch username lookup by user id, for linking an article byline
  * (authorName is a snapshot with no username on it — see
  * schema.prisma's Article.authorName comment) to its live public profile

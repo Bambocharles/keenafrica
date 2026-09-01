@@ -72,7 +72,12 @@ async function signInAsExisting(
   user: { id: string; email: string; name: string; status: string },
   ipAddress?: string | null
 ): Promise<GoogleSignInResult> {
-  if (user.status === "suspended") {
+  // 'deleted' (Session 37) is treated the same as 'suspended' here — belt-
+  // and-suspenders only: the keen_africans_account_deletion migration's new
+  // user_identities_delete policy lets anonymizeOwnAccount() remove every
+  // linked identity in the same call, so this row should never actually
+  // still exist for a deleted account by the time Google sign-in reaches it.
+  if (user.status === "suspended" || user.status === "deleted") {
     await auditRejection("account_suspended", user.id);
     return { outcome: "rejected", reason: "account_suspended" };
   }

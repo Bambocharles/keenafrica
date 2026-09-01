@@ -26,7 +26,10 @@ type Status =
   // OrganizationMembership.status / OrganizationInvitation.status.
   | "pending"
   | "invited"
-  | "removed";
+  | "removed"
+  // Added by Session 37 (Keen Africans — Account & Security) for
+  // User.status's new self-service-deletion value.
+  | "deleted";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -51,6 +54,7 @@ const LABEL: Record<Status, string> = {
   pending: "Pending",
   invited: "Invited",
   removed: "Removed",
+  deleted: "Deleted",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -77,6 +81,7 @@ export function StatusBadge({ status }: { status: Status }) {
     pending: styles["badge-paused"],
     invited: styles["badge-draft"],
     removed: styles["badge-suspended"],
+    deleted: styles["badge-suspended"],
   }[status];
 
   return (

@@ -20,7 +20,7 @@ import { createSession, markSessionSteppedUp } from "@/lib/sessions";
 const TEST_BCRYPT_COST = 4;
 
 export async function createTestUser(
-  opts: { roles?: RoleName[]; status?: "active" | "suspended" } = {}
+  opts: { roles?: RoleName[]; status?: "active" | "suspended" | "deleted" } = {}
 ) {
   const passwordHash = await hash("Test1234!", TEST_BCRYPT_COST);
   const user = await prisma.user.create({

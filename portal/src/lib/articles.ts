@@ -7,7 +7,8 @@ import { actorRlsCtx } from "@/lib/courses";
 import { countRecentAuditEvents } from "@/lib/rate-limit";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
 import { getStorageDriver } from "@/lib/storage";
-import { resolveAuthorName, getUsernamesByUserIds } from "@/lib/profiles";
+import { resolveAuthorName, getUsernamesByUserIds, anonymizeOwnProfile } from "@/lib/profiles";
+import { anonymizeOwnAccount, assertOwnAccountDeletable } from "@/lib/users";
 
 /**
  * Keen Africans — Article entity (Session 34). Open self-registration, no
@@ -545,4 +546,52 @@ export async function getPublicArticleCoverBytes(
 
   const buffer = await getStorageDriver().get(asset.storageKey);
   return { buffer, mimeType: asset.mimeType };
+}
+
+// --- Account deletion (Session 37) ---------------------------------------
+
+/**
+ * The site owner's explicit deletion policy (sessions/37-keen-africans-
+ * account-security.md): deleting a Keen African's account anonymizes it —
+ * published articles are NOT removed, they stay live under the anonymized
+ * attribution. This is the one real entry point for that, orchestrating
+ * three modules' own self-scoped mutations in a deliberate order:
+ *
+ * 1. Reattribute the caller's own articles (this module — below).
+ * 2. Scrub the caller's Profile (src/lib/profiles.ts's
+ *    anonymizeOwnProfile()).
+ * 3. src/lib/users.ts's anonymizeOwnAccount() — the actual point of no
+ *    return: password/email wiped, every session and linked OAuth identity
+ *    killed. Called LAST, on purpose — steps 1-2 are plain self-scoped
+ *    writes on rows this account still fully controls; if either of them
+ *    were to fail, nothing irreversible has happened yet and the caller can
+ *    just retry. Reversing the order would risk the opposite: an account
+ *    already locked out, with articles never actually reattributed.
+ *
+ * Lives here (not in users.ts, which stays fully portal-agnostic — see its
+ * own comment on anonymizeOwnAccount()) because this module already
+ * imports src/lib/profiles.ts (createArticle()'s resolveAuthorName()), so
+ * this direction of dependency (articles.ts -> profiles.ts, articles.ts ->
+ * users.ts) adds no new edge; profiles.ts importing articles.ts the other
+ * way would.
+ */
+export const DELETED_ACCOUNT_NAME = "Former Keen African";
+
+export async function deleteOwnKeenAfricanAccount(actor: AuthzActor): Promise<void> {
+  // Checked FIRST, before any mutation — a blocked attempt (stale step-up,
+  // a privileged account) must be a true no-op, not "articles/profile
+  // already scrubbed, account itself untouched." See
+  // assertOwnAccountDeletable()'s own comment.
+  await assertOwnAccountDeletable(actor);
+
+  await withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.updateMany({ where: { authorId: actor.id }, data: { authorName: DELETED_ACCOUNT_NAME } })
+  );
+
+  await anonymizeOwnProfile(actor, DELETED_ACCOUNT_NAME);
+
+  // The actual point of no return — see this function's own header comment
+  // for why it runs last, and assertOwnAccountDeletable()'s own comment for
+  // why re-checking here too is deliberate, not redundant waste.
+  await anonymizeOwnAccount(actor, { anonymizedName: DELETED_ACCOUNT_NAME });
 }

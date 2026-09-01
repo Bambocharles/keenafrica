@@ -538,6 +538,61 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
     });
   });
 
+  describe("Account Deletion & Anonymization (Session 37)", () => {
+    it("user_identities_delete: an outsider cannot delete someone else's linked identity", async () => {
+      const setup = new PrismaClient();
+      const owner = await setup.user.create({
+        data: { email: `rls-del-owner-${randomUUID()}@example.com`, name: "Owner", passwordHash: "x" },
+      });
+      const outsider = await setup.user.create({
+        data: { email: `rls-del-outsider-${randomUUID()}@example.com`, name: "Outsider", passwordHash: "x" },
+      });
+      const identity = await setup.userIdentity.create({
+        data: { userId: owner.id, provider: "google", providerAccountId: randomUUID() },
+        select: { id: true },
+      });
+      await setup.$disconnect();
+
+      // No RLS error is thrown — a DELETE whose USING clause matches zero
+      // rows simply deletes zero rows (same shape the sessions_update test
+      // above documents for updateMany), so the proof is the row surviving.
+      const attempt = await asContext({ userId: outsider.id }, (tx) =>
+        tx.userIdentity.deleteMany({ where: { id: identity.id } })
+      );
+      expect(attempt.count).toBe(0);
+
+      const stillThere = await asContext({ userId: owner.id }, (tx) => tx.userIdentity.findUnique({ where: { id: identity.id } }));
+      expect(stillThere?.id).toBe(identity.id);
+
+      const cleanup = new PrismaClient();
+      await cleanup.userIdentity.delete({ where: { id: identity.id } });
+      await cleanup.user.deleteMany({ where: { id: { in: [owner.id, outsider.id] } } });
+      await cleanup.$disconnect();
+    });
+
+    it("user_identities_delete: the identity's own owner CAN delete it — the exact operation anonymizeOwnAccount() relies on", async () => {
+      const setup = new PrismaClient();
+      const owner = await setup.user.create({
+        data: { email: `rls-del-self-${randomUUID()}@example.com`, name: "Self", passwordHash: "x" },
+      });
+      const identity = await setup.userIdentity.create({
+        data: { userId: owner.id, provider: "google", providerAccountId: randomUUID() },
+        select: { id: true },
+      });
+      await setup.$disconnect();
+
+      const result = await asContext({ userId: owner.id }, (tx) => tx.userIdentity.deleteMany({ where: { userId: owner.id } }));
+      expect(result.count).toBe(1);
+
+      const gone = await asContext({ userId: owner.id }, (tx) => tx.userIdentity.findUnique({ where: { id: identity.id } }));
+      expect(gone).toBeNull();
+
+      const cleanup = new PrismaClient();
+      await cleanup.user.delete({ where: { id: owner.id } });
+      await cleanup.$disconnect();
+    });
+  });
+
   describe("MFA & Account Security (Session 20)", () => {
     it("totp_credentials/recovery_codes: a plain context (no app.user_id) can neither read nor write either table", async () => {
       const setup = new PrismaClient();

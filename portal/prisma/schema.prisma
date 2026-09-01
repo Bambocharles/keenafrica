@@ -22,6 +22,11 @@ enum MembershipRole {
 enum UserStatus {
   active
   suspended
+  // Session 37 (Keen Africans — Account & Security). Set once by
+  // src/lib/users.ts's anonymizeOwnAccount() — terminal, never reverted
+  // (unlike suspended/active, which toggle back and forth via
+  // suspendUser()/reinstateUser()). See users.anonymizedAt below.
+  deleted
 }
 
 // Education Core (Session 04).
@@ -363,6 +368,15 @@ model User {
   isSuperAdmin Boolean    @default(false) @map("is_super_admin")
   status       UserStatus @default(active)
   suspendedAt  DateTime?  @map("suspended_at") @db.Timestamptz(6)
+  // Session 37 (Keen Africans — Account & Security). Set once by
+  // src/lib/users.ts's anonymizeOwnAccount() at the moment self-service
+  // account deletion runs — see that function's own comment for the full
+  // anonymization contract (name/email scrubbed, password cleared, every
+  // session/linked identity revoked, status set to 'deleted'). The User row
+  // itself is never hard-deleted (users_delete stays super_admin-only,
+  // unchanged — see identity_security_foundation migration's own note that
+  // account deletion was out of scope until this session).
+  anonymizedAt DateTime?  @map("anonymized_at") @db.Timestamptz(6)
   // Session 34 (Keen Africans) — set once by
   // src/lib/email-verification.ts's confirmEmailVerification(). Not tied to
   // any particular role/portal (denormalized onto the canonical User, same

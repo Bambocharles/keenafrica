@@ -5,6 +5,7 @@ import { AuthorizationError } from "@/lib/authz";
 import { createSession, resolveSessionAuthz } from "@/lib/sessions";
 import { StepUpRequiredError } from "@/lib/mfa";
 import {
+  anonymizeOwnAccount,
   assignRole,
   changeOwnEmail,
   changeOwnPassword,
@@ -12,6 +13,7 @@ import {
   getOwnProfile,
   getUserById,
   listUsers,
+  PrivilegedAccountDeletionError,
   reinstateUser,
   removeRole,
   suspendUser,
@@ -333,6 +335,81 @@ describe("changeOwnPassword / changeOwnEmail — self-service, step-up gated (Se
 
     const takenRow = await prisma.user.findUniqueOrThrow({ where: { id: taken.id }, select: { email: true } });
     await expect(changeOwnEmail(steppedUp, takenRow.email)).rejects.toThrow("email_taken");
+  });
+});
+
+describe("anonymizeOwnAccount — self-service account deletion (Session 37)", () => {
+  it("without step-up is rejected, and nothing is changed", async () => {
+    const u = await user({ roles: ["KEEN_AFRICAN"] });
+    const actor = await actorFromUser(u.id);
+
+    await expect(anonymizeOwnAccount(actor, { anonymizedName: "Former Keen African" })).rejects.toThrow(
+      StepUpRequiredError
+    );
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(row.status).toBe("active");
+    expect(row.passwordHash).not.toBeNull();
+  });
+
+  it("with step-up anonymizes name/email/password, sets status, revokes sessions, and removes MFA/OAuth rows", async () => {
+    const u = await user({ roles: ["KEEN_AFRICAN"] });
+    const otherSession = await createSession({ userId: u.id });
+    await prisma.userIdentity.create({ data: { userId: u.id, provider: "google", providerAccountId: `test-${u.id}` } });
+    await prisma.totpCredential.create({ data: { userId: u.id, secretCiphertext: "x", enabledAt: new Date() } });
+    await prisma.recoveryCode.create({ data: { userId: u.id, codeHash: "x" } });
+    const steppedUp = await steppedUpActorFromUser(u.id);
+    const originalEmail = u.email;
+
+    await anonymizeOwnAccount(steppedUp, { anonymizedName: "Former Keen African" });
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(row.name).toBe("Former Keen African");
+    expect(row.email).not.toBe(originalEmail);
+    expect(row.email).toContain(u.id);
+    expect(row.passwordHash).toBeNull();
+    expect(row.status).toBe("deleted");
+    expect(row.anonymizedAt).not.toBeNull();
+
+    // The session steppedUpActorFromUser() itself created is revoked too —
+    // revokeAllUserSessionsAsSystem() is unconditional, not "every session
+    // except the caller's own."
+    const sessions = await prisma.session.findMany({ where: { userId: u.id } });
+    expect(sessions.every((s) => s.revokedAt !== null)).toBe(true);
+    const otherSessionRow = await prisma.session.findUniqueOrThrow({ where: { id: otherSession.id } });
+    expect(otherSessionRow.revokedAt).not.toBeNull();
+
+    expect(await prisma.userIdentity.count({ where: { userId: u.id } })).toBe(0);
+    expect(await prisma.totpCredential.count({ where: { userId: u.id } })).toBe(0);
+    expect(await prisma.recoveryCode.count({ where: { userId: u.id } })).toBe(0);
+
+    const audit = await prisma.auditEvent.findFirst({ where: { action: "user.self_deleted", entityId: u.id } });
+    expect(audit).not.toBeNull();
+  });
+
+  it("refuses to anonymize a SUPER_ADMIN account (isSuperAdmin flag), leaving it untouched", async () => {
+    const u = await user();
+    await prisma.user.update({ where: { id: u.id }, data: { isSuperAdmin: true } });
+    const steppedUp = await steppedUpActorFromUser(u.id); // reads isSuperAdmin fresh from the row above
+
+    await expect(anonymizeOwnAccount(steppedUp, { anonymizedName: "Former Keen African" })).rejects.toThrow(
+      PrivilegedAccountDeletionError
+    );
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(row.status).toBe("active");
+  });
+
+  it("refuses to anonymize an account holding the ADMIN role, even without the isSuperAdmin flag", async () => {
+    const u = await user({ roles: ["ADMIN"] });
+    const steppedUp = await steppedUpActorFromUser(u.id);
+
+    await expect(anonymizeOwnAccount(steppedUp, { anonymizedName: "Former Keen African" })).rejects.toThrow(
+      PrivilegedAccountDeletionError
+    );
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(row.status).toBe("active");
   });
 });
 

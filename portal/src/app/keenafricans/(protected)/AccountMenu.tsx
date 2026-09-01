@@ -94,6 +94,9 @@ export function AccountMenu({ name, email, avatarAssetId, username, signOutActio
           <a role="menuitem" href="/account" className={styles.accountDropdownItem}>
             Account
           </a>
+          <a role="menuitem" href="/security" className={styles.accountDropdownItem}>
+            Security
+          </a>
           <div className={styles.accountDropdownDivider} />
           <form action={signOutAction}>
             <button type="submit" role="menuitem" className={styles.accountDropdownItemButton}>

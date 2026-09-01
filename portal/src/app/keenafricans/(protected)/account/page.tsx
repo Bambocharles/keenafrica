@@ -63,9 +63,32 @@ export default async function AccountPage({
         </form>
       </Card>
 
-      <Banner>
-        Email change, two-factor authentication, and other security settings are coming in a future update.
-      </Banner>
+      <Card style={{ padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+        <div className={ui.subCell}>
+          Change your password or email, set up two-factor authentication, or manage your active sessions.
+        </div>
+        <a href="/security" style={{ textDecoration: "none" }}>
+          <Button type="button" variant="outline">
+            Go to Security
+          </Button>
+        </a>
+      </Card>
+
+      <Card style={{ padding: "20px", display: "grid", gap: "10px", maxWidth: 420, borderColor: "var(--danger-ink)" }}>
+        <SectionHeader title="Danger zone" count={0} />
+        <p className={ui.subCell} style={{ margin: 0 }}>
+          Deleting your account anonymizes it — your name is replaced and your login is permanently disabled — but
+          any articles you&apos;ve published stay live on Keen Africans under that anonymized name. This cannot be
+          undone.
+        </p>
+        <div>
+          <a href="/account/delete" style={{ textDecoration: "none" }}>
+            <Button type="button" variant="danger">
+              Delete my account
+            </Button>
+          </a>
+        </div>
+      </Card>
     </div>
   );
 }
