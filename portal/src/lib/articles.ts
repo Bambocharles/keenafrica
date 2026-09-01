@@ -728,7 +728,13 @@ export async function listArticlesPendingReview(actor: AuthzActor) {
     tx.article.findMany({
       where: { reviewStatus: "in_review" },
       orderBy: { updatedAt: "asc" },
-      include: { author: { select: { id: true, name: true, email: true } } },
+      // profile.username, follow-up to Session 36: the admin console's
+      // "open live" link now needs the article's public
+      // /<username>/<slug> URL — reuses the direct User.profile relation
+      // (this query already runs under an admin-authorized, non-anonymous
+      // context, so there's no reason to route through the public
+      // getUsernamesByUserIds() helper instead).
+      include: { author: { select: { id: true, name: true, email: true, profile: { select: { username: true } } } } },
     })
   );
 }
@@ -910,7 +916,13 @@ export async function listArticlesForModeration(actor: AuthzActor, filter: ListA
         ...(filter.reportedOnly ? { id: { in: Array.from(reportedIds) } } : {}),
       },
       orderBy: { updatedAt: "desc" },
-      include: { author: { select: { id: true, name: true, email: true } } },
+      // profile.username, follow-up to Session 36: the admin console's
+      // "open live" link now needs the article's public
+      // /<username>/<slug> URL — reuses the direct User.profile relation
+      // (this query already runs under an admin-authorized, non-anonymous
+      // context, so there's no reason to route through the public
+      // getUsernamesByUserIds() helper instead).
+      include: { author: { select: { id: true, name: true, email: true, profile: { select: { username: true } } } } },
     })
   );
 

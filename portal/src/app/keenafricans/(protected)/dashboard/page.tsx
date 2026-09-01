@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { listMyArticles } from "@/lib/articles";
 import { isEmailVerified } from "@/lib/email-verification";
+import { getMyProfile } from "@/lib/profiles";
 import { resendVerificationAction } from "../articles/actions";
 import { Banner, Button, Card, EmptyState, SectionHeader, StatusBadge } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
@@ -20,7 +21,7 @@ export default async function KeenAfricansDashboardPage({
   const user = session.user;
 
   const { error, verification } = await searchParams;
-  const [articles, verified] = await Promise.all([listMyArticles(user), isEmailVerified(user.id)]);
+  const [articles, verified, profile] = await Promise.all([listMyArticles(user), isEmailVerified(user.id), getMyProfile(user)]);
   const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
 
   return (
@@ -70,7 +71,7 @@ export default async function KeenAfricansDashboardPage({
                       <>
                         {" "}
                         &middot;{" "}
-                        <a href={`https://keenafricans.${rootDomain}/articles/${a.slug}`} target="_blank" rel="noreferrer">
+                        <a href={`https://keenafricans.${rootDomain}/${profile.username}/${a.slug}`} target="_blank" rel="noreferrer">
                           view live ↗
                         </a>
                       </>

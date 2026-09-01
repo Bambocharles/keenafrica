@@ -127,6 +127,36 @@ describe("updateProfile", () => {
   });
 });
 
+/**
+ * Follow-up to Session 36 (username-prefixed article URLs,
+ * keenafricans.<root>/<username>/<slug>). A username equal to any
+ * existing top-level route segment under src/app/keenafricans (e.g.
+ * "search", "articles") would make that author's articles permanently
+ * unreachable — Next.js always resolves the existing literal route
+ * before it would ever consider the [username]/[slug] dynamic route.
+ */
+describe("reserved usernames (username-prefixed article URLs follow-up)", () => {
+  it("updateProfile() rejects a reserved word", async () => {
+    const actor = await keenAfrican();
+    await ensureProfile(actor, { name: "Reserved Word Test" });
+    await expect(updateProfile(actor, { username: "search" })).rejects.toThrow(/reserved/i);
+    await expect(updateProfile(actor, { username: "articles" })).rejects.toThrow(/reserved/i);
+    // "u" itself is also reserved, but is rejected earlier by the
+    // 3-character-minimum format check (USERNAME_RE) — still correctly
+    // refused either way, just via a different error message.
+    await expect(updateProfile(actor, { username: "u" })).rejects.toThrow();
+  });
+
+  it("ensureProfile()'s auto-generation never produces a reserved word, even when the account's name slugifies to one", async () => {
+    const actor = await keenAfrican();
+    // slugifyUsername("Search") -> "search", which is itself reserved —
+    // the suffix loop must skip straight past it rather than returning it.
+    const profile = await ensureProfile(actor, { name: "Search" });
+    expect(profile.username).not.toBe("search");
+    expect(profile.username).toMatch(/^search-\d+$/);
+  });
+});
+
 describe("resolveAuthorName", () => {
   it("prefers the actor's Profile.displayName", async () => {
     const actor = await keenAfrican();

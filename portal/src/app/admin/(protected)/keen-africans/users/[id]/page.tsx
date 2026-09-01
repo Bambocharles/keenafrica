@@ -254,7 +254,9 @@ export default async function KeenAfricanUserDetailPage({
                       {a.status === "published" && (
                         <a
                           className={ui.linkMono}
-                          href={`https://keenafricans.${process.env.ROOT_DOMAIN ?? "keenafrica.com"}/articles/${a.slug}`}
+                          href={`https://keenafricans.${process.env.ROOT_DOMAIN ?? "keenafrica.com"}${
+                            profile?.username ? `/${profile.username}/${a.slug}` : `/articles/${a.slug}`
+                          }`}
                           target="_blank"
                           rel="noreferrer"
                         >

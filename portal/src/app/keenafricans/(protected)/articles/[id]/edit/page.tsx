@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { getArticleForEdit, renderArticleBodyHtml, ArticleNotFoundError } from "@/lib/articles";
 import { AuthorizationError } from "@/lib/authz";
 import { isEmailVerified } from "@/lib/email-verification";
+import { getUsernamesByUserIds } from "@/lib/profiles";
 import { Banner, Button, Card, Field, Input, StatusBadge } from "@/components/ui";
 import { ArticleEditorClient } from "./ArticleEditorClient";
 import {
@@ -59,7 +60,15 @@ export default async function EditArticlePage({
     throw err;
   }
 
-  const [verified, rootDomain] = [await isEmailVerified(user.id), process.env.ROOT_DOMAIN ?? "keenafrica.com"];
+  const [verified, rootDomain, authorUsernames] = await Promise.all([
+    isEmailVerified(user.id),
+    process.env.ROOT_DOMAIN ?? "keenafrica.com",
+    // Not necessarily the current actor's own username — an admin
+    // (articles.manage) can reach this page for someone else's article.
+    getUsernamesByUserIds([article.authorId]),
+  ]);
+  const authorUsername = authorUsernames.get(article.authorId) ?? null;
+  const articlePublicPath = authorUsername ? `/${authorUsername}/${article.slug}` : `/articles/${article.slug}`;
   const preview = article.body ? renderArticleBodyHtml(article.body) : "";
   const isOwner = article.authorId === user.id;
   const reviewBlocksPublish = REVIEW_BLOCKS_PUBLISH.has(article.reviewStatus) && !user.isSuperAdmin && !user.permissions.includes("articles.manage");
@@ -75,7 +84,7 @@ export default async function EditArticlePage({
         <StatusBadge status={article.status} />
         {article.reviewStatus !== "not_submitted" && <StatusBadge status={article.reviewStatus} />}
         {article.status === "published" && (
-          <a href={`https://keenafricans.${rootDomain}/articles/${article.slug}`} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>
+          <a href={`https://keenafricans.${rootDomain}${articlePublicPath}`} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>
             View live ↗
           </a>
         )}
@@ -172,7 +181,7 @@ export default async function EditArticlePage({
       <Card style={{ padding: "18px 20px" }}>
         <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>Article URL</h3>
         <p style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--ink-faint)" }}>
-          keenafricans.{rootDomain}/articles/<strong>{article.slug}</strong>
+          keenafricans.{rootDomain}/{authorUsername ?? "…"}/<strong>{article.slug}</strong>
           {article.status === "published" && " — changing this after publishing keeps the old link working (it redirects here)."}
         </p>
         <form action={updateArticleSlugAction} style={{ display: "flex", gap: "10px", alignItems: "center" }}>
