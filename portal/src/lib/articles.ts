@@ -7,6 +7,7 @@ import { actorRlsCtx } from "@/lib/courses";
 import { countRecentAuditEvents } from "@/lib/rate-limit";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
 import { getStorageDriver } from "@/lib/storage";
+import { resolveAuthorName, getUsernamesByUserIds } from "@/lib/profiles";
 
 /**
  * Keen Africans — Article entity (Session 34). Open self-registration, no
@@ -243,6 +244,9 @@ export async function createArticle(input: CreateArticleInput, actor: AuthzActor
 
   await assertNotRateLimited(actor.id);
   const slug = await uniqueSlug(title);
+  // Snapshot, not a live join — see schema.prisma's Article.authorName
+  // comment. Resolved once, here, at creation time only.
+  const authorName = await resolveAuthorName(actor);
 
   const article = await withRls(actorRlsCtx(actor), (tx) =>
     tx.article.create({
@@ -253,6 +257,7 @@ export async function createArticle(input: CreateArticleInput, actor: AuthzActor
         body: input.body ?? "",
         excerpt: input.excerpt?.trim() || null,
         tags: normalizeTags(input.tags),
+        authorName,
       },
     })
   );
@@ -466,33 +471,19 @@ export async function getArticleForEdit(articleId: string, actor: AuthzActor) {
 const PUBLIC_PAGE_SIZE = 20;
 
 /**
- * Narrow internal system context (mirrors certificates.ts's
- * systemCertificateCtx()/progress.ts's systemProgressCtx() convention) —
- * used ONLY here, to resolve an author's display name for a public,
- * unauthenticated page. users_select's RLS has no anonymous branch at all
- * (by design — Session 02 never intended arbitrary user rows to be
- * publicly readable), so a plain `include: { author: {...} } }` under
- * withRls({}) makes Prisma's inner join come back null for the
- * (non-optional) author relation and throw
- * PrismaClientUnknownRequestError — reproduced live in production
- * immediately after this session's own deploy (public pages 500ing) and
- * fixed here. This bypasses RLS deliberately, narrowly, and only to select
- * `name` — never email/passwordHash/isSuperAdmin/anything else — for
- * users who are already known (by the caller) to be the author of a
- * published, publicly-readable article. A denormalized `authorName`
- * snapshot column on Article (the same pattern Certificate's
- * studentNameSnapshot/courseTitleSnapshot already use) would be the more
- * architecturally clean long-term fix; flagged in docs/KEEN_AFRICANS.md
- * as a follow-up rather than done as part of this incident fix.
+ * Session 36 replaced the elevated-context authorNamesByIds() workaround
+ * this comment used to describe (a narrow `withRls({ isSuperAdmin: true })`
+ * read of "users.name", needed because users_select has no anonymous
+ * branch) with two changes: authorName is now a denormalized snapshot
+ * column set once at article creation (see createArticle() above and
+ * schema.prisma's Article.authorName comment), so no per-read query is
+ * needed for the display name at all; and the profile-link username below
+ * comes from src/lib/profiles.ts's getUsernamesByUserIds(), which reads
+ * the "profiles" table (unconditionally public — see the
+ * keen_africans_profiles_core migration) instead of "users", so it needs
+ * no elevation either. The elevated-context pattern is fully removed from
+ * this file, not left coexisting with the new mechanism.
  */
-async function authorNamesByIds(userIds: string[]): Promise<Map<string, string>> {
-  if (userIds.length === 0) return new Map();
-  const users = await withRls({ isSuperAdmin: true }, (tx) =>
-    tx.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
-  );
-  return new Map(users.map((u) => [u.id, u.name]));
-}
-
 export async function listPublishedArticles(opts: { page?: number; tag?: string } = {}) {
   const page = Math.max(1, opts.page ?? 1);
   const where = {
@@ -512,8 +503,11 @@ export async function listPublishedArticles(opts: { page?: number; tag?: string 
     ])
   );
 
-  const names = await authorNamesByIds(articles.map((a) => a.authorId));
-  const withAuthor = articles.map((a) => ({ ...a, author: { name: names.get(a.authorId) ?? "Keen African" } }));
+  const usernames = await getUsernamesByUserIds(articles.map((a) => a.authorId));
+  const withAuthor = articles.map((a) => ({
+    ...a,
+    author: { name: a.authorName, username: usernames.get(a.authorId) ?? null },
+  }));
 
   return { articles: withAuthor, total, page, pageSize: PUBLIC_PAGE_SIZE };
 }
@@ -523,8 +517,8 @@ export async function getPublicArticleBySlug(slug: string) {
   const article = await withRls({}, (tx) => tx.article.findFirst({ where: { slug, status: "published" } }));
   if (!article) return null;
 
-  const names = await authorNamesByIds([article.authorId]);
-  return { ...article, author: { name: names.get(article.authorId) ?? "Keen African" } };
+  const usernames = await getUsernamesByUserIds([article.authorId]);
+  return { ...article, author: { name: article.authorName, username: usernames.get(article.authorId) ?? null } };
 }
 
 /**

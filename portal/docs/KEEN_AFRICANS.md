@@ -304,14 +304,116 @@ ownership) was found and resolved within the same session — see
 "Incident" above for the full record. The section is live, correctly
 authorized end to end, and publicly readable.
 
-## Required next-session actions
+## Required next-session actions (as of Session 34)
 
-- **Consider a denormalized `authorName` snapshot column on `Article`**
-  (mirrors `Certificate.studentNameSnapshot`), replacing
-  `authorNamesByIds()`'s narrow elevated-context workaround with the
-  architecturally cleaner fix.
+- ~~Consider a denormalized `authorName` snapshot column on `Article`~~ —
+  **done in Session 36**, see the new section below.
 - **Clean up the orphaned/broken `Asset` row** left behind by the storage
   mismatch (`10d94d8d-cd02-4488-8223-ed020e3c4eca` in production) — its
   metadata row exists but the underlying bytes were never written to R2;
   a reasonable candidate for the same soft-delete cleanup pass
-  Session 32's handoff already flagged for its own 2 orphaned rows.
+  Session 32's handoff already flagged for its own 2 orphaned rows. Still
+  open after Session 36 too — needs production access no sandbox so far
+  has had.
+
+## Public Profile & Account Identity (Session 36)
+
+Turns the author name on an article into a real, discoverable public
+profile, and replaces the static header identity with a real account
+menu. Foundational for every later Keen Africans session (37-44).
+
+### The `Profile` entity
+
+`prisma/schema.prisma`'s `Profile` — a table **separate from `User`**, on
+purpose: `id`, `userId` (unique, 1:1 with `User`), `username` (unique,
+the public URL), `displayName`, `bio`, `country`, `profession`,
+`interests` (`String[]`), `linkedinUrl`/`githubUrl`/`websiteUrl`/`xUrl`
+(plain URLs today, not yet verified connections — that's Session 40),
+`avatarAssetId` (FK to the existing `Asset` table).
+
+Why a separate table rather than columns on `users`: `users_select`'s RLS
+policy has no anonymous branch at all, by deliberate Session 02 design —
+which is exactly why Session 34 needed `authorNamesByIds()`'s elevated-
+context workaround in the first place (see "Incident" above). `Profile`
+holds *only* public-safe columns, so its SELECT policy can be
+unconditionally open (`USING (true)`) with zero risk of ever exposing
+`email`/`passwordHash`/`isSuperAdmin`/`status`. This is what let Session
+36 delete `authorNamesByIds()` entirely rather than add a second
+workaround alongside it — see below.
+
+Migrations: `20260901100000_keen_africans_profiles_core` (the table +
+RLS: `profiles_select` open to everyone, `profiles_write`/`update`
+self-only), `20260901110000_keen_africans_avatar_asset_entity_type` (the
+`'avatar'` `AssetEntityType` value, its own migration for the same
+enum-transaction reason every prior value addition needed),
+`20260901120000_keen_africans_avatar_asset_attachments` (extends
+`asset_attachments_select`/`write`/`delete` — the select branch is
+unconditional, since a `Profile` carries no draft state to protect, unlike
+`article_cover`'s published-only cascade), `20260901130000_keen_africans_article_author_name`
+(adds `articles.author_name`, backfilled from `users.name` for
+pre-existing rows since no `Profile` rows exist yet when it runs).
+
+### `authorName` snapshot — the flagged follow-up, now done
+
+`createArticle()` (`src/lib/articles.ts`) now calls
+`resolveAuthorName(actor)` (`src/lib/profiles.ts`) once, at creation, and
+stores the result in the new `authorName` column — same
+set-once-never-touched-again trade-off as
+`Certificate.studentNameSnapshot`. `authorNamesByIds()` is **deleted**,
+not left coexisting: the public reads
+(`listPublishedArticles`/`getPublicArticleBySlug`) use the snapshot
+directly (no query) plus a batch, unelevated `profiles` lookup
+(`getUsernamesByUserIds()`) for the byline's link — both paths need zero
+elevated RLS context, unlike the function they replace.
+
+### Registration stays minimal
+
+`keenafricans.<root>/register` collects first name, last name, email,
+password, and country only — everything else (avatar, bio, profession,
+interests, social links) is filled in later at `/profile`, never required
+at signup. `country` reaches the new `Profile` row via
+`ensureProfile()`, called once from the register Server Action (a bare
+`{ id: userId, isSuperAdmin: false, permissions: [] }` context — no
+session exists yet, same convention `email-verification.ts`'s
+`requestEmailVerification()` already established) and, idempotently, from
+every keenafricans protected page's layout (so a Google-sign-in account,
+which never runs the register Server Action, still gets a profile on
+first visit — with `country: null`, filled in later if the user wants).
+
+### Pages (additions)
+
+- `keenafricans.<root>/u/[username]` — public profile page, no login,
+  published-articles-only (`getPublicProfileByUsername`, `withRls({})`).
+  A verification-badge slot next to the display name is deliberately
+  empty (`data-verification-badge-slot`) — Session 40's hook.
+- `keenafricans.<root>/avatars/[assetId]` — public, unauthenticated avatar
+  bytes, mirrors `/covers/[assetId]` exactly (`getPublicAvatarBytes()`).
+- `(protected)/profile` — the public-profile editor: username/
+  displayName/bio/country/profession/interests/social links, avatar
+  upload/remove (`setAvatar`/`removeAvatar`, reusing `uploadAsset()` —
+  no new storage mechanism).
+- `(protected)/account` — private account settings, split from `/profile`
+  per this session's explicit rule ("Profile is public, Account is
+  private, never mixed into one settings page"). Today holds only the
+  self-service password-reset action moved here from the dashboard's old
+  embedded "Account" card (Session 34's own follow-up); email change/MFA
+  are Session 37's territory.
+
+### Account menu
+
+The protected topbar's static avatar `<div>` is replaced by
+`AccountMenu.tsx` (client component, click-toggle + outside-click/Escape-
+close — same shape Session 35's homepage dropdown already used).
+Avatar-or-initials, opening: View my profile, Write an article, My
+articles, Profile, Account, Log out. Structurally open for Session 37 to
+add Security/Settings rows.
+
+### Tests
+
+`profiles.test.ts` (username uniqueness/auto-generation, idempotent
+`ensureProfile()`, genuinely-optional registration fields,
+`updateProfile()` validation, `resolveAuthorName()`, published-only
+`getPublicProfileByUsername()`) and `profiles-rls.integration.test.ts`
+(anonymous read; an outsider can't write/update another user's profile or
+attach an avatar to it, even with a crafted request) — both against the
+real `portal_rls_test` role. 622/622 total passing, `tsc --noEmit` clean.

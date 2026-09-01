@@ -220,6 +220,22 @@ async function canAccessAssetAttachment(entityType: string, entityId: string, ac
     return !!article;
   }
 
+  if (entityType === "avatar") {
+    // A profile avatar is visible to exactly whoever can see the profile
+    // itself — reuses profiles_select's RLS-enforced scoping (Session 36),
+    // which is unconditionally open, same as this check: a Profile has no
+    // draft state to protect. Reused here purely for
+    // canAccessAsset()/getAssetForDownload() consistency (e.g. an admin
+    // browsing assets in the future); the actual public avatar route
+    // (keenafricans/avatars/[assetId]) calls
+    // src/lib/profiles.ts's getPublicAvatarBytes() directly, mirroring how
+    // the public cover-image route bypasses this actor-scoped path too.
+    const profile = await withRls(actorRlsCtx(actor), (tx) =>
+      tx.profile.findUnique({ where: { id: entityId }, select: { id: true } })
+    );
+    return !!profile;
+  }
+
   if (entityType === "certificate") {
     // A certificate's downloadable file is visible to exactly whoever can
     // see the certificate itself — reuses certificates_select's RLS-

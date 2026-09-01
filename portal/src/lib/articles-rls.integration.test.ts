@@ -60,7 +60,7 @@ describeIfConfigured("Keen Africans Row-Level Security (enforced by a non-superu
     admin = await mk("admin");
 
     const draft = await setup.article.create({
-      data: { authorId: author.id, title: "Draft Article", slug: `draft-${randomUUID()}`, body: "secret draft" },
+      data: { authorId: author.id, title: "Draft Article", slug: `draft-${randomUUID()}`, body: "secret draft", authorName: "RLS author" },
       select: { id: true },
     });
     draftArticleId = draft.id;
@@ -71,6 +71,7 @@ describeIfConfigured("Keen Africans Row-Level Security (enforced by a non-superu
         title: "Published Article",
         slug: `published-${randomUUID()}`,
         body: "public body",
+        authorName: "RLS author",
         status: "published",
         publishedAt: new Date(),
       },
@@ -147,7 +148,7 @@ describeIfConfigured("Keen Africans Row-Level Security (enforced by a non-superu
     await expect(
       asContext({ userId: outsider.id, permissions: ["articles.write"] }, (tx) =>
         tx.article.create({
-          data: { authorId: author.id, title: "Spoofed", slug: `spoofed-${randomUUID()}`, body: "x" },
+          data: { authorId: author.id, title: "Spoofed", slug: `spoofed-${randomUUID()}`, body: "x", authorName: "RLS author" },
         })
       )
     ).rejects.toThrow();
@@ -157,7 +158,7 @@ describeIfConfigured("Keen Africans Row-Level Security (enforced by a non-superu
     await expect(
       asContext({ userId: outsider.id, permissions: [] }, (tx) =>
         tx.article.create({
-          data: { authorId: outsider.id, title: "No permission", slug: `noperm-${randomUUID()}`, body: "x" },
+          data: { authorId: outsider.id, title: "No permission", slug: `noperm-${randomUUID()}`, body: "x", authorName: "RLS outsider" },
         })
       )
     ).rejects.toThrow();
@@ -193,7 +194,7 @@ describeIfConfigured("Keen Africans Row-Level Security (enforced by a non-superu
     expect(asset?.id).toBe(publishedCoverAssetId);
   });
 
-  it("regression: an anonymous caller can read a published article WITHOUT a nested author include throwing — users_select has no anonymous branch, so a naive `include: { author }` on this query would 500 in production (caught live, fixed in src/lib/articles.ts's authorNamesByIds())", async () => {
+  it("regression: an anonymous caller can read a published article WITHOUT a nested author include throwing — users_select has no anonymous branch, so a naive `include: { author }` on this query would still 500 in production. Session 34 fixed this with an elevated-context workaround (authorNamesByIds()); Session 36 removed that workaround entirely by denormalizing authorName onto Article and moving the profile-link lookup to the (unconditionally public) profiles table instead — see src/lib/articles.ts's listPublishedArticles()/getPublicArticleBySlug(). This test still proves the underlying users_select behavior holds, so nobody re-introduces the bug by adding a relation include here later.", async () => {
     // This is the exact shape src/lib/db.ts's application code runs under
     // withRls({}) — proven directly against the real restricted role
     // rather than the local-dev superuser connection every other test file

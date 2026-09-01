@@ -159,6 +159,25 @@ export async function cleanupTestArticles(articleIds: string[]): Promise<void> {
   await cleanupTestAssets(coverAssetIds);
 }
 
+/**
+ * Deletes a set of test-created Profile rows, including their avatar asset
+ * attachments — call this BEFORE cleanupTestUsers() for any users
+ * referenced as profile owners (keen_africans_profiles_core migration's
+ * FK is ON DELETE NO ACTION, same convention as every other cleanup helper
+ * here). Takes user ids, not profile ids, since Profile.userId is what
+ * every test fixture actually has on hand (mirrors cleanupTestArticles'
+ * article-id shape one level up — this is the userId-keyed equivalent).
+ */
+export async function cleanupTestProfiles(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  const profiles = await prisma.profile.findMany({ where: { userId: { in: userIds } }, select: { id: true, avatarAssetId: true } });
+  const profileIds = profiles.map((p) => p.id);
+  const avatarAssetIds = profiles.map((p) => p.avatarAssetId).filter((id): id is string => id !== null);
+  await prisma.assetAttachment.deleteMany({ where: { entityType: "avatar", entityId: { in: profileIds } } });
+  await prisma.profile.deleteMany({ where: { id: { in: profileIds } } });
+  await cleanupTestAssets(avatarAssetIds);
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
   await cleanupTestNotifications(userIds);
@@ -168,6 +187,7 @@ export async function cleanupTestUsers(userIds: string[]): Promise<void> {
     await prisma.article.findMany({ where: { authorId: { in: userIds } }, select: { id: true } })
   ).map((a) => a.id);
   await cleanupTestArticles(authoredArticleIds);
+  await cleanupTestProfiles(userIds);
   await prisma.emailVerificationToken.deleteMany({ where: { userId: { in: userIds } } });
   const uploadedAssetIds = (
     await prisma.asset.findMany({ where: { uploaderId: { in: userIds } }, select: { id: true } })

@@ -79,7 +79,13 @@ export default async function ArticlePage({
           {article.tags.length > 0 && <p className={styles.kicker}>{article.tags.join(" · ")}</p>}
           <h1>{article.title}</h1>
           <div className={styles.byline}>
-            <span>{article.author.name}</span>
+            {article.author.username ? (
+              <a href={`/u/${article.author.username}`}>{article.author.name}</a>
+            ) : (
+              <span>{article.author.name}</span>
+            )}
+            {/* Verification badge slot — deliberately empty, Session 40's territory. */}
+            <span data-verification-badge-slot aria-hidden />
             {article.publishedAt && <time dateTime={article.publishedAt.toISOString()}>{new Date(article.publishedAt).toLocaleDateString()}</time>}
           </div>
           <ShareLinks url={articleUrl} title={article.title} />
