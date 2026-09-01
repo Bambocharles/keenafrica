@@ -136,6 +136,23 @@ export async function listPendingVerificationReviews(actor: AuthzActor) {
   );
 }
 
+/**
+ * Session 41 (Admin Moderation, Reporting & Verification Review). Admin
+ * read of one specific account's verification row, for the Keen Africans
+ * user-detail page ("grant/revoke VERIFIED status" from a specific
+ * account, not only from the pending-review queue). Requires
+ * verification.review — deliberately narrower than the page it's used on
+ * (which otherwise only needs users.read/articles.manage), so a plain
+ * article moderator with no verification.review sees no more of this
+ * table than the public getVerifiedUserIds() boolean already exposes
+ * (enforced independently at the RLS layer too — see
+ * keen_african_verifications_select). Returns null for "never connected."
+ */
+export async function getVerificationForAdmin(targetUserId: string, actor: AuthzActor) {
+  requirePermission(actor, PERMISSIONS.VERIFICATION_REVIEW);
+  return withRls(actorRlsCtx(actor), (tx) => tx.keenAfricanVerification.findUnique({ where: { userId: targetUserId } }));
+}
+
 /** Approve a pending review -> 'verified'. Only valid from 'linkedin_connected' — an already-verified or never-connected account can't be "approved" again. */
 export async function approveVerification(targetUserId: string, actor: AuthzActor) {
   requirePermission(actor, PERMISSIONS.VERIFICATION_REVIEW);

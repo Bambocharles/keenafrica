@@ -359,6 +359,20 @@ export async function anonymizeOwnProfile(actor: AuthzActor, anonymizedName: str
  * simply has no entry in the returned map; callers render the byline as
  * plain text (no link) in that case.
  */
+/**
+ * Session 41 (Admin Moderation, Reporting & Verification Review). By-id
+ * lookup for the admin user-detail page ("view a user's profile ... from
+ * the admin side") — no permission required, same reasoning as every other
+ * public read in this file: profiles_select is unconditionally open, so
+ * there is nothing an admin sees here that a public /u/<username> visit
+ * wouldn't already show. The page this backs additionally requires
+ * users.read to reach the user record itself; this call needs no gate of
+ * its own. Returns null for a user with no profile row yet.
+ */
+export async function getProfileByUserId(userId: string) {
+  return withRls({}, (tx) => tx.profile.findUnique({ where: { userId } }));
+}
+
 export async function getUsernamesByUserIds(userIds: string[]): Promise<Map<string, string>> {
   if (userIds.length === 0) return new Map();
   const profiles = await withRls({}, (tx) =>

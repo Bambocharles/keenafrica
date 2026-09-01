@@ -161,6 +161,10 @@ export async function cleanupTestArticles(articleIds: string[]): Promise<void> {
     .map((a) => a.coverAssetId)
     .filter((id): id is string => id !== null);
   await prisma.assetAttachment.deleteMany({ where: { entityType: "article_cover", entityId: { in: articleIds } } });
+  // Session 41 (Admin Moderation, Reporting & Verification Review) — Report
+  // rows against an article have no FK (polymorphic entityId, see
+  // schema.prisma's Report comment), so nothing else cleans these up.
+  await prisma.report.deleteMany({ where: { entityType: "article", entityId: { in: articleIds } } });
   await prisma.article.deleteMany({ where: { id: { in: articleIds } } });
   await cleanupTestAssets(coverAssetIds);
 }
@@ -184,8 +188,27 @@ export async function cleanupTestProfiles(userIds: string[]): Promise<void> {
   await cleanupTestAssets(avatarAssetIds);
 }
 
+/**
+ * Deletes any Report rows filed by or reviewed by a set of test users —
+ * call this before cleanupTestUsers() deletes the User rows (keen_africans_
+ * reports migration's FKs are all ON DELETE NO ACTION, same convention as
+ * every other cleanup helper here). Takes user ids since that's what every
+ * test fixture has on hand; a report against a test-created article/profile
+ * is also covered since cleanupTestArticles/cleanupTestProfiles don't
+ * themselves clean "reports" rows (entityId is polymorphic, no FK) — call
+ * this with every relevant user id (reporter, reviewer, AND the reported
+ * user for a profile report) to catch those too.
+ */
+export async function cleanupTestReports(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.report.deleteMany({
+    where: { OR: [{ reporterId: { in: userIds } }, { reviewedBy: { in: userIds } }, { entityId: { in: userIds } }] },
+  });
+}
+
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
+  await cleanupTestReports(userIds);
   await cleanupTestNotifications(userIds);
   await cleanupTestNotificationPreferences(userIds);
   await cleanupTestConversations(userIds);
