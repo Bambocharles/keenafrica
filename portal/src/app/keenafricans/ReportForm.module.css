@@ -1,0 +1,50 @@
+.wrap {
+  margin-top: 10px;
+  font-size: 12.5px;
+}
+
+.trigger {
+  cursor: pointer;
+  color: var(--ink-faint, #8a8a8a);
+  user-select: none;
+}
+
+.trigger:hover {
+  color: var(--ink, #1a1a1a);
+}
+
+.form {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 6px;
+  font: inherit;
+  resize: vertical;
+}
+
+.submit {
+  justify-self: start;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #d8d8d8);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.submit:hover {
+  background: var(--surface-hover, #f2f2f2);
+}
+
+.notice {
+  margin-top: 6px;
+  color: var(--ink-faint, #8a8a8a);
+}

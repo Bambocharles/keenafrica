@@ -12,6 +12,7 @@ import { getStorageDriver } from "@/lib/storage";
 import { resolveAuthorName, getUsernamesByUserIds, getMemberLabelUserIds, anonymizeOwnProfile } from "@/lib/profiles";
 import { getVerifiedUserIds } from "@/lib/verification";
 import { anonymizeOwnAccount, assertOwnAccountDeletable } from "@/lib/users";
+import { getOpenReportEntityIds } from "@/lib/reports";
 
 /**
  * Keen Africans — Article entity (Session 34). Open self-registration, no
@@ -840,18 +841,79 @@ export async function listMyArticles(actor: AuthzActor) {
   );
 }
 
-/** Admin moderation queue — every author's published articles (today's minimal "queue": a flat published list; see docs/KEEN_AFRICANS.md's deferred-to-v2 note on a richer queue). */
-export async function listAllPublishedArticlesForAdmin(actor: AuthzActor) {
+/**
+ * Session 41 (Admin Moderation, Reporting & Verification Review). The real
+ * filterable moderation queue, replacing Session 34's flat "every
+ * published article" list (listAllPublishedArticlesForAdmin, removed —
+ * nothing else referenced it). Two independent filter dimensions, per this
+ * session's own acceptance criteria ("filtering by status AND by
+ * reported-vs-not"):
+ *
+ *  - `status`: 'pending_review' (reviewStatus = in_review — the same set
+ *    listArticlesPendingReview() returns, queried directly here rather
+ *    than delegating to it, since that function is its own tested,
+ *    independent reviewer-queue contract, not a moderation-queue internal);
+ *    'published' (status = published); 'rejected' (reviewStatus =
+ *    rejected — an author's review submission a reviewer sent back, not
+ *    the post-publish admin-unpublish safety valve below, which returns
+ *    an article to 'draft' with no reviewStatus change and stays visible
+ *    only on the author's own dashboard, unchanged from Session 34).
+ *    Omitted: the union of all three buckets — never drafts that were
+ *    never submitted for review and never published, same as before.
+ *  - `reportedOnly`: intersects with src/lib/reports.ts's
+ *    getOpenReportEntityIds('article', actor) regardless of which status
+ *    bucket (or no bucket) is selected.
+ *
+ * Every returned row also carries `reported: boolean` so the UI can badge
+ * a reported article even when reportedOnly isn't the active filter.
+ */
+export type ArticleModerationStatus = "pending_review" | "published" | "rejected";
+
+export interface ListArticlesForModerationFilter {
+  status?: ArticleModerationStatus;
+  reportedOnly?: boolean;
+}
+
+const MODERATION_STATUS_WHERE: Record<ArticleModerationStatus, Record<string, unknown>> = {
+  pending_review: { reviewStatus: "in_review" },
+  published: { status: "published" },
+  rejected: { reviewStatus: "rejected" },
+};
+
+export async function listArticlesForModeration(actor: AuthzActor, filter: ListArticlesForModerationFilter = {}) {
   if (!actor.isSuperAdmin && !hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE)) {
     throw new AuthorizationError("Not authorized");
   }
   await flipDueScheduledArticles();
-  return withRls(actorRlsCtx(actor), (tx) =>
+
+  const statusWhere = filter.status
+    ? MODERATION_STATUS_WHERE[filter.status]
+    : { OR: Object.values(MODERATION_STATUS_WHERE) };
+
+  const reportedIds = await getOpenReportEntityIds("article", actor);
+  if (filter.reportedOnly && reportedIds.size === 0) return [];
+
+  const rows = await withRls(actorRlsCtx(actor), (tx) =>
     tx.article.findMany({
-      where: { status: "published" },
-      orderBy: { publishedAt: "desc" },
+      where: {
+        ...statusWhere,
+        ...(filter.reportedOnly ? { id: { in: Array.from(reportedIds) } } : {}),
+      },
+      orderBy: { updatedAt: "desc" },
       include: { author: { select: { id: true, name: true, email: true } } },
     })
+  );
+
+  return rows.map((a) => ({ ...a, reported: reportedIds.has(a.id) }));
+}
+
+/** Admin view of one author's articles across every status (draft/in-review/published/archived) — the "view a user's articles from the admin side" surface. Requires articles.manage. */
+export async function listArticlesByAuthorForAdmin(authorId: string, actor: AuthzActor) {
+  if (!actor.isSuperAdmin && !hasPermission(actor, PERMISSIONS.ARTICLES_MANAGE)) {
+    throw new AuthorizationError("Not authorized");
+  }
+  return withRls(actorRlsCtx(actor), (tx) =>
+    tx.article.findMany({ where: { authorId }, orderBy: { updatedAt: "desc" } })
   );
 }
 

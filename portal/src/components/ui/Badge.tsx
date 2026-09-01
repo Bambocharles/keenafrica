@@ -37,7 +37,15 @@ type Status =
   | "in_review"
   | "changes_requested"
   | "approved"
-  | "rejected";
+  | "rejected"
+  // Added by Session 41 (Admin Moderation, Reporting & Verification
+  // Review) for KeenAfricanVerification.status ("verified" — "rejected"
+  // and "pending" above already cover the rest) and Report.status
+  // ("reviewed" — "pending"/"dismissed" reuse existing values).
+  | "verified"
+  | "linkedin_connected"
+  | "reviewed"
+  | "dismissed";
 
 const LABEL: Record<Status, string> = {
   active: "Active",
@@ -67,6 +75,10 @@ const LABEL: Record<Status, string> = {
   changes_requested: "Changes requested",
   approved: "Approved",
   rejected: "Rejected",
+  verified: "Verified",
+  linkedin_connected: "LinkedIn connected",
+  reviewed: "Reviewed",
+  dismissed: "Dismissed",
 };
 
 export function StatusBadge({ status }: { status: Status }) {
@@ -98,6 +110,10 @@ export function StatusBadge({ status }: { status: Status }) {
     changes_requested: styles["badge-paused"],
     approved: styles["badge-active"],
     rejected: styles["badge-suspended"],
+    verified: styles["badge-active"],
+    linkedin_connected: styles["badge-paused"],
+    reviewed: styles["badge-active"],
+    dismissed: styles["badge-draft"],
   }[status];
 
   return (

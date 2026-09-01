@@ -6,6 +6,7 @@ import { deriveExcerpt } from "@/lib/articles";
 import { getPublicProfileByUsername } from "@/lib/profiles";
 import { LegalFooter } from "../../LegalFooter";
 import { VerificationBadge } from "../../VerificationBadge";
+import { ReportForm } from "../../ReportForm";
 import styles from "../../site.module.css";
 
 /**
@@ -49,13 +50,16 @@ export async function generateMetadata({
 
 export default async function ProfilePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ username: string }>;
+  searchParams: Promise<{ reported?: string; reportError?: string }>;
 }) {
   const { username } = await params;
   const { profile, articles, verified } = await loadProfile(username);
   const session = await auth();
   const signedIn = canAccessKeenAfricanPortal(session?.user);
+  const { reported, reportError } = await searchParams;
 
   const links: Array<{ label: string; href: string }> = [
     profile.websiteUrl ? { label: "Website", href: profile.websiteUrl } : null,
@@ -105,6 +109,13 @@ export default async function ProfilePage({
               ))}
             </div>
           )}
+          <ReportForm
+            entityType="profile"
+            entityId={profile.userId}
+            returnTo={`/u/${profile.username}`}
+            reported={reported === "1"}
+            reportError={reportError}
+          />
         </div>
       </div>
 

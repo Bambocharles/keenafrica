@@ -271,9 +271,9 @@ working around either denial.
 - **No comments, likes, or tags-as-navigation beyond a simple `?tag=`
   filter** on the listing page — explicitly out of scope for today per
   the session brief.
-- **Moderation queue is a flat "every published article" list**, not a
-  real flagged/reported queue with filters — the minimal safety valve the
-  brief asks for, not a full moderation system.
+- ~~Moderation queue is a flat "every published article" list~~ — **done
+  in Session 41**: a real filterable queue (status + reported-vs-not) plus
+  a reporting mechanism, see the new section below.
 - **No author profile/security pages** (change password, MFA enrollment)
   under `keenafricans.<root>` yet — an author can still do this by
   logging into any other portal with the same account if they ever need
@@ -1022,3 +1022,267 @@ None.
 - **Whoever owns Notifications next**: nothing outstanding from this
   session — `verification_status_changed` is fully wired, closing the
   extension point Session 39's own docstring left open.
+
+## Admin Moderation, Reporting & Verification Review (Session 41)
+
+Session 40 had already shipped by the time this session started (confirmed
+via `git merge-base --is-ancestor` against `origin/main`), so this session
+built the full scope: user moderation, the real article moderation queue,
+reporting, and extended Session 40's minimal verification reviewer queue
+rather than reinventing it.
+
+### Permission-key decision (this session's own explicit "confirm before
+assuming" instruction)
+
+Session 40 had already decided this, not left it open: `verification.review`
+is a permission key deliberately separate from `articles.manage` (see
+`src/lib/authz.ts`'s `PERMISSIONS.VERIFICATION_REVIEW` comment and the
+`keen_african_verifications` migration). This session honors that existing
+decision rather than re-litigating it — every report-review/article
+moderation action here uses `articles.manage`; every identity-verification
+grant/revoke action uses `verification.review`. Today ADMIN/SUPER_ADMIN
+hold both via `ALL_PERMISSION_KEYS`, so in practice the same people do
+both jobs — but the keys stay decoupled, so the site owner can hand
+`verification.review` to a narrower reviewer role later with zero schema
+or code change.
+
+### What shipped
+
+- **User moderation** (`/admin/(protected)/keen-africans/users`,
+  `/admin/(protected)/keen-africans/users/[id]`) — search/filter Keen
+  Africans by reusing `src/lib/users.ts`'s existing `listUsers()` pinned to
+  `role: "KEEN_AFRICAN"` (no new listing function needed — that function
+  already supported search/status/pagination). The detail page shows the
+  account's profile (bio/country/profession/links), every one of their
+  articles across every status (new `listArticlesByAuthorForAdmin()`,
+  `articles.manage`-gated), their verification status
+  (`verification.review`-gated, new `getVerificationForAdmin()`), and
+  wires suspend/reinstate (`src/lib/users.ts`'s existing `suspendUser`/
+  `reinstateUser` — `users.suspend`), grant/revoke `Featured`
+  (`src/lib/profiles.ts`'s existing `setProfileFeatured` — `articles.manage`),
+  and grant/revoke `VERIFIED` (`src/lib/verification.ts`'s existing
+  `approveVerification`/`rejectVerification` — `verification.review`)
+  directly for that one account, not only from the pending-review queue.
+  **Suspension's platform-wide-revocation effect is unchanged and
+  confirmed as the intended behavior here** — `suspendUser()` already
+  revokes every active session immediately, and per
+  `CLAUDE_BUILD_RULES.md` §3 ("never build parallel systems") plus
+  `PLATFORM_CONTEXT.md`'s shared-identity rule, a Keen-Africans-only
+  suspension would be exactly the kind of parallel identity mechanism this
+  codebase's architecture forbids — there is no Keen-Africans-scoped
+  notion of "account" separate from the canonical `User`. Live-verified:
+  suspending a Keen African through this new console immediately blocks
+  that same account's login on `keenafricans.<root>` too.
+- **Article moderation queue** (`src/lib/articles.ts`'s new
+  `listArticlesForModeration()`, replacing the removed
+  `listAllPublishedArticlesForAdmin()` — nothing else referenced it) —
+  two independent filter dimensions on the admin `/keen-africans` page,
+  per this session's own acceptance criteria ("filtering by status AND by
+  reported-vs-not"): a `status` tab (`pending_review` / `published` /
+  `rejected`, or all three unioned when omitted — never a plain untouched
+  draft that was never submitted for review and never published) and a
+  `reportedOnly` checkbox that intersects with open reports regardless of
+  which status tab is active. Every row also carries a `reported: boolean`
+  so a reported article is visibly badged even outside that filter.
+  `rejected` means reviewer-rejected (`reviewStatus === 'rejected'`, the
+  Session 38 review workflow), not the separate post-publish
+  admin-unpublish safety valve (`adminUnpublishArticle`, unchanged,
+  returns an article to `draft` for the author, not a moderation-queue
+  bucket of its own).
+- **Reporting** (`src/lib/reports.ts`, new `Report` model/migration
+  `20260901230000_keen_africans_reports`) — `createReport()` lets anyone,
+  including a genuinely anonymous reader (no login required, per this
+  session's explicit rule), report an article or a profile with a
+  required reason. Rate-limited by **reusing
+  `src/lib/rate-limit.ts`'s `countRecentAuditEvents()`** (no new limiter
+  mechanism, per this session's explicit rule) — dual per-account
+  (5/hour) and per-IP (8/hour) windows, same "both must independently
+  pass" shape `isLoginRateLimited()` already uses, so the report mechanism
+  can't become its own abuse vector (mass false reports, queue spam).
+  Reports land in the same Keen Africans admin console
+  (`articles.manage`-gated `listReports`/`resolveReport`/`dismissReport`/
+  `getOpenReportEntityIds` — deliberately the same key as article
+  moderation, not a new one, per the permission-key decision above).
+  `reports_write`'s RLS policy is unconditional (`WITH CHECK (true)`,
+  same shape as `audit_events_write`) — `createReport()` had to use
+  `$executeRaw` with no `RETURNING`, exactly like
+  `src/lib/audit.ts`'s `recordAuditEvent()` already documents doing for
+  the identical reason (a plain `.create()`'s implicit `RETURNING` is
+  independently gated by the SELECT policy, which is `articles.manage`-
+  only — this would silently break anonymous/unprivileged reporting
+  despite the INSERT itself being allowed). Caught by
+  `reports-rls.integration.test.ts` against the real non-superuser role,
+  not assumed.
+- **Verification review queue** — Session 40's minimal v1
+  (`listPendingVerificationReviews`/`approveVerification`/
+  `rejectVerification`, unchanged) is extended, not reinvented: the new
+  Keen Africans user-detail page (above) surfaces the same
+  approve/reject/revoke actions for one specific account, so a reviewer
+  can act on an account found via search, not only from the pending-only
+  queue. The queue itself still has no search/filter of its own — see
+  Known limitations.
+
+### Migrations
+
+- `20260901230000_keen_africans_reports` — `ReportEntityType`
+  (`article`/`profile`), `ReportStatus` (`pending`/`reviewed`/
+  `dismissed`), `reports` table (polymorphic `entity_type`/`entity_id`,
+  no FK — same convention `asset_attachments` already uses, since a
+  single column can't conditionally reference two tables) + 3 RLS
+  policies (`reports_write` unconditional INSERT, `reports_select`/
+  `reports_review` `articles.manage`/`super_admin` only). No changes to
+  any existing table/policy.
+
+### APIs / contracts
+
+- `src/lib/reports.ts`: `createReport(input, actor | null, ipAddress)`,
+  `listReports(actor, filter?)`, `resolveReport(reportId, actor, note?)`,
+  `dismissReport(reportId, actor, note?)`,
+  `getOpenReportEntityIds(entityType, actor)`.
+- `src/lib/articles.ts`: `listArticlesForModeration(actor, filter?)`
+  (replaces `listAllPublishedArticlesForAdmin`), new
+  `listArticlesByAuthorForAdmin(authorId, actor)`.
+- `src/lib/verification.ts`: new `getVerificationForAdmin(userId, actor)`.
+- `src/lib/profiles.ts`: new `getProfileByUserId(userId)` (public read, no
+  permission — `profiles_select` is already unconditionally open, same
+  reasoning as every other public read in that file).
+- No changes to `src/lib/users.ts` — `listUsers`/`suspendUser`/
+  `reinstateUser` are reused exactly as they already existed.
+
+### Permissions
+
+No new permission keys. `articles.manage` gates: the article moderation
+queue, report review (`listReports`/`resolveReport`/`dismissReport`/
+`getOpenReportEntityIds`), `listArticlesByAuthorForAdmin`, and (already,
+unchanged) `setProfileFeatured`/`adminUnpublishArticle`. `users.read` +
+`users.suspend` gate the Keen Africans user search/suspend/reinstate
+(same keys the platform-wide `/users` console already uses).
+`verification.review` gates `getVerificationForAdmin` and (already,
+unchanged) `approveVerification`/`rejectVerification`.
+
+### Events
+
+No new domain events — `createReport()` records an `AuditEvent`
+(`report.created`) but does not emit a domain event; there's no natural
+notification recipient for "someone filed a report" beyond the moderators
+who already see the queue. `resolveReport`/`dismissReport` are likewise
+audit-only. A future session wiring a "new report" notification for
+`articles.manage` holders is a reasonable, ready follow-up (see Known
+limitations).
+
+### Tests
+
+36 new cases across four files, all against this session's isolated
+database (`portal_dev_session41`, cloned from the shared `portal_dev`
+rather than used directly, since a peer session was active — confirmed
+via `ListAgents` — matching Session 38's own "isolated is cheap insurance"
+reasoning):
+
+- `src/lib/reports.test.ts` (16) — `createReport` (anonymous, logged-in,
+  empty-reason rejection, unknown-target rejection, dual account/IP rate
+  limiting), `listReports`/`getOpenReportEntityIds`/`resolveReport`/
+  `dismissReport` (every one gated on `articles.manage`, a plain
+  `KEEN_AFRICAN` explicitly asserted to fail server-side per this
+  session's own acceptance criterion, plus the already-reviewed
+  double-transition rejection and audit-trail assertions).
+- `src/lib/reports-rls.integration.test.ts` (8) — the real non-superuser
+  `portal_rls_test` role proof: anonymous INSERT allowed, anonymous/
+  outsider SELECT denied, `articles.manage`/`super_admin` SELECT and
+  UPDATE allowed, outsider UPDATE denied.
+- `src/lib/articles-moderation.test.ts` (8) — `listArticlesForModeration`
+  (authorization boundary, each status bucket, the union-when-omitted
+  case explicitly excluding an untouched draft, `reportedOnly` +
+  the per-row `reported` flag) and `listArticlesByAuthorForAdmin`
+  (authorization boundary + full-status-range coverage).
+- `src/lib/verification.test.ts` (+4) — `getVerificationForAdmin`:
+  a plain `KEEN_AFRICAN` rejected, a plain `articles.manage`-only holder
+  (no `verification.review`) also rejected (the actual proof that the two
+  permission keys stay decoupled, not just documented as decoupled), a
+  `verification.review` holder succeeds, and the never-connected-null case.
+
+**748/748 passing** (712 baseline — Session 40's own confirmed count,
+re-verified against an unmodified checkout of this session's isolated
+database before starting — + 36 new), `tsc --noEmit` clean. Ran the full
+suite three times; the only failures observed were two already-documented
+pre-existing flakes under full concurrent-suite load, both reproduced
+identically on a completely unmodified checkout of the same shared dev
+database (not caused by this session, never touches either file):
+`assessment-rls.integration.test.ts`'s Session-31 query-plan assertion
+(flagged by every session since Session 38), and
+`notifications.test.ts`'s `CoursePublished`/`StudentEnrolled` cases (new
+observation this session, but confirmed to reproduce on an unmodified
+checkout too — a Postgres load/timing artifact on this shared instance,
+not a code defect). Both pass reliably in isolation.
+
+**Live-verified against a real running dev server, real HTTP** (no
+browser tool in this sandbox — same `curl` + scraped `$ACTION_ID_...` +
+`multipart/form-data` technique every prior session used; this session's
+own note for whoever hits this next: the hidden field's `name` genuinely
+starts with a literal `$` — a shell variable holding the id via
+`$(... | tr -d '$')` silently strips it and produces "Failed to find
+Server Action," which cost real time to diagnose — keep the `$` and
+single-quote the `-F` argument instead): registered a Keen African,
+published a real article, and, with **no cookie at all**, submitted a
+real report against it through the rendered `<ReportForm>` — confirmed
+the row landed in `reports` with `reporter_id NULL` and `status =
+'pending'`, and the article page's post-submit state rendered "Thanks —
+this report has been sent to our moderators." Logged in as an ADMIN on
+`admin.<root>` and confirmed `/keen-africans` renders the pending report
+and the new filterable queue (`?status=published`, `?reported=1` both
+verified); resolved the report through the real rendered form and
+confirmed `reports.status = 'reviewed'` plus a `report.resolved`
+`AuditEvent`. Suspended the author through `/keen-africans/users/<id>`
+and confirmed both the DB (`status = 'suspended'`) and a real subsequent
+login attempt on `keenafricans.<root>` for that same account failed.
+Separately confirmed a plain `KEEN_AFRICAN` account, logged in on
+`admin.<root>` with valid credentials, is redirected to `/login` when
+requesting `/keen-africans` — the coarse admin-console shell gate
+(`canAccessAdminConsole`, unchanged) blocks it before any page-level
+permission check even runs. All live-verification fixtures (users,
+article, report, audit events) cleaned up afterward — confirmed zero
+rows remain.
+
+### Known limitations
+
+- **The verification pending-review queue itself still has no search/
+  filter** — Session 40's own flagged limitation. This session mitigates
+  it (an admin can find any specific Keen African via the new user search
+  and act on their verification status directly from the detail page,
+  not only from the pending queue) but doesn't add filtering to the queue
+  list itself — not required by this session's acceptance criteria, and
+  the queue is typically small (only accounts actively awaiting review).
+- **No notification when a report is filed** — `articles.manage` holders
+  only learn about a new report by checking the admin console; a ready,
+  undone follow-up (see Events above).
+- **"Rejected" in the article moderation queue means reviewer-rejected
+  only** — an article taken down by the separate `adminUnpublishArticle`
+  safety valve returns to `draft` and is visible only on the author's own
+  dashboard, not as its own moderation-queue bucket. Not required by this
+  session's four explicitly-named filter states (pending review /
+  published / rejected / reported).
+- **A report gives no automatic action** — resolving/dismissing a report
+  is a manual moderator decision; it does not itself unpublish an article
+  or suspend an account. Deliberate: the brief describes reporting as
+  "landing in the moderation queue," not as an auto-moderation trigger,
+  and auto-actioning user reports would itself be an abuse vector (mass
+  false reports taking down real content).
+
+### Blockers
+
+None.
+
+### Required next-session actions
+
+- **Whoever owns Notifications next**: a `report.created` /
+  `NotificationType` for `articles.manage` holders is a reasonable,
+  ready follow-up (see Events above) — not built here, kept out of this
+  session's own boundary per `CLAUDE_BUILD_RULES.md` §2.
+- **Whoever has merge authority**: review and merge/deploy
+  `session-41-keen-africans-admin-moderation` — complete and tested but
+  deliberately left unpushed, matching every prior Keen Africans
+  session's own convention ("a handoff was asked for, not a merge").
+- **Whoever runs this sandbox next**: this session's isolated worktree
+  (`~/keenafrica/.worktrees/session-41-keen-africans-admin-moderation`)
+  and database (`portal_dev_session41`) are left in place, not cleaned
+  up — safe to remove once this branch is merged, or reused as-is if
+  Session 41 gets a follow-up.

@@ -6,6 +6,7 @@ import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, renderArti
 import { ShareLinks } from "./ShareLinks";
 import { LegalFooter } from "../../LegalFooter";
 import { VerificationBadge } from "../../VerificationBadge";
+import { ReportForm } from "../../ReportForm";
 import styles from "../../site.module.css";
 
 /**
@@ -62,13 +63,16 @@ export async function generateMetadata({
 
 export default async function ArticlePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ reported?: string; reportError?: string }>;
 }) {
   const slug = (await params).id;
   const article = await loadArticle(slug);
   const session = await auth();
   const signedIn = canAccessKeenAfricanPortal(session?.user);
+  const { reported, reportError } = await searchParams;
 
   const html = renderArticleBodyHtml(article.body);
   const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
@@ -124,6 +128,13 @@ export default async function ArticlePage({
             </div>
           )}
           <ShareLinks url={articleUrl} title={article.title} />
+          <ReportForm
+            entityType="article"
+            entityId={article.id}
+            returnTo={`/articles/${article.slug}`}
+            reported={reported === "1"}
+            reportError={reportError}
+          />
         </footer>
       </article>
 

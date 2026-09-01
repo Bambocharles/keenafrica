@@ -8,6 +8,7 @@ import {
   approveVerification,
   connectLinkedIn,
   getOwnVerification,
+  getVerificationForAdmin,
   getVerifiedUserIds,
   listPendingVerificationReviews,
   rejectVerification,
@@ -191,6 +192,36 @@ describe("listPendingVerificationReviews — the minimal reviewer queue", () => 
     const ids = queue.map((r) => r.userId);
     expect(ids).toContain(pending.id);
     expect(ids).not.toContain(alreadyVerified.id);
+  });
+});
+
+describe("getVerificationForAdmin — Session 41's user-detail admin page, verification.review-gated", () => {
+  it("a plain KEEN_AFRICAN cannot read another account's verification row", async () => {
+    const { user: u } = await connectedActor();
+    const { actor: outsider } = await connectedActor();
+    await expect(getVerificationForAdmin(u.id, outsider)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("a plain articles.manage holder with no verification.review cannot read another account's verification row", async () => {
+    const { user: u } = await connectedActor();
+    const articleModerator = await actorFromUser((await user({ roles: ["ADMIN"] })).id);
+    // ADMIN holds every permission via ALL_PERMISSION_KEYS, so simulate a
+    // narrower actor by hand: articles.manage only, no verification.review.
+    const narrowModerator = { ...articleModerator, isSuperAdmin: false, permissions: ["articles.manage"] };
+    await expect(getVerificationForAdmin(u.id, narrowModerator)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("a verification.review holder can read it", async () => {
+    const { user: u } = await connectedActor();
+    const admin = await reviewer();
+    const row = await getVerificationForAdmin(u.id, admin);
+    expect(row?.status).toBe("linkedin_connected");
+  });
+
+  it("returns null for an account that never connected LinkedIn", async () => {
+    const u = await user({ roles: ["KEEN_AFRICAN"] });
+    const admin = await reviewer();
+    expect(await getVerificationForAdmin(u.id, admin)).toBeNull();
   });
 });
 
