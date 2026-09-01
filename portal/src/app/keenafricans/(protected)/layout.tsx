@@ -3,17 +3,12 @@ import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { getUnreadNotificationCount } from "@/lib/notifications";
+import { ensureProfile } from "@/lib/profiles";
 import { NotificationBell } from "@/components/ui";
 import { TopbarTitle } from "./TopbarTitle";
 import { NavLinks } from "./NavLinks";
+import { AccountMenu } from "./AccountMenu";
 import styles from "./layout.module.css";
-
-function initials(name: string | null | undefined, email: string | null | undefined) {
-  const source = name?.trim() || email || "?";
-  const parts = source.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return source.slice(0, 2).toUpperCase();
-}
 
 export default async function ProtectedKeenAfricansLayout({
   children,
@@ -35,7 +30,19 @@ export default async function ProtectedKeenAfricansLayout({
     redirect("/login");
   }
   const user = session.user;
-  const unreadCount = await getUnreadNotificationCount(user);
+  const [unreadCount, profile] = await Promise.all([
+    getUnreadNotificationCount(user),
+    // Idempotent get-or-create — guarantees a profile row exists even for
+    // an account created via Google sign-in, which never runs the
+    // register Server Action's own ensureProfile() call. See
+    // src/lib/profiles.ts's own header for the full reasoning.
+    ensureProfile(user, { name: user.name ?? "Keen African" }),
+  ]);
+
+  async function signOutAction() {
+    "use server";
+    await signOut({ redirectTo: "/login" });
+  }
 
   return (
     <div className={styles.shell}>
@@ -73,9 +80,13 @@ export default async function ProtectedKeenAfricansLayout({
           <TopbarTitle />
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <NotificationBell unreadCount={unreadCount} />
-            <div className={styles.avatar} title={user.email ?? undefined}>
-              {initials(user.name, user.email)}
-            </div>
+            <AccountMenu
+              name={user.name ?? "Keen African"}
+              email={user.email ?? ""}
+              avatarAssetId={profile.avatarAssetId}
+              username={profile.username}
+              signOutAction={signOutAction}
+            />
           </div>
         </header>
         <main className={styles.content}>{children}</main>

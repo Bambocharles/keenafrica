@@ -93,6 +93,8 @@ describe("createArticle", () => {
     expect(article.authorId).toBe(actor.id);
     expect(article.status).toBe("draft");
     expect(article.slug).toMatch(/^my-first-post/);
+    // Session 36 — denormalized authorName snapshot, set once at creation.
+    expect(article.authorName).toBeTruthy();
 
     const event = await prisma.auditEvent.findFirst({ where: { action: "article.created", entityId: article.id } });
     expect(event).not.toBeNull();

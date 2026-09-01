@@ -152,12 +152,22 @@ enum AssetStatus {
 // AssetAttachment row existing alongside it purely so the general Asset
 // visibility model — canAccessAsset()/RLS cascade — needs no special-casing
 // for this entity type).
+// 'avatar' added by Session 36 (Keen Africans — Profile & Identity) — same
+// split-migration requirement again. Anchor row is Profile (see the
+// Profile section below); like 'article_cover', Profile.avatarAssetId is a
+// direct FK, with the AssetAttachment row existing alongside it purely so
+// the general Asset visibility model needs no special-casing. Unlike
+// article covers, an avatar has no draft/published gate at all — a
+// Profile is always fully public once it exists — so the RLS select
+// branch for 'avatar' is unconditional (see the
+// keen_africans_avatar_asset_attachments migration).
 enum AssetEntityType {
   lesson_resource
   message
   sponsor_document
   certificate
   article_cover
+  avatar
 }
 
 // Session 10 (Notifications). event-to-notification mapping — see
@@ -416,6 +426,18 @@ model User {
   // Session 34 (Keen Africans).
   articles          Article[] @relation("ArticleAuthor")
   articlesModerated Article[] @relation("ArticleModerator")
+
+  // Session 36 (Keen Africans — Profile & Identity). Optional 1:1 —
+  // mirrors totpCredential's shape above (a separate table for an
+  // optional per-user extension, not a column on User itself). Kept off
+  // User directly because Profile is meant to be PUBLICLY readable
+  // (username/bio/country/socials/avatar) while `users` deliberately has
+  // no anonymous SELECT branch at all (see users_select's own history) —
+  // a separate table with only public-safe columns means the public
+  // profile page never needs an elevated/system RLS context to read it,
+  // unlike articles.ts's authorNamesByIds() workaround this session
+  // replaces for article bylines.
+  profile Profile? @relation("UserProfile")
 
   @@map("users")
 }
@@ -1342,6 +1364,7 @@ model Asset {
   resources        Resource[]
   projectDocuments ProjectDocument[]
   articleCovers    Article[]         @relation("ArticleCover")
+  profileAvatars   Profile[]         @relation("ProfileAvatar")
 
   @@index([uploaderId])
   @@map("assets")
@@ -1690,6 +1713,16 @@ model Article {
   excerpt          String?
   tags             String[]      @default([])
   status           ContentStatus @default(draft)
+  // Session 36 (Keen Africans — Profile & Identity). Denormalized snapshot
+  // of the author's display name at creation time, same "stability over
+  // always-fresh" trade-off as Certificate.studentNameSnapshot below — set
+  // once by createArticle() (src/lib/articles.ts's resolveAuthorName()),
+  // never re-derived on later edits or on a subsequent profile display-name
+  // change. Replaces authorNamesByIds()'s elevated-context workaround for
+  // every public read (listPublishedArticles/getPublicArticleBySlug) — see
+  // that function's own comment for why the workaround is no longer needed
+  // at all (Profile, unlike User, has a fully public SELECT policy).
+  authorName       String        @map("author_name")
   coverAssetId     String?       @map("cover_asset_id") @db.Uuid
   publishedAt      DateTime?     @map("published_at") @db.Timestamptz(6)
   moderatedAt      DateTime?     @map("moderated_at") @db.Timestamptz(6)
@@ -1705,4 +1738,49 @@ model Article {
   @@index([authorId])
   @@index([status, publishedAt])
   @@map("articles")
+}
+
+// Session 36 (Keen Africans — Profile & Identity). Optional public-profile
+// extension of User — see User.profile's own comment for why this is a
+// separate table rather than columns on "users" directly. Every field here
+// is deliberately public-safe (no email/passwordHash/isSuperAdmin/status
+// ever lands on this table); the RLS select policy is unconditionally open
+// (keen_africans_profiles_core migration) because that is the entire point
+// of the split.
+//
+// Created lazily, once, per user, by src/lib/profiles.ts's ensureProfile()
+// (called from every keenafricans protected page's layout, and from the
+// register Server Action right after registerUser() so the one
+// registration-time field — country — has somewhere to land). username is
+// auto-generated at creation (same slugify-plus-suffix shape as
+// articles.ts's uniqueSlug()) so the public profile URL exists immediately
+// without forcing anything at signup; the user can change it later via the
+// "complete your profile" flow. displayName is likewise seeded from the
+// registration name at creation (never null) so a public profile page
+// never needs to fall back to a live read of "users.name" — see
+// src/lib/articles.ts's resolveAuthorName() for the one place that
+// fallback still exists, purely as a defensive fallback for an actor with
+// no profile row at all yet.
+model Profile {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  username      String   @unique
+  displayName   String   @map("display_name")
+  bio           String?
+  country       String?
+  profession    String?
+  interests     String[] @default([])
+  linkedinUrl   String?  @map("linkedin_url")
+  githubUrl     String?  @map("github_url")
+  websiteUrl    String?  @map("website_url")
+  xUrl          String?  @map("x_url")
+  avatarAssetId String?  @map("avatar_asset_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user        User   @relation("UserProfile", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  avatarAsset Asset? @relation("ProfileAvatar", fields: [avatarAssetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@map("profiles")
 }

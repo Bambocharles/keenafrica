@@ -179,6 +179,76 @@
   max-width: 1040px;
 }
 
+/* Session 36 (Keen Africans — Profile & Identity) — real account menu,
+   replacing the old static avatar div. */
+.accountMenu {
+  position: relative;
+}
+
+.avatarButton {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 50%;
+  line-height: 0;
+}
+
+.avatarImg {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.accountDropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  padding: 8px;
+  z-index: 30;
+}
+
+.accountDropdownHeader {
+  padding: 8px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.accountDropdownDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 4px;
+}
+
+.accountDropdownItem,
+.accountDropdownItemButton {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.accountDropdownItem:hover,
+.accountDropdownItemButton:hover {
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+}
+
 @media (max-width: 760px) {
   .shell {
     grid-template-columns: 1fr;

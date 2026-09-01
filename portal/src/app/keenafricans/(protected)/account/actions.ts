@@ -7,15 +7,18 @@ import { requestPasswordReset } from "@/lib/password-reset";
 import { sendMail } from "@/lib/mailer";
 
 /**
- * Self-service password reset — same shape as
+ * Self-service password reset — moved here from the dashboard's old
+ * embedded "Account" card (Session 34 follow-up) so Profile (public) and
+ * Account (private) are two distinct destinations, per this session's own
+ * explicit rule. Same requestPasswordReset()/cookie-fallback shape every
+ * other portal's self-service reset already uses; see
  * src/app/student/(protected)/profile/actions.ts's
- * requestOwnPasswordResetAction (Session 02/03's original pattern):
- * requestPasswordReset() does no authorization of its own (it's designed
- * to be pre-auth-callable), so this action is only safe here because the
- * caller is already authenticated and is requesting a reset for their OWN
- * email, not an arbitrary address. The one-time link is also shown
- * directly (60s, httpOnly cookie) as a fallback alongside the real email,
- * same convention every other portal's self-service reset uses.
+ * requestOwnPasswordResetAction for the original pattern this mirrors.
+ *
+ * Email/password-change and MFA/security enrollment are Session 37's
+ * territory (this session's own explicit "Account is Session 37's
+ * territory: email, password, security") — this page is intentionally
+ * minimal today, structurally open to that session adding more here.
  */
 export async function requestOwnPasswordResetAction() {
   const session = await auth();
@@ -44,9 +47,9 @@ export async function requestOwnPasswordResetAction() {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 60,
-      path: "/dashboard",
+      path: "/account",
     });
   }
 
-  redirect(token ? "/dashboard?resetLinkGenerated=1" : "/dashboard?error=reset_unavailable");
+  redirect(token ? "/account?resetLinkGenerated=1" : "/account?error=reset_unavailable");
 }
