@@ -15,6 +15,7 @@ export function NavLinks() {
   const items: NavItem[] = [
     { href: "/dashboard", icon: "▣", label: "Dashboard" },
     { href: "/articles/new", icon: "✎", label: "New article" },
+    { href: "/notifications", icon: "🔔", label: "Notifications" },
   ];
 
   return (

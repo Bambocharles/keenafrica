@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "@/lib/db";
 import { AuthorizationError } from "@/lib/authz";
 import {
   assignTeacherToCohort,
@@ -12,20 +13,31 @@ import { createQuestion } from "@/lib/questions";
 import { addQuestionToAssessment, assignAssessmentToCohort, createAssessment, publishAssessment } from "@/lib/assessments";
 import { startAttempt, submitAttempt } from "@/lib/attempts";
 import { startConversation } from "@/lib/messaging";
+import { adminUnpublishArticle, createArticle, publishArticle } from "@/lib/articles";
 import { FEATURE_FLAGS, _resetFeatureFlagCache } from "@/lib/feature-flags";
 import * as mailer from "@/lib/mailer";
 import {
   createNotification,
+  getNotificationPreference,
   getUnreadNotificationCount,
   listMyNotifications,
   markAllNotificationsRead,
   markNotificationRead,
   notificationHref,
+  setNotificationPreference,
 } from "@/lib/notifications";
-import { actorFromUser, cleanupTestCourses, cleanupTestNotifications, cleanupTestUsers, createTestUser } from "@/lib/test-support";
+import {
+  actorFromUser,
+  cleanupTestArticles,
+  cleanupTestCourses,
+  cleanupTestNotifications,
+  cleanupTestUsers,
+  createTestUser,
+} from "@/lib/test-support";
 
 const createdUserIds: string[] = [];
 const createdCourseIds: string[] = [];
+const createdArticleIds: string[] = [];
 const ORIGINAL_OVERRIDES = process.env.FEATURE_FLAG_OVERRIDES;
 
 async function user(opts?: Parameters<typeof createTestUser>[0]) {
@@ -42,9 +54,42 @@ afterEach(() => {
 
 afterAll(async () => {
   await cleanupTestNotifications(createdUserIds);
+  await cleanupTestArticles(createdArticleIds);
   await cleanupTestCourses(createdCourseIds);
   await cleanupTestUsers(createdUserIds);
 });
+
+/** A verified KEEN_AFRICAN, able to publish immediately — mirrors articles.test.ts's own keenAfrican() fixture. */
+async function keenAfricanVerified() {
+  const u = await user({ roles: ["KEEN_AFRICAN"] });
+  await prisma.user.update({ where: { id: u.id }, data: { emailVerifiedAt: new Date() } });
+  return { user: u, actor: await actorFromUser(u.id) };
+}
+
+/**
+ * Polls listMyNotifications() until at least `count` rows of `type` exist
+ * for the recipient, or throws once `timeoutMs` elapses. Used instead of a
+ * fixed setTimeout() wherever a test's own correctness depends on a
+ * PRECEDING fire-and-forget event having been fully processed before the
+ * next action fires (e.g. two sequential occurrences whose dedupeKeys must
+ * differ) — a fixed wait is fine for "did this eventually arrive" (the
+ * convention every other test in this file uses), but not for "did THIS
+ * one finish before THAT one started."
+ */
+async function waitForNotificationCount(
+  actor: Awaited<ReturnType<typeof actorFromUser>>,
+  type: string,
+  count: number,
+  timeoutMs = 3000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { notifications } = await listMyNotifications(actor);
+    if (notifications.filter((n) => n.type === type).length >= count) return;
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  throw new Error(`Timed out waiting for ${count} "${type}" notification(s)`);
+}
 
 /** Course + one cohort, one assigned teacher, one enrolled student — the minimal shared fixture. */
 async function setupCourseWithStudent() {
@@ -346,5 +391,170 @@ describe("AssessmentGraded -> assessment_graded (student)", () => {
     expect(graded!.entityType).toBe("attempt");
     expect(graded!.entityId).toBe(attempt.id);
     expect(notificationHref(graded!)).toBe(`/results/${attempt.id}`);
+  });
+});
+
+// --- Session 39 (Keen Africans — Notifications) ---------------------------
+
+describe("ArticleUnpublishedByAdmin -> article_unpublished_by_admin", () => {
+  it("notifies only the article's real author, not the moderating admin, and links to the edit page", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+
+    const article = await createArticle({ title: "Notif Article" }, authorActor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, authorActor);
+
+    await adminUnpublishArticle(article.id, adminActor, "needs a source citation");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const { notifications: authorNotifs } = await listMyNotifications(authorActor);
+    const notif = authorNotifs.find((n) => n.type === "article_unpublished_by_admin");
+    expect(notif).toBeDefined();
+    expect(notif!.body).toContain("needs a source citation");
+    expect(notif!.entityType).toBe("article");
+    expect(notif!.entityId).toBe(article.id);
+    expect(notificationHref(notif!)).toBe(`/articles/${article.id}/edit`);
+
+    // The recipient is the author, never the acting admin.
+    const { notifications: adminNotifs } = await listMyNotifications(adminActor);
+    expect(adminNotifs.some((n) => n.type === "article_unpublished_by_admin")).toBe(false);
+  });
+
+  it("a republish -> re-unpublish cycle produces a second, independent notification (dedupe keyed on moderatedAt, same convention as course_published's publishedAt)", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+
+    const article = await createArticle({ title: "Repeat offender" }, authorActor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, authorActor);
+    await adminUnpublishArticle(article.id, adminActor, "first reason");
+    // Waits for the FIRST notification to actually exist, rather than a
+    // fixed setTimeout(), because this test's own correctness depends on
+    // event 1 being fully processed before event 2 fires — the article's
+    // moderatedAt is what makes their dedupeKeys distinct, so if the first
+    // listener's read is still in flight when the second unpublish's
+    // UPDATE lands, it would read the SECOND moderatedAt and collapse both
+    // notifications into one (a real race under heavy concurrent load, not
+    // a production bug — see waitForNotificationCount()'s own comment).
+    await waitForNotificationCount(authorActor, "article_unpublished_by_admin", 1);
+
+    await publishArticle(article.id, authorActor);
+    await adminUnpublishArticle(article.id, adminActor, "second reason");
+    await waitForNotificationCount(authorActor, "article_unpublished_by_admin", 2);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    const matching = notifications.filter((n) => n.type === "article_unpublished_by_admin");
+    expect(matching.length).toBe(2);
+  });
+
+  it("re-delivering the SAME moderation occurrence (duplicate emit) is suppressed — the dedupe key is exact, not per-call", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+
+    const article = await createArticle({ title: "Duplicate delivery check" }, authorActor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, authorActor);
+    await adminUnpublishArticle(article.id, adminActor, "reason");
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Same real-world occurrence redelivered (e.g. a re-registered listener
+    // or a retried emit) — moderatedAt on the row hasn't changed, so the
+    // dedupeKey is identical and createNotification's unique-constraint
+    // upsert must suppress the second insert.
+    const moderated = await prisma.article.findUniqueOrThrow({ where: { id: article.id }, select: { moderatedAt: true, moderationNote: true } });
+    const result = await createNotification({
+      recipientId: article.authorId,
+      type: "article_unpublished_by_admin",
+      title: "Your article was unpublished: Duplicate delivery check",
+      body: `An admin took it down: ${moderated.moderationNote}.`,
+      entityType: "article",
+      entityId: article.id,
+      dedupeKey: `article:${article.id}:unpublished_by_admin:${moderated.moderatedAt!.toISOString()}`,
+    });
+    expect(result.created).toBe(false);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    expect(notifications.filter((n) => n.type === "article_unpublished_by_admin")).toHaveLength(1);
+  });
+});
+
+describe("Notification preferences — per-user, per-type opt-out (Session 39)", () => {
+  it("defaults to enabled with no preference row on record", async () => {
+    const { actor } = await keenAfricanVerified();
+    expect(await getNotificationPreference(actor, "article_unpublished_by_admin")).toBe(true);
+  });
+
+  it("opting out of a type suppresses that type's notification entirely — no row is ever created", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+
+    await setNotificationPreference(authorActor, "article_unpublished_by_admin", false);
+    expect(await getNotificationPreference(authorActor, "article_unpublished_by_admin")).toBe(false);
+
+    const article = await createArticle({ title: "Opted out" }, authorActor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, authorActor);
+    await adminUnpublishArticle(article.id, adminActor, "reason");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const { notifications } = await listMyNotifications(authorActor);
+    expect(notifications.some((n) => n.type === "article_unpublished_by_admin")).toBe(false);
+  });
+
+  it("re-enabling deletes the opt-out row (not a written enabled=true row) and restores delivery", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+
+    await setNotificationPreference(authorActor, "article_unpublished_by_admin", false);
+    await setNotificationPreference(authorActor, "article_unpublished_by_admin", true);
+    expect(await getNotificationPreference(authorActor, "article_unpublished_by_admin")).toBe(true);
+
+    const row = await prisma.notificationPreference.findUnique({
+      where: { userId_type: { userId: authorActor.id, type: "article_unpublished_by_admin" } },
+    });
+    expect(row).toBeNull();
+
+    const article = await createArticle({ title: "Re-enabled" }, authorActor);
+    createdArticleIds.push(article.id);
+    await publishArticle(article.id, authorActor);
+    await adminUnpublishArticle(article.id, adminActor, "reason");
+    await new Promise((r) => setTimeout(r, 20));
+
+    const { notifications } = await listMyNotifications(authorActor);
+    expect(notifications.some((n) => n.type === "article_unpublished_by_admin")).toBe(true);
+  });
+
+  it("createNotification: opting out is scoped to the exact (recipient, type) pair — other types for the same recipient are unaffected", async () => {
+    const recipient = await user();
+    const recipientActor = await actorFromUser(recipient.id);
+    await setNotificationPreference(recipientActor, "message_received", false);
+
+    const suppressed = await createNotification({
+      recipientId: recipient.id,
+      type: "message_received",
+      title: "t",
+      body: "b",
+      dedupeKey: `pref-off:${Date.now()}`,
+    });
+    expect(suppressed.created).toBe(false);
+
+    const unaffected = await createNotification({
+      recipientId: recipient.id,
+      type: "assessment_graded",
+      title: "t2",
+      body: "b",
+      dedupeKey: `pref-unaffected:${Date.now()}`,
+    });
+    expect(unaffected.created).toBe(true);
+
+    const { notifications } = await listMyNotifications(recipientActor);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].type).toBe("assessment_graded");
   });
 });

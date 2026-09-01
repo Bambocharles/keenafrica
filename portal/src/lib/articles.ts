@@ -3,6 +3,7 @@ import sanitizeHtml from "sanitize-html";
 import { withRls } from "@/lib/rls";
 import { AuthorizationError, PERMISSIONS, hasPermission, type AuthzActor } from "@/lib/authz";
 import { recordAuditEvent } from "@/lib/audit";
+import { emitDomainEvent } from "@/lib/events";
 import { actorRlsCtx } from "@/lib/courses";
 import { countRecentAuditEvents } from "@/lib/rate-limit";
 import { uploadAsset, deleteAssetIfOrphanedAsContentOwner } from "@/lib/assets";
@@ -377,6 +378,14 @@ export async function adminUnpublishArticle(articleId: string, actor: AuthzActor
     entityId: articleId,
     metadata: { authorId: article.authorId, reason },
   });
+
+  // Session 39 (Keen Africans — Notifications). This safety valve
+  // previously emitted no domain event at all, so its author never learned
+  // their article came down beyond noticing it themselves on their own
+  // dashboard. notifications.ts's listener re-fetches moderatedAt itself
+  // (same "listener re-fetches under its own RLS context" convention every
+  // other listener in that file follows) to derive its dedupeKey.
+  emitDomainEvent("ArticleUnpublishedByAdmin", { articleId, authorId: article.authorId, actorId: actor.id });
 
   return updated;
 }

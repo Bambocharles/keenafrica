@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { requestOwnPasswordResetAction } from "./actions";
+import { getNotificationPreference } from "@/lib/notifications";
+import { requestOwnPasswordResetAction, updateArticleUnpublishedPreferenceAction } from "./actions";
 import { Banner, Button, Card, SectionHeader } from "@/components/ui";
 import ui from "@/components/ui/styles.module.css";
 
@@ -34,6 +35,8 @@ export default async function AccountPage({
     resetLink = store.get("own_reset_link")?.value ?? null;
   }
 
+  const articleUnpublishedByAdminEnabled = await getNotificationPreference(user, "article_unpublished_by_admin");
+
   return (
     <div style={{ display: "grid", gap: "20px" }}>
       <SectionHeader title="Account" count={0} />
@@ -59,6 +62,24 @@ export default async function AccountPage({
         <form action={requestOwnPasswordResetAction}>
           <Button type="submit" variant="outline">
             Send myself a password reset link
+          </Button>
+        </form>
+      </Card>
+
+      <Card style={{ padding: "20px", display: "grid", gap: "10px", maxWidth: 420 }}>
+        <SectionHeader title="Notifications" count={0} />
+        <form action={updateArticleUnpublishedPreferenceAction} style={{ display: "grid", gap: "10px" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: 13.5 }}>
+            <input
+              type="checkbox"
+              name="articleUnpublishedByAdmin"
+              defaultChecked={articleUnpublishedByAdminEnabled}
+              style={{ marginTop: "2px" }}
+            />
+            Notify me if an admin unpublishes one of my articles
+          </label>
+          <Button type="submit" variant="outline" style={{ justifySelf: "start" }}>
+            Save
           </Button>
         </form>
       </Card>

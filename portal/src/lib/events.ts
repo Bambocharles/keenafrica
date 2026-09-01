@@ -74,6 +74,16 @@ export interface DomainEventMap {
     userId: string;
     actorId: string;
   };
+  // Added by Session 39 (Keen Africans — Notifications). Session 34's
+  // admin-unpublish moderation safety valve (src/lib/articles.ts's
+  // adminUnpublishArticle()) previously emitted an AuditEvent only, with no
+  // domain event and therefore no notification to the author. authorId is
+  // included directly (rather than making the listener re-derive it) since
+  // it's already on hand at the emit site and is exactly who should be
+  // notified — never the acting admin. See docs/NOTIFICATIONS.md's
+  // "Extension points" section for the sibling events (review workflow,
+  // verification status, follow) intentionally NOT added here yet.
+  ArticleUnpublishedByAdmin: { articleId: string; authorId: string; actorId: string };
 }
 
 export type DomainEventName = keyof DomainEventMap;
