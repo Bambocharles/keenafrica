@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { canAccessKeenAfricanPortal } from "@/lib/authz";
 import { deriveExcerpt, getPublicArticleBySlug, renderArticleBodyHtml } from "@/lib/articles";
+import { ShareLinks } from "./ShareLinks";
 import styles from "../../site.module.css";
 
 async function loadArticle(slug: string) {
@@ -57,6 +58,8 @@ export default async function ArticlePage({
   const signedIn = canAccessKeenAfricanPortal(session?.user);
 
   const html = renderArticleBodyHtml(article.body);
+  const rootDomain = process.env.ROOT_DOMAIN ?? "keenafrica.com";
+  const articleUrl = `https://keenafricans.${rootDomain}/articles/${article.slug}`;
 
   return (
     <div className={styles.wrap}>
@@ -78,6 +81,7 @@ export default async function ArticlePage({
             <span>{article.author.name}</span>
             {article.publishedAt && <time dateTime={article.publishedAt.toISOString()}>{new Date(article.publishedAt).toLocaleDateString()}</time>}
           </div>
+          <ShareLinks url={articleUrl} title={article.title} />
         </header>
 
         {article.coverAssetId && (
@@ -87,15 +91,18 @@ export default async function ArticlePage({
 
         <div className={styles.body} dangerouslySetInnerHTML={{ __html: html }} />
 
-        {article.tags.length > 0 && (
-          <div className={styles.tags}>
-            {article.tags.map((t) => (
-              <a key={t} href={`/?tag=${encodeURIComponent(t)}`} className={styles.tag}>
-                #{t}
-              </a>
-            ))}
-          </div>
-        )}
+        <footer className={styles.articleFoot}>
+          {article.tags.length > 0 && (
+            <div className={styles.tags}>
+              {article.tags.map((t) => (
+                <a key={t} href={`/?tag=${encodeURIComponent(t)}`} className={styles.tag}>
+                  #{t}
+                </a>
+              ))}
+            </div>
+          )}
+          <ShareLinks url={articleUrl} title={article.title} />
+        </footer>
       </article>
     </div>
   );

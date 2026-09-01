@@ -1,4 +1,4 @@
-import { marked } from "marked";
+import { Marked } from "marked";
 import sanitizeHtml from "sanitize-html";
 import { withRls } from "@/lib/rls";
 import { AuthorizationError, PERMISSIONS, hasPermission, type AuthzActor } from "@/lib/authz";
@@ -58,8 +58,58 @@ export class ArticleNotFoundError extends Error {
  * for every article body — src/app/keenafricans's public article page and
  * the author's own edit-mode preview both call this, never anything else.
  */
+function slugifyHeading(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[`*_[\]()]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+/**
+ * A `marked` instance with heading ids added (marked itself dropped built-in
+ * heading-id generation years ago) — this is what makes an author's own
+ * table-of-contents links (`[Section](#some-heading)`) actually scroll to
+ * the right place instead of just landing at the top of the page with a
+ * dead fragment in the URL. Slugs are de-duplicated per render (two
+ * identically-worded headings in one article both get valid, distinct
+ * anchors) — a fresh counter per renderArticleBodyHtml() call, so it never
+ * needs resetting between articles.
+ */
+function markedWithHeadingIds(): Marked {
+  const instance = new Marked();
+  const seen = new Map<string, number>();
+  instance.use({
+    renderer: {
+      heading({ tokens, depth, text: rawText }) {
+        const text = this.parser.parseInline(tokens);
+        const base = slugifyHeading(rawText) || "section";
+        const count = seen.get(base) ?? 0;
+        seen.set(base, count + 1);
+        const id = count === 0 ? base : `${base}-${count}`;
+        return `<h${depth} id="${id}">${text}</h${depth}>\n`;
+      },
+    },
+  });
+  return instance;
+}
+
+/**
+ * marked() parses Markdown to HTML and, like every Markdown parser, passes
+ * inline raw HTML in the source straight through unless told otherwise —
+ * that alone is not safe to serve. sanitize-html() is the actual security
+ * boundary: it re-parses the resulting HTML against a strict allowlist and
+ * drops anything else (script/style tags, on* event attributes,
+ * javascript:/data: URLs, iframes, forms, ...), regardless of what marked
+ * produced. An author writing `<script>...</script>` in their Markdown
+ * source gets it silently stripped, not executed. This two-stage
+ * parse-then-allowlist-sanitize pipeline is the one shared rendering path
+ * for every article body — src/app/keenafricans's public article page and
+ * the author's own edit-mode preview both call this, never anything else.
+ */
 export function renderArticleBodyHtml(markdown: string): string {
-  const rawHtml = marked.parse(markdown, { async: false, gfm: true, breaks: false }) as string;
+  const rawHtml = markedWithHeadingIds().parse(markdown, { async: false, gfm: true, breaks: false }) as string;
   return sanitizeHtml(rawHtml, {
     allowedTags: [
       "h1", "h2", "h3", "h4", "h5", "h6",
@@ -71,6 +121,7 @@ export function renderArticleBodyHtml(markdown: string): string {
       "table", "thead", "tbody", "tr", "th", "td",
     ],
     allowedAttributes: {
+      h1: ["id"], h2: ["id"], h3: ["id"], h4: ["id"], h5: ["id"], h6: ["id"],
       a: ["href", "title", "rel", "target"],
       img: ["src", "alt", "title"],
       code: ["class"],
@@ -80,10 +131,20 @@ export function renderArticleBodyHtml(markdown: string): string {
     allowedSchemes: ["http", "https", "mailto"],
     allowProtocolRelative: false,
     transformTags: {
-      // Every external link an author writes opens without handing the
-      // destination a reference back to this tab (tabnabbing) — applied
-      // uniformly rather than trusting individual authors to remember it.
-      a: sanitizeHtml.simpleTransform("a", { rel: "noopener noreferrer ugc", target: "_blank" }),
+      // A same-page table-of-contents link (`href="#section"`) must
+      // navigate within the page, not open a new tab — only a genuinely
+      // external link (an absolute http(s)/mailto URL) gets target=_blank
+      // + rel="noopener noreferrer ugc" (tabnabbing protection). Applied
+      // uniformly rather than trusting individual authors to remember it,
+      // but only where it actually applies.
+      a: (tagName, attribs) => {
+        const href = attribs.href ?? "";
+        const isSamePage = href.startsWith("#");
+        return {
+          tagName,
+          attribs: isSamePage ? attribs : { ...attribs, rel: "noopener noreferrer ugc", target: "_blank" },
+        };
+      },
     },
   });
 }

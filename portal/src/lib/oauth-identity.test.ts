@@ -83,6 +83,23 @@ describe("resolveGoogleSignIn — brand-new Google-only account", () => {
     expect(session.userId).toBe(result.userId);
   });
 
+  it("marks the account's email verified immediately — Google already proved it, unlike a password registration", async () => {
+    const email = uniqueEmail();
+    const result = await resolveGoogleSignIn({
+      providerAccountId: randomUUID(),
+      email,
+      name: "Verified Via Google",
+      signupRole: "KEEN_AFRICAN",
+    });
+
+    expect(result.outcome).toBe("ok");
+    if (result.outcome !== "ok") return;
+    createdUserIds.push(result.userId);
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: result.userId } });
+    expect(row.emailVerifiedAt).not.toBeNull();
+  });
+
   it("rejects when no signupRole is supplied (admin/sponsor subdomains have no public signup path)", async () => {
     const result = await resolveGoogleSignIn({
       providerAccountId: randomUUID(),

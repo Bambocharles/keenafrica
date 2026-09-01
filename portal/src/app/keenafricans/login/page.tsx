@@ -19,7 +19,7 @@ const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
 export default async function KeenAfricansLoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; reset?: string }>;
 }) {
   const session = await auth();
   if (session?.user?.mfaPending) {
@@ -28,7 +28,7 @@ export default async function KeenAfricansLoginPage({
   if (canAccessKeenAfricanPortal(session?.user)) {
     redirect("/dashboard");
   }
-  const { error } = await searchParams;
+  const { error, reset } = await searchParams;
 
   async function login(formData: FormData) {
     "use server";
@@ -64,6 +64,15 @@ export default async function KeenAfricansLoginPage({
         {error === "1" && (
           <div className={styles.error} role="alert">
             Invalid email or password. Check both and try again.
+          </div>
+        )}
+        {reset === "1" && !error && (
+          <div
+            className={styles.error}
+            role="status"
+            style={{ background: "rgba(63, 182, 143, 0.14)", borderColor: "rgba(63, 182, 143, 0.35)", color: "#5fce9e" }}
+          >
+            Password updated. Sign in with your new password.
           </div>
         )}
 

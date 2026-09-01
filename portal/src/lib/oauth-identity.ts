@@ -200,6 +200,22 @@ export async function resolveGoogleSignIn(input: GoogleSignInInput): Promise<Goo
     })
   );
 
+  // Keen Africans (Session 34) — Google already proved this address before
+  // it ever reached us, so there is no real "verify your email" step left
+  // to gate publishing on for a Google-only account, unlike a password
+  // registration (which only ever proves the person controls the account
+  // they just created, never the mailbox). Setting this here, at the exact
+  // moment the account is created, is the general-correctness fix — not
+  // KEEN_AFRICAN-specific — so a future TEACHER/STUDENT consumer of
+  // emailVerifiedAt inherits the same guarantee for free rather than
+  // re-deriving "was this a Google sign-up" itself. users_update's
+  // existing "id = app.user_id" self-update branch covers this (same
+  // convention email-verification.ts's confirmEmailVerification() uses),
+  // no new RLS carve-out needed.
+  await withRls({ userId: registered.userId }, (tx) =>
+    tx.user.update({ where: { id: registered.userId }, data: { emailVerifiedAt: new Date() } })
+  );
+
   // A brand-new self-registered account can never hold SUPER_ADMIN (see
   // registration.ts's REGISTERABLE_ROLES) and has no TOTP enrolled yet, so
   // this is always false in practice — computed the same way regardless,
