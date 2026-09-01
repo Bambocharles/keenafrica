@@ -39,9 +39,21 @@ async function keenAfrican(verified = false) {
 describe("renderArticleBodyHtml", () => {
   it("renders plain markdown to the expected HTML", () => {
     const html = renderArticleBodyHtml("# Hello\n\nThis is **bold** text with a [link](https://example.com).");
-    expect(html).toContain("<h1>Hello</h1>");
+    expect(html).toContain('<h1 id="hello">Hello</h1>');
     expect(html).toContain("<strong>bold</strong>");
     expect(html).toContain('href="https://example.com"');
+  });
+
+  it("gives headings stable, de-duplicated ids so a table-of-contents can link to them", () => {
+    const html = renderArticleBodyHtml("## First Section\n\nA.\n\n## First Section\n\nB.");
+    expect(html).toContain('<h2 id="first-section">First Section</h2>');
+    expect(html).toContain('<h2 id="first-section-1">First Section</h2>');
+  });
+
+  it("does NOT open a same-page table-of-contents link in a new tab — only external links get target=_blank", () => {
+    const html = renderArticleBodyHtml("[Jump to section](#first-section)\n\n## First Section\n\nBody.");
+    expect(html).toContain('<a href="#first-section">Jump to section</a>');
+    expect(html).not.toMatch(/href="#first-section"[^>]*target/);
   });
 
   it("strips a raw <script> tag embedded in the Markdown source — the core XSS defense this session requires", () => {
