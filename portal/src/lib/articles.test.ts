@@ -3,11 +3,13 @@ import { prisma } from "@/lib/db";
 import { AuthorizationError } from "@/lib/authz";
 import {
   ArticleNotFoundError,
+  DELETED_ACCOUNT_NAME,
   EmailNotVerifiedError,
   RateLimitedError,
   adminUnpublishArticle,
   archiveArticle,
   createArticle,
+  deleteOwnKeenAfricanAccount,
   deriveExcerpt,
   getArticleForEdit,
   getPublicArticleBySlug,
@@ -17,7 +19,16 @@ import {
   unpublishArticle,
   updateArticle,
 } from "@/lib/articles";
-import { actorFromUser, cleanupTestArticles, cleanupTestUsers, createTestUser } from "@/lib/test-support";
+import { StepUpRequiredError } from "@/lib/mfa";
+import { PrivilegedAccountDeletionError } from "@/lib/users";
+import { ensureProfile, getMyProfile, updateProfile } from "@/lib/profiles";
+import {
+  actorFromUser,
+  cleanupTestArticles,
+  cleanupTestUsers,
+  createTestUser,
+  steppedUpActorFromUser,
+} from "@/lib/test-support";
 
 const createdUserIds: string[] = [];
 const createdArticleIds: string[] = [];
@@ -254,5 +265,116 @@ describe("listMyArticles", () => {
     const rows = await listMyArticles(owner);
     expect(rows.map((r) => r.id)).toContain(mine.id);
     expect(rows.map((r) => r.id)).not.toContain(theirs.id);
+  });
+});
+
+describe("deleteOwnKeenAfricanAccount — account deletion policy (Session 37)", () => {
+  it("without step-up, nothing is changed — not the account, not any article, not the profile", async () => {
+    const user = await createTestUser({ roles: ["KEEN_AFRICAN"] });
+    createdUserIds.push(user.id);
+    const actor = await actorFromUser(user.id); // no sessionId — never stepped up
+    const profile = await ensureProfile(actor, { name: "Untouched Author" });
+    const article = await createArticle({ title: "Should stay attributed" }, actor);
+    createdArticleIds.push(article.id);
+
+    await expect(deleteOwnKeenAfricanAccount(actor)).rejects.toThrow(StepUpRequiredError);
+
+    const articleRow = await prisma.article.findUniqueOrThrow({ where: { id: article.id } });
+    expect(articleRow.authorName).not.toBe(DELETED_ACCOUNT_NAME);
+    const profileRow = await prisma.profile.findUniqueOrThrow({ where: { id: profile.id } });
+    expect(profileRow.displayName).not.toBe(DELETED_ACCOUNT_NAME);
+    const userRow = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(userRow.status).toBe("active");
+  });
+
+  it("blocks a privileged (ADMIN) account with zero side effects — no article/profile change either", async () => {
+    const user = await createTestUser({ roles: ["KEEN_AFRICAN", "ADMIN"] });
+    createdUserIds.push(user.id);
+    const actor = await steppedUpActorFromUser(user.id);
+    const profile = await ensureProfile(actor, { name: "Admin Author" });
+    const article = await createArticle({ title: "Admin-authored" }, actor);
+    createdArticleIds.push(article.id);
+
+    await expect(deleteOwnKeenAfricanAccount(actor)).rejects.toThrow(PrivilegedAccountDeletionError);
+
+    // The whole point of checking assertOwnAccountDeletable() FIRST — a
+    // blocked attempt must be a true no-op, not "articles/profile already
+    // scrubbed, account itself untouched."
+    const articleRow = await prisma.article.findUniqueOrThrow({ where: { id: article.id } });
+    expect(articleRow.authorName).not.toBe(DELETED_ACCOUNT_NAME);
+    const profileRow = await prisma.profile.findUniqueOrThrow({ where: { id: profile.id } });
+    expect(profileRow.displayName).not.toBe(DELETED_ACCOUNT_NAME);
+    const userRow = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(userRow.status).toBe("active");
+  });
+
+  it("reattributes every one of the caller's own articles (draft, published, AND archived) without deleting any of them", async () => {
+    const user = await createTestUser({ roles: ["KEEN_AFRICAN"] });
+    createdUserIds.push(user.id);
+    await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: new Date() } });
+    const actor = await steppedUpActorFromUser(user.id);
+    await ensureProfile(actor, { name: "Prolific Author" });
+
+    const draft = await createArticle({ title: "Still a draft" }, actor);
+    createdArticleIds.push(draft.id);
+    const toPublish = await createArticle({ title: "Will be published" }, actor);
+    createdArticleIds.push(toPublish.id);
+    await publishArticle(toPublish.id, actor);
+    const toArchive = await createArticle({ title: "Will be archived" }, actor);
+    createdArticleIds.push(toArchive.id);
+    await archiveArticle(toArchive.id, actor);
+
+    await deleteOwnKeenAfricanAccount(actor);
+
+    const rows = await prisma.article.findMany({ where: { id: { in: [draft.id, toPublish.id, toArchive.id] } } });
+    expect(rows).toHaveLength(3); // none hard-deleted
+    for (const row of rows) {
+      expect(row.authorName).toBe(DELETED_ACCOUNT_NAME);
+    }
+    expect(rows.find((r) => r.id === draft.id)?.status).toBe("draft");
+    expect(rows.find((r) => r.id === toPublish.id)?.status).toBe("published");
+    expect(rows.find((r) => r.id === toArchive.id)?.status).toBe("archived");
+  });
+
+  it("scrubs the profile's public-facing fields but keeps the username stable (so /u/<username> and article bylines keep resolving)", async () => {
+    const user = await createTestUser({ roles: ["KEEN_AFRICAN"] });
+    createdUserIds.push(user.id);
+    const actor = await steppedUpActorFromUser(user.id);
+    const profile = await ensureProfile(actor, { name: "Bio Haver" });
+    await updateProfile(actor, {
+      bio: "I write things.",
+      profession: "Writer",
+      interests: ["africa", "tech"],
+      linkedinUrl: "https://linkedin.com/in/example",
+    });
+
+    await deleteOwnKeenAfricanAccount(actor);
+
+    const row = await prisma.profile.findUniqueOrThrow({ where: { id: profile.id } });
+    expect(row.username).toBe(profile.username); // unchanged — link stability
+    expect(row.displayName).toBe(DELETED_ACCOUNT_NAME);
+    expect(row.bio).toBeNull();
+    expect(row.profession).toBeNull();
+    expect(row.interests).toEqual([]);
+    expect(row.linkedinUrl).toBeNull();
+  });
+
+  it("anonymizes the underlying User row (name/email/password/status) — see users.test.ts for the full account-level assertions", async () => {
+    const user = await createTestUser({ roles: ["KEEN_AFRICAN"] });
+    createdUserIds.push(user.id);
+    const actor = await steppedUpActorFromUser(user.id);
+    await ensureProfile(actor, { name: "Deleting Self" });
+
+    await deleteOwnKeenAfricanAccount(actor);
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(row.name).toBe(DELETED_ACCOUNT_NAME);
+    expect(row.status).toBe("deleted");
+    expect(row.passwordHash).toBeNull();
+
+    // The now-deleted account can no longer be resolved for anything
+    // self-scoped — a defensive proof the account really is locked out, not
+    // just relabeled.
+    await expect(getMyProfile(actor)).resolves.not.toThrow(); // profile row still exists, just anonymized
   });
 });

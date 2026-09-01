@@ -49,7 +49,9 @@ export async function createSession(input: CreateSessionInput): Promise<{ id: st
 
 export interface AuthzSnapshot {
   isSuperAdmin: boolean;
-  status: "active" | "suspended";
+  // 'deleted' added by Session 37 (Account & Security) — see
+  // src/lib/users.ts's anonymizeOwnAccount().
+  status: "active" | "suspended" | "deleted";
   roles: string[];
   permissions: string[];
   /** Organization Core (Session 17) — organization ids the user holds an ACTIVE membership in. */
@@ -96,7 +98,11 @@ export async function resolveSessionAuthz(
       where: { id: userId },
       select: { isSuperAdmin: true, status: true },
     });
-    if (!user || user.status === "suspended") {
+    // 'deleted' (Session 37) is treated the same as 'suspended' here —
+    // belt-and-suspenders only: anonymizeOwnAccount() already revokes every
+    // session in the same call, so this row should never actually still be
+    // valid/unrevoked for a deleted account by the time this runs.
+    if (!user || user.status === "suspended" || user.status === "deleted") {
       return null;
     }
 

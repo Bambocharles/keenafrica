@@ -1,0 +1,11 @@
+-- Session 39 (Keen Africans — Notifications). Adds the
+-- 'article_unpublished_by_admin' NotificationType value, split into its own
+-- migration/transaction — Postgres cannot use a new enum value in the same
+-- transaction that adds it (same requirement documented on every prior
+-- AssetEntityType addition, e.g. the 'article_cover'/'avatar' migrations).
+--
+-- This is the ONLY new NotificationType value this session adds. See
+-- schema.prisma's NotificationType comment and docs/NOTIFICATIONS.md's
+-- "Extension points" section for why the review-workflow/verification/
+-- follow event types are deliberately NOT added here.
+ALTER TYPE "NotificationType" ADD VALUE 'article_unpublished_by_admin';

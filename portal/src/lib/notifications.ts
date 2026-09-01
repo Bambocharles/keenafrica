@@ -39,6 +39,12 @@ import { sendMail } from "@/lib/mailer";
  * same "core plumbing" treatment as audit/progress) plus an explicit
  * NotificationChannel abstraction for anything beyond it. See the "Delivery
  * channels" section below and docs/NOTIFICATIONS.md.
+ *
+ * Preferences (Session 39): a generic per-user, per-NotificationType
+ * opt-out, checked once inside createNotification() itself — see
+ * NotificationPreference's schema comment and the "Preferences" section
+ * below. Built here, generically, rather than as a Keen-Africans-specific
+ * table, per this session's own "no parallel notification system" rule.
  */
 
 export type NotificationTypeValue =
@@ -51,7 +57,11 @@ export type NotificationTypeValue =
   | "certificate_issued"
   | "account_suspended"
   | "role_changed"
-  | "project_milestone_updated";
+  | "project_milestone_updated"
+  // Session 39 (Keen Africans — Notifications). See schema.prisma's
+  // NotificationType comment and docs/NOTIFICATIONS.md's "Extension
+  // points" for why this is the only value this session adds.
+  | "article_unpublished_by_admin";
 
 const ACTIVE_ENROLLMENT_STATUSES = ["active", "completed"] as const;
 
@@ -134,6 +144,51 @@ async function dispatchToChannels(ctx: NotificationDeliveryContext): Promise<voi
   }
 }
 
+// --- Preferences (Session 39) ----------------------------------------
+
+/**
+ * Generic per-user, per-type opt-out — Session 10's own brief listed
+ * "notification preferences" but never built it; this is that capability,
+ * built once here rather than forked per portal. See
+ * NotificationPreference's schema comment for the "absence of a row means
+ * enabled, this table only ever holds opt-outs" contract.
+ */
+async function isNotificationEnabled(userId: string, type: NotificationTypeValue): Promise<boolean> {
+  const pref = await withRls(SYSTEM_CTX, (tx) =>
+    tx.notificationPreference.findUnique({ where: { userId_type: { userId, type } }, select: { enabled: true } })
+  );
+  return pref?.enabled ?? true;
+}
+
+/** Self-scoped read for a settings UI toggle — RLS-backstopped identically to every other self-only read in this module. */
+export async function getNotificationPreference(actor: AuthzActor, type: NotificationTypeValue): Promise<boolean> {
+  const pref = await withRls(actorRlsCtxLocal(actor), (tx) =>
+    tx.notificationPreference.findUnique({ where: { userId_type: { userId: actor.id, type } }, select: { enabled: true } })
+  );
+  return pref?.enabled ?? true;
+}
+
+/**
+ * Self-scoped write. Re-enabling deletes the opt-out row entirely rather
+ * than writing enabled=true, keeping this table's "only ever holds
+ * opt-outs" invariant intact (see its schema comment) — an empty table is
+ * therefore always "everyone gets everything," the same default this
+ * platform had before this session.
+ */
+export async function setNotificationPreference(actor: AuthzActor, type: NotificationTypeValue, enabled: boolean): Promise<void> {
+  if (enabled) {
+    await withRls(actorRlsCtxLocal(actor), (tx) => tx.notificationPreference.deleteMany({ where: { userId: actor.id, type } }));
+    return;
+  }
+  await withRls(actorRlsCtxLocal(actor), (tx) =>
+    tx.notificationPreference.upsert({
+      where: { userId_type: { userId: actor.id, type } },
+      create: { userId: actor.id, type, enabled: false },
+      update: { enabled: false },
+    })
+  );
+}
+
 // --- Core write path --------------------------------------------------
 
 export interface CreateNotificationInput {
@@ -159,6 +214,14 @@ export interface CreateNotificationInput {
  * dispatch was correctly skipped.
  */
 export async function createNotification(input: CreateNotificationInput): Promise<{ created: boolean }> {
+  // Session 39 (Keen Africans — Notifications). Checked first, ahead of the
+  // dedupe/write path below, so an opted-out recipient gets no row at all
+  // (not a suppressed-but-recorded one) — see NotificationPreference's own
+  // schema comment for why absence-of-row means enabled.
+  if (!(await isNotificationEnabled(input.recipientId, input.type))) {
+    return { created: false };
+  }
+
   // Unlike audit.ts's recordAuditEvent(), this can use a plain typed
   // create() rather than a raw INSERT: that function's problem was that
   // Postgres enforces the SELECT policy on any INSERT ... RETURNING row,
@@ -452,6 +515,32 @@ onDomainEvent("ProjectMilestoneUpdated", async ({ projectId, milestoneId }) => {
   }
 });
 
+onDomainEvent("ArticleUnpublishedByAdmin", async ({ articleId, authorId }) => {
+  // Session 39 (Keen Africans — Notifications). The one real event this
+  // session wires: Session 34's admin-unpublish moderation safety valve
+  // previously produced an AuditEvent only, with no signal to the author.
+  const article = await withRls(SYSTEM_CTX, (tx) =>
+    tx.article.findUnique({ where: { id: articleId }, select: { title: true, moderatedAt: true, moderationNote: true } })
+  );
+  if (!article?.moderatedAt) return;
+
+  await createNotification({
+    recipientId: authorId,
+    type: "article_unpublished_by_admin",
+    title: `Your article was unpublished: ${article.title}`,
+    body: article.moderationNote
+      ? `An admin took "${article.title}" down: ${article.moderationNote}. It's back in your drafts — you can address this and republish.`
+      : `An admin took "${article.title}" down. It's back in your drafts — you can address this and republish.`,
+    entityType: "article",
+    entityId: articleId,
+    // adminUnpublishArticle() sets a fresh moderatedAt on every call, so a
+    // republish -> re-unpublish cycle correctly produces a new notification
+    // each time (same "timestamp column as the real occurrence key"
+    // convention as course_published's publishedAt above).
+    dedupeKey: `article:${articleId}:unpublished_by_admin:${article.moderatedAt.toISOString()}`,
+  });
+});
+
 // --- Read path: the in-app notification center ----------------------------
 
 const MAX_PAGE_SIZE = 100;
@@ -591,6 +680,8 @@ export function notificationHref(n: Pick<NotificationSummary, "type" | "entityTy
       return n.entityType === "course" && n.entityId ? `/courses/${n.entityId}` : null;
     case "certificate_issued":
       return "/certificates";
+    case "article_unpublished_by_admin":
+      return n.entityType === "article" && n.entityId ? `/articles/${n.entityId}/edit` : null;
     case "account_suspended":
     case "role_changed":
     case "project_milestone_updated":

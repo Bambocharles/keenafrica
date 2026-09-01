@@ -176,6 +176,113 @@ export async function changeOwnEmail(actor: AuthzActor, newEmail: string): Promi
 }
 
 /**
+ * Account & Security (Session 37) — thrown by anonymizeOwnAccount() for an
+ * account holding SUPER_ADMIN/ADMIN. The User identity is shared across
+ * every portal (PLATFORM_CONTEXT.md's "Shared identity rule") — a click on
+ * a Keen Africans "delete my account" button must never be able to strip a
+ * platform administrator's access to everything else they run. There is no
+ * self-service path around this; a privileged account must be handled by
+ * another admin (role removal, then a normal self-deletion).
+ */
+export class PrivilegedAccountDeletionError extends Error {
+  constructor(message = "Contact a platform administrator to delete a privileged account") {
+    super(message);
+    this.name = "PrivilegedAccountDeletionError";
+  }
+}
+
+export interface AnonymizeOwnAccountInput {
+  /** Caller-supplied so this function stays portal-agnostic — see src/lib/articles.ts's deleteOwnKeenAfricanAccount() for the one caller today and the exact copy it passes. */
+  anonymizedName: string;
+}
+
+/**
+ * Account & Security (Session 37) — throws StepUpRequiredError/
+ * PrivilegedAccountDeletionError under the same conditions
+ * anonymizeOwnAccount() itself checks, WITHOUT mutating anything. Exported
+ * so src/lib/articles.ts's deleteOwnKeenAfricanAccount() can call this
+ * FIRST, before its own reversible Article/Profile mutations — a blocked
+ * deletion attempt (privileged account, stale step-up) must have zero
+ * visible side effects, not "articles/profile already scrubbed, account
+ * untouched." anonymizeOwnAccount() re-checks this itself too (defense in
+ * depth, and it's the only real safety net for any OTHER future caller) —
+ * the recheck is cheap and nothing changes in between the two calls in the
+ * one real call path today.
+ */
+export async function assertOwnAccountDeletable(actor: AuthzActor): Promise<void> {
+  await requireStepUp(actor);
+
+  if (actor.isSuperAdmin) {
+    throw new PrivilegedAccountDeletionError();
+  }
+  const roleRows = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.userRole.findMany({ where: { userId: actor.id }, select: { role: { select: { name: true } } } })
+  );
+  if (roleRows.some((r) => (PRIVILEGED_ROLES as readonly string[]).includes(r.role.name))) {
+    throw new PrivilegedAccountDeletionError();
+  }
+}
+
+/**
+ * Account & Security (Session 37) — self-service, irreversible account
+ * deletion. Per the site owner's explicit policy (sessions/37-keen-
+ * africans-account-security.md): the User row is ANONYMIZED, never
+ * hard-deleted (users_delete stays super_admin-only — deleting a row that
+ * other tables' history/audit trail still reference by id would either
+ * violate those FKs or silently orphan them). This is the generic Platform
+ * Core half only: name/email scrubbed, password cleared, every linked
+ * OAuth identity and MFA credential removed, every session revoked, status
+ * set to 'deleted'. It does NOT know about Profile or Article — see
+ * src/lib/articles.ts's deleteOwnKeenAfricanAccount(), the one real entry
+ * point, which reattributes the caller's own articles and scrubs their
+ * Profile row BEFORE calling this (the reversible, self-scoped steps run
+ * first; this function is the actual point of no return, called last).
+ *
+ * Always requires a fresh step-up proof, same tier as changeOwnPassword/
+ * changeOwnEmail above — this is at least as sensitive as either.
+ */
+export async function anonymizeOwnAccount(actor: AuthzActor, input: AnonymizeOwnAccountInput): Promise<void> {
+  await assertOwnAccountDeletable(actor);
+
+  // RFC 2606 reserves .invalid for exactly this — guaranteed to never
+  // collide with a real, re-registerable domain. Keyed on the user's own
+  // id, so it's unique without a lookup/retry loop (this function only
+  // ever runs once per account: passwordHash is null and every session is
+  // revoked by the time it returns, so there is no way to call it again).
+  const anonymizedEmail = `deleted-${actor.id}@removed.keenafrica.invalid`;
+
+  await withRls(actorRlsCtx(actor), async (tx) => {
+    await tx.user.update({
+      where: { id: actor.id },
+      data: {
+        name: input.anonymizedName,
+        email: anonymizedEmail,
+        passwordHash: null,
+        status: "deleted",
+        anonymizedAt: new Date(),
+      },
+    });
+    // Prevents signing back into this now-anonymized account via "Continue
+    // with Google" — see the keen_africans_account_deletion migration's
+    // own comment on why user_identities needed a DELETE policy for this.
+    await tx.userIdentity.deleteMany({ where: { userId: actor.id } });
+    // Same cleanup src/lib/mfa.ts's disableMfa() does — no point leaving a
+    // live TOTP secret/recovery codes attached to a login-disabled account.
+    await tx.recoveryCode.deleteMany({ where: { userId: actor.id } });
+    await tx.totpCredential.deleteMany({ where: { userId: actor.id } });
+  });
+
+  await revokeAllUserSessionsAsSystem(actor.id, actor.id);
+
+  await recordAuditEvent({
+    actorId: actor.id,
+    action: "user.self_deleted",
+    entityType: "User",
+    entityId: actor.id,
+  });
+}
+
+/**
  * Suspension is intentionally NOT self-servable, even by an admin acting
  * on their own account — always requires users.suspend explicitly, never
  * the self-ownership bypass other user-facing actions get. Revokes every
@@ -285,7 +392,9 @@ export interface UserSummary {
   id: string;
   email: string;
   name: string;
-  status: "active" | "suspended";
+  // 'deleted' added by Session 37 (Account & Security) — see
+  // anonymizeOwnAccount() above.
+  status: "active" | "suspended" | "deleted";
   isSuperAdmin: boolean;
   roles: string[];
   createdAt: Date;
@@ -295,7 +404,7 @@ export interface UserSummary {
 export interface ListUsersFilter {
   /** Filter to users holding this role. Omit for every role. */
   role?: RoleName;
-  status?: "active" | "suspended";
+  status?: "active" | "suspended" | "deleted";
   /** Case-insensitive substring match against name or email. */
   search?: string;
   page?: number;

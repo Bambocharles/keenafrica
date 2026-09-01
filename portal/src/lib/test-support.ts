@@ -20,7 +20,7 @@ import { createSession, markSessionSteppedUp } from "@/lib/sessions";
 const TEST_BCRYPT_COST = 4;
 
 export async function createTestUser(
-  opts: { roles?: RoleName[]; status?: "active" | "suspended" } = {}
+  opts: { roles?: RoleName[]; status?: "active" | "suspended" | "deleted" } = {}
 ) {
   const passwordHash = await hash("Test1234!", TEST_BCRYPT_COST);
   const user = await prisma.user.create({
@@ -114,6 +114,12 @@ export async function cleanupTestNotifications(userIds: string[]): Promise<void>
   await prisma.notification.deleteMany({ where: { recipientId: { in: userIds } } });
 }
 
+/** Deletes any NotificationPreference rows for a set of test users (Session 39) — call before cleanupTestUsers() deletes the User rows notification_preferences.user_id references (ON DELETE NO ACTION, same convention as every other cleanup helper here). */
+export async function cleanupTestNotificationPreferences(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  await prisma.notificationPreference.deleteMany({ where: { userId: { in: userIds } } });
+}
+
 /**
  * Deletes any Certificate rows for a set of student user ids, including
  * their downloadable-file asset attachments — call this before
@@ -181,6 +187,7 @@ export async function cleanupTestProfiles(userIds: string[]): Promise<void> {
 export async function cleanupTestUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return;
   await cleanupTestNotifications(userIds);
+  await cleanupTestNotificationPreferences(userIds);
   await cleanupTestConversations(userIds);
   await cleanupTestCertificates(userIds);
   const authoredArticleIds = (

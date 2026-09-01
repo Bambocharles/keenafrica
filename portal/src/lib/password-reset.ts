@@ -49,7 +49,11 @@ export async function requestPasswordReset(
     tx.user.findUnique({ where: { email }, select: { id: true, status: true } })
   );
 
-  if (!user || user.status === "suspended") {
+  // 'deleted' (Session 37) treated the same as 'suspended' — belt-and-
+  // suspenders only: a deleted account's email is already scrambled by
+  // anonymizeOwnAccount(), so a lookup by the original address already
+  // finds no user at all in practice.
+  if (!user || user.status === "suspended" || user.status === "deleted") {
     return { token: null };
   }
 

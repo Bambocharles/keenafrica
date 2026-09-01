@@ -19,7 +19,7 @@ const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
 export default async function KeenAfricansLoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; reset?: string }>;
+  searchParams: Promise<{ error?: string; reset?: string; accountDeleted?: string }>;
 }) {
   const session = await auth();
   if (session?.user?.mfaPending) {
@@ -28,7 +28,7 @@ export default async function KeenAfricansLoginPage({
   if (canAccessKeenAfricanPortal(session?.user)) {
     redirect("/dashboard");
   }
-  const { error, reset } = await searchParams;
+  const { error, reset, accountDeleted } = await searchParams;
 
   async function login(formData: FormData) {
     "use server";
@@ -73,6 +73,16 @@ export default async function KeenAfricansLoginPage({
             style={{ background: "rgba(63, 182, 143, 0.14)", borderColor: "rgba(63, 182, 143, 0.35)", color: "#5fce9e" }}
           >
             Password updated. Sign in with your new password.
+          </div>
+        )}
+        {accountDeleted === "1" && !error && (
+          <div
+            className={styles.error}
+            role="status"
+            style={{ background: "rgba(63, 182, 143, 0.14)", borderColor: "rgba(63, 182, 143, 0.35)", color: "#5fce9e" }}
+          >
+            Your account has been deleted. Any articles you published stay live, attributed to &ldquo;Former Keen
+            African&rdquo;.
           </div>
         )}
 

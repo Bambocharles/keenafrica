@@ -27,6 +27,9 @@ type Status =
   | "pending"
   | "invited"
   | "removed"
+  // Added by Session 37 (Keen Africans — Account & Security) for
+  // User.status's new self-service-deletion value.
+  | "deleted"
   // Added by Session 38 (Keen Africans — Editor Workflow) for
   // Article.reviewStatus. "not_submitted" intentionally has no badge — the
   // editor UI simply doesn't show a review badge at all in that state (see
@@ -59,6 +62,7 @@ const LABEL: Record<Status, string> = {
   pending: "Pending",
   invited: "Invited",
   removed: "Removed",
+  deleted: "Deleted",
   in_review: "In review",
   changes_requested: "Changes requested",
   approved: "Approved",
@@ -89,6 +93,7 @@ export function StatusBadge({ status }: { status: Status }) {
     pending: styles["badge-paused"],
     invited: styles["badge-draft"],
     removed: styles["badge-suspended"],
+    deleted: styles["badge-suspended"],
     in_review: styles["badge-paused"],
     changes_requested: styles["badge-paused"],
     approved: styles["badge-active"],

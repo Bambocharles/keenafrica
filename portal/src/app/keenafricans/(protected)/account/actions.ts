@@ -2,9 +2,11 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { requestPasswordReset } from "@/lib/password-reset";
 import { sendMail } from "@/lib/mailer";
+import { setNotificationPreference } from "@/lib/notifications";
 
 /**
  * Self-service password reset — moved here from the dashboard's old
@@ -52,4 +54,24 @@ export async function requestOwnPasswordResetAction() {
   }
 
   redirect(token ? "/account?resetLinkGenerated=1" : "/account?error=reset_unavailable");
+}
+
+/**
+ * Session 39 (Keen Africans — Notifications). The one minimal on/off
+ * toggle this session's brief asks for — see
+ * src/lib/notifications.ts's setNotificationPreference() for the generic
+ * (not Keen-Africans-specific) mechanism this calls. Hard-codes the single
+ * notification type this session actually wired
+ * ("article_unpublished_by_admin"); extending this to more types once
+ * Session 38/40/42 land is a matter of adding more checkboxes to the form
+ * below, not touching this action.
+ */
+export async function updateArticleUnpublishedPreferenceAction(formData: FormData) {
+  const session = await auth();
+  if (!session?.user) throw new Error("Not authenticated");
+  const actor = session.user;
+
+  const enabled = formData.get("articleUnpublishedByAdmin") === "on";
+  await setNotificationPreference(actor, "article_unpublished_by_admin", enabled);
+  revalidatePath("/account");
 }
