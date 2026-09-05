@@ -312,13 +312,15 @@ authorized end to end, and publicly readable.
 
 - ~~Consider a denormalized `authorName` snapshot column on `Article`~~ —
   **done in Session 36**, see the new section below.
-- **Clean up the orphaned/broken `Asset` row** left behind by the storage
-  mismatch (`10d94d8d-cd02-4488-8223-ed020e3c4eca` in production) — its
-  metadata row exists but the underlying bytes were never written to R2;
-  a reasonable candidate for the same soft-delete cleanup pass
-  Session 32's handoff already flagged for its own 2 orphaned rows. Still
-  open after Session 36 too — needs production access no sandbox so far
-  has had.
+- ~~**Clean up the orphaned/broken `Asset` row** left behind by the storage
+  mismatch (`10d94d8d-cd02-4488-8223-ed020e3c4eca` in production)~~ —
+  **done, Session 45.** Confirmed still present and still `status='active'`
+  on 2026-09-05, confirmed referenced by nothing (no attachment, resource,
+  project document, article cover or profile avatar), then soft-deleted
+  through this codebase's existing Asset lifecycle path
+  (`status='deleted'` + `deleted_at` + an `asset.deleted` AuditEvent
+  attributed to the uploader) — never a hard DELETE. See
+  `docs/GO_LIVE_READINESS.md` §9.4 for the full evidence.
 
 ## Public Profile & Account Identity (Session 36)
 

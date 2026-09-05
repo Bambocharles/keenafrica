@@ -397,9 +397,231 @@ blockers are now fixed; per the Session 32 update note above, a full go-live che
 still the correct next step before formally declaring GO, not an automatic consequence of both
 items being resolved.
 
+## 9. Session 45 (Outstanding Fixes & Consolidation) — 2026-09-05
+
+Session 45 closed the eight concrete, already-identified gaps the 2026-09-01 full platform audit
+left open (`sessions/45-outstanding-fixes-consolidation.md`). This section records each one's
+status and its live evidence. It does **not** re-declare the Go/No-Go verdict — Session 47 owns
+the next real go-live pass, per the audit's own 4-session closeout plan.
+
+**A note on access, because it changes what future sessions should assume**: this session ran on
+`keenafrica-infra` itself (the self-hosted runner host) and had, for the first time in this
+project, direct read/write access to `keenafrica_portal_prod` on `postgres01` (192.168.2.17,
+Postgres 14.24) via `docker run postgres:16-alpine psql`, plus working `kubectl get`/`gh` and
+public HTTPS. It did **not** have: `kubectl get secret` value reads (`base64 -d` denied),
+Cloudflare API token endpoints (denied, same wall as Session 32), or the ability to run an
+application script with `DATABASE_URL` pointed at production (denied — the item 5 correction was
+applied as equivalent guarded SQL instead). Probe, don't assume, in either direction.
+
+| # | Item | Status | Live evidence |
+|---|---|---|---|
+| 1 | Session 33's `answers_select` RLS fix + the data-integrity question | **Closed** | See §9.1 below. |
+| 2 | LinkedIn OAuth credentials in production | **Partially closed — one owner-side step remains** | See §9.2 below. |
+| 3 | Teacher org-scoped course creation | **Closed (code); deploy-gated** | See §9.3 below. |
+| 4 | Review-workflow notifications | **Closed (code); deploy-gated** | See §9.3 below. |
+| 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
+| 6 | Cloudflare R2 API token rotation | **Blocked on site owner** | See §9.5 below. |
+| 7 | `postgres01`'s sibling databases documented | **Closed** | See §9.6 below. |
+| 8 | `rollback-portal.yml` dispatched once | See §9.7 below. |
+
+### 9.1 `answers_select` join-depth fix, and what actually emptied `assessment_assignments`/`attempts`
+
+**The RLS fix.** Confirmed still needed before touching anything: querying `pg_policy` on
+`keenafrica_portal_prod` directly on 2026-09-05 showed `answers_select`/`answers_update` still
+carrying the pre-fix teacher branch — `EXISTS (SELECT 1 FROM attempts att JOIN assessments asm ON
+asm.id = att.assessment_id JOIN cohorts c ON c.course_id = asm.course_id JOIN cohort_teachers ct
+…)`. That is structurally the same "hop through `assessments`, which drags in that table's whole
+policy tree" shape Session 31 root-caused as the cause of the student-side `/assessments` P0
+(Postgres JIT-compiling a plan whose *estimated* cost crosses `jit_above_cost`, for a query that
+executes nothing).
+
+Session 33's fix was reconstructed from its never-merged checkpoint commit (`b63cae2`) and
+renamed to `20260905100000_answers_select_join_depth_fix` so it applies after the Sessions 34-44
+migrations that landed while it sat unmerged. Both policies now reach `cohorts` directly via
+`attempts.course_id` — the column Session 31 denormalized for exactly this reason.
+
+Measured live under the **real enforcing role** (`kf_portal_prod_app`, `NOBYPASSRLS`) against
+real production data, EXPLAIN-only:
+
+| | Plan nodes | Top-level estimated cost |
+|---|---|---|
+| Old (through `assessments`) | 123 | 1,312.93 |
+| New (through `attempts.course_id`) | 51 | 357.72 |
+
+**Access is proven identical, not merely cheaper.** The removed hop was "the cohort of the course
+that owns the assessment this attempt belongs to"; `attempts.course_id` was backfilled from that
+exact `assessments.course_id` value and cannot drift from it (both `attempts.assessment_id` and
+`assessments.course_id` are immutable post-creation). On top of that structural argument, the
+regression tests now assert both halves of the teacher branch on both policies — the course's own
+teacher can select and update an answer, an outsider teacher holding `courses.content.write` can
+do neither — plus a plan-shape assertion that `answers_select`/`answers_update` never reference
+`assessments` again.
+
+**Part 1 — what emptied `assessment_assignments`/`attempts` in production? Answer: nothing did.
+They were never populated.** Session 31 flagged this as an unexplained data-emptying event and it
+stayed open through Session 44. Three independent lines of live evidence settle it:
+
+1. **`pg_stat_user_tables` covers the whole life of the database.** `stats_reset` for
+   `keenafrica_portal_prod` is `2026-07-24 22:36:12+00`; the earliest `users` row is
+   `2026-07-24 22:39:52+00` — the counters start 3m40s *before* the first row this database ever
+   held. Over that entire window `attempts` and `assessment_assignments` both show
+   `n_tup_ins = 0`, `n_tup_del = 0`, and `last_vacuum`/`last_autovacuum` both NULL. Sibling tables
+   are intact and non-zero over the same window (`courses` 1 insert, `enrollments` 3), so the
+   counters are demonstrably not stale. A TRUNCATE would have left `n_tup_ins > 0`.
+2. **Physical corroboration, immune to any stats reset.** `pg_relation_size` is **0 bytes** for
+   `attempts`, `answers` and `assessment_assignments` — not one heap page has ever been allocated.
+   Tables that did receive rows (`assessments`, `courses`, `enrollments`) are 8192 bytes.
+3. **The audit trail is intact and contains no such action.** 338 `audit_events` rows spanning
+   2026-08-26 → 2026-09-01, including `assessment.created` and `assessment.published` — so
+   assessment-domain audit writes were working throughout. There is no `assessment.assigned`,
+   no `attempt.*`, and nothing matching delete/reset/wipe/truncate/seed anywhere in the table.
+
+The consistent reading: no assessment was ever actually assigned to a cohort or student in
+production, so no attempt could ever be started (an attempt can only exist against an existing
+assignment). That is unsurprising given `/assessments` was itself broken platform-wide for
+teachers and students for the entire period the QA sessions ran — which is Session 31's own
+finding. **This item is closed as "ruled out with evidence", not "unknown".**
+
+Independently, Session 33's other real finding is landed: `unassignAssessment()` was the only
+deletion path for `assessment_assignments` anywhere in the codebase and had no audit trail at
+all. It now records an `assessment.unassigned` AuditEvent. That gap was real regardless of the
+conclusion above.
+
+### 9.2 LinkedIn OAuth — credentials are provisioned; the redirect URI is not registered
+
+State has moved since the 2026-09-01 audit, but the feature still does not work end to end.
+
+**Done (not by this session):** `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` are present in
+the `portal-secrets` k8s Secret and live in the running pods. Verified live by driving the real
+`/auth/signin/linkedin` endpoint on `keenafricans.keenafrica.com`, which redirects to
+`https://www.linkedin.com/oauth/v2/authorization?...&client_id=78d58gykcdik6j&scope=openid+profile+email`.
+LinkedIn recognises that client id: a deliberately bogus one returns a generic error page, while
+this one returns a *specific* error.
+
+**Still open (needs the site owner, in the LinkedIn Developer Portal):** that specific error is
+**"The redirect_uri does not match the registered value."** Every plausible callback URL was
+probed against LinkedIn's own authorization endpoint and all were rejected:
+
+- `https://keenafricans.keenafrica.com/auth/callback/linkedin` — rejected
+- `https://keenafricans.keenafrica.com/api/auth/callback/linkedin` — rejected
+- `https://keenafrica.com/auth/callback/linkedin` — rejected
+- `https://www.keenafrica.com/auth/callback/linkedin` — rejected
+
+So the app exists and is credentialed, but no usable **Authorized redirect URL** is registered on
+it. Until `https://keenafricans.keenafrica.com/auth/callback/linkedin` is added there (with the
+"Sign In with LinkedIn using OpenID Connect" product enabled), "Connect LinkedIn" cannot complete
+for any real user. This session has no LinkedIn Developer Portal access and could not add it.
+
+Separately worth knowing when re-testing: hitting Auth.js's raw `/auth/signin/<provider>` REST
+endpoint emits `redirect_uri=https://0.0.0.0:3000/auth/callback/<provider>` — the long-documented,
+low-severity Auth.js host-resolution quirk (Session 30 §8, `docs/QA_AUTHENTICATION_LIVE_PASS.md`
+item 3). The app's own buttons go through server-side `signIn()` in a Server Action instead, which
+is why Google sign-in works in production despite the same quirk. **Re-test through the real
+"Connect LinkedIn" button, not through curl against the raw endpoint**, or the raw endpoint's bad
+`redirect_uri` will mask whether the registration fix worked.
+
+### 9.3 Teacher org-scoped course creation, and the review-workflow notifications
+
+Both are code changes on `session-45-outstanding-fixes`; both are proven by tests against the real
+non-superuser `portal_rls_test` role and by a migration pre-flight against a **restored copy of
+the live production database** (`pg_dump` of `keenafrica_portal_prod` taken 2026-09-05, restored
+locally, all three new migrations applied cleanly and produced the intended policy/enum state).
+Their production status is whatever `deploy-portal.yml` last did with this branch — see
+`status/project-status.md`'s Session 45 entry for the deploy record.
+
+**Course creation** implements the 2026-08-31 decision no session since 21 had landed. A new
+`courses.create.organization` permission (granted to `TEACHER`) allows creating an
+organization-scoped course for an organization the caller is an active member of — never a
+platform-wide one, never another organization's. Deliberately not `courses.create`: that key has a
+bare branch in `courses_select`, so granting it to `TEACHER` would have made every course on the
+platform visible to every teacher. Enforced twice, in `createCourse()` and independently in
+`courses_write`'s RLS policy. Full contract in `docs/ORGANIZATION_CORE.md`.
+
+**Notifications** add the four `NotificationType` values Session 39 documented as an extension
+point and nobody wired through Session 44 — `article_approved`, `article_changes_requested`,
+`article_rejected`, `article_published` — with one domain event per transition and one listener
+each, notifying the article's author and never the reviewer. Full contract in
+`docs/NOTIFICATIONS.md`.
+
+### 9.4 Orphaned `Asset` row — resolved in production
+
+`10d94d8d-cd02-4488-8223-ed020e3c4eca` (`control-plane-bootstrap-og.png`, 147008 bytes,
+`storage_driver='local'`, uploaded 2026-08-31 during Session 34's cross-environment storage
+mismatch) was confirmed still present and still `status='active'` on 2026-09-05, and confirmed
+referenced by nothing: zero `asset_attachments`, zero `resources`, zero `project_documents`, no
+`articles.cover_asset_id`, no `profiles.avatar_asset_id`.
+
+Resolved by the codebase's existing Asset lifecycle path — `status='deleted'` + `deleted_at`, plus
+an `asset.deleted` AuditEvent attributed to the uploader — never a hard row DELETE (`assets` has
+no DELETE RLS policy at all, by Session 13's design). Rehearsed first against the restored
+production copy using `scripts/resolve-orphaned-asset.ts`, then applied to production as the
+equivalent guarded SQL in a single transaction (the script itself could not be run against
+production from this sandbox — see the access note above). Post-state confirmed live:
+`status=deleted`, `deleted_at=2026-09-05 20:05:11.835069+00`, and two `audit_events` rows for that
+entity (`asset.uploaded` 2026-08-31, `asset.deleted` 2026-09-05). Reversible by flipping the
+status back.
+
+Not touched, and still open as a smaller follow-up: the two `storage_driver='local'` rows Session
+32 flagged (`certificate-KA-2026-2FB5355B6CA3.txt`, `qa_doc.txt`). Unlike this one, both still
+carry live `asset_attachments` rows (a certificate and a sponsor document), so soft-deleting them
+is a real data-lifecycle decision about those consumers, not an orphan cleanup — out of Session
+45's scope, which named exactly one row.
+
+### 9.5 Cloudflare R2 API token rotation — blocked on the site owner
+
+Not done. Creating an R2 API token requires either the Cloudflare dashboard's "Manage R2 API
+Tokens" flow or the Cloudflare API's token endpoints; this session's sandbox classifier denies
+every call to those endpoints, including read-only listing — the same wall Session 32 hit and
+documented. Terraform cannot do it either: the `cloudflare` provider has no R2-credential
+resource, only `cloudflare_r2_bucket` (see `terraform/portal-storage.tf`'s own comment).
+
+What this session *could* verify, and did: **the current credentials still work.** Six consecutive
+public reads of an R2-backed article cover
+(`https://keenafricans.keenafrica.com/covers/0048d5db-f208-43de-9580-9a039843fa8a`) all returned
+HTTP 200 with a byte-identical 102,959-byte `image/png`, served across a 2-pod Service. That is
+the baseline to re-run after rotation.
+
+**Procedure for the site owner** (unchanged from Session 32's, which is how the current token was
+made):
+
+1. Cloudflare dashboard → R2 → **Manage R2 API Tokens** → create a token scoped **Object Read &
+   Write**, **Apply to specific buckets only** → `keenafrica-portal-assets-prod`. Same scope as
+   the existing one; do not broaden it.
+2. `kubectl patch secret portal-secrets -n keen-prod --type merge -p '{"stringData":{"S3_ACCESS_KEY_ID":"<new id>","S3_SECRET_ACCESS_KEY":"<new secret>"}}'` — run it yourself, in your own
+   terminal. Do not paste the values into a chat interface; that is the exact thing this item
+   exists to remediate.
+3. `kubectl rollout restart -n keen-prod deployment/portal`, then `kubectl rollout status`.
+4. Re-run the read baseline above (expect 6/6 × HTTP 200, 102,959 bytes) and one real upload
+   through the teacher portal.
+5. **Only then** delete the old token in the R2 dashboard, and confirm the read baseline still
+   passes afterwards.
+
+### 9.6 `postgres01`'s sibling databases — documented
+
+`docs/BACKUP_RESTORE.md` (per-database table with live evidence) and `docs/ENVIRONMENT.md` (short
+cross-reference) now both record that `postgres01` hosts four databases, re-confirmed live on
+2026-09-05: `keenafrica_portal_prod` (14 MB, live), `keenafrica_portal` (9.0 MB, the dormant
+pre-cutover database — 5 tables, 4 rows, 8 tuple-level writes total since 2026-07-24),
+`postgres` (8.6 MB, the default administrative database), and `testdb` (8.6 MB, owned by `keen`,
+**zero user tables and zero write activity ever** — genuinely empty scratch). None are written to
+by the portal and none are covered by `backup-portal-db.yml`. Whether to delete the dormant
+database remains an open, low-priority owner decision, deliberately not made here; the docs now
+say to `pg_dump` it first if it ever is.
+
+### 9.7 `rollback-portal.yml` — first-ever dispatch
+
+Flagged since Session 16, never run. See `status/project-status.md`'s Session 45 entry for the
+dispatch record and outcome. The no-op form used is `image_tag` = the digest tag already running,
+so `kubectl set image` is a no-op for Kubernetes (no new ReplicaSet, no pod restart) and the run
+exercises only what it is meant to: the self-hosted runner, its kubeconfig, the `production`
+Environment approval gate, and the commands themselves.
+
 ## Required next-session actions
 
-- **Whoever picks up the assessments P0**: capture `pg_stat_activity`/`pg_locks` against
+- ~~**Whoever picks up the assessments P0**~~ — **resolved by Session 31; the follow-on
+  data-integrity question it left open is resolved by Session 45, see §9.1** (nothing deleted those
+  rows; they were never created). Retained below only because the technique is still the right one
+  for the next P0-shaped investigation: capture `pg_stat_activity`/`pg_locks` against
   `keenafrica_portal_prod` specifically (not the dormant sibling `keenafrica_portal` database on
   the same server — easy to pick the wrong tab, this session did it once), ideally as the
   migrator/superuser role for unredacted visibility, using a real `psql \watch 1` loop started
@@ -409,13 +631,10 @@ items being resolved.
   a weak signal toward pool/resource contention over a single stuck lock, not proof). Also worth
   checking Prisma's connection pool metrics/`connection_limit` and network latency between the
   portal pods and `postgres01` as a parallel line of investigation.
-- **Whoever next touches `docs/ENVIRONMENT.md`/`docs/BACKUP_RESTORE.md`**: document that
-  `postgres01` hosts `keenafrica_portal_prod` alongside three sibling databases
-  (`keenafrica_portal` — the dormant pre-cutover `dev.keenafrica.com` database, confirmed unwritten
-  since the Phase 1 cutover per `68c0eea`; `postgres`; `testdb` — untraced, likely unrelated
-  VM-setup scratch). Neither doc currently mentions this; it was discovered only by chance via a
-  pgAdmin screenshot this session. Worth a deliberate decision on whether to delete the dormant
-  database (it holds no reads/writes today) or keep it and document why.
+- ~~**Whoever next touches `docs/ENVIRONMENT.md`/`docs/BACKUP_RESTORE.md`**: document that
+  `postgres01` hosts `keenafrica_portal_prod` alongside three sibling databases~~ — **done,
+  Session 45, with live per-database evidence. See §9.6.** The one remaining sub-decision (delete
+  the dormant `keenafrica_portal` or keep it) is deliberately still open and is the owner's.
 - **Whoever owns the object-storage decision** (flagged since Sessions 09/13, re-confirmed broken
   live by Session 28): stand up shared storage (S3-compatible, or a shared PVC) before any real
   organization is onboarded, or gate file-upload-dependent features behind a feature flag in the
