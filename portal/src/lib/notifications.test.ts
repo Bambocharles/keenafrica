@@ -13,7 +13,17 @@ import { createQuestion } from "@/lib/questions";
 import { addQuestionToAssessment, assignAssessmentToCohort, createAssessment, publishAssessment } from "@/lib/assessments";
 import { startAttempt, submitAttempt } from "@/lib/attempts";
 import { startConversation } from "@/lib/messaging";
-import { adminUnpublishArticle, createArticle, publishArticle } from "@/lib/articles";
+import {
+  adminUnpublishArticle,
+  approveArticle,
+  createArticle,
+  publishArticle,
+  rejectArticle,
+  requestChanges,
+  scheduleArticle,
+  submitForReview,
+  flipDueScheduledArticles,
+} from "@/lib/articles";
 import { ensureProfile } from "@/lib/profiles";
 import { followUser, unfollowUser } from "@/lib/follows";
 import { FEATURE_FLAGS, _resetFeatureFlagCache } from "@/lib/feature-flags";
@@ -340,9 +350,16 @@ describe("CoursePublished -> course_published", () => {
     const { course, studentUser, adminActor } = await setupCourseWithStudent();
 
     await publishCourse(course.id, adminActor);
-    await new Promise((r) => setTimeout(r, 20));
 
+    // Session 45: was a fixed `setTimeout(20)`, which flaked once this file
+    // grew (the CoursePublished listener fans out to every enrolled student
+    // and is fire-and-forget, so 20ms is not a guarantee under a loaded
+    // suite run). Uses this file's own existing polling helper instead —
+    // same fix the ArticleUnpublishedByAdmin tests already apply for the
+    // same reason.
     const studentActor = await actorFromUser(studentUser.id);
+    await waitForNotificationCount(studentActor, "course_published", 1);
+
     const { notifications } = await listMyNotifications(studentActor);
     expect(notifications.some((n) => n.type === "course_published")).toBe(true);
   });
@@ -485,6 +502,143 @@ describe("ArticleUnpublishedByAdmin -> article_unpublished_by_admin", () => {
 
     const { notifications } = await listMyNotifications(authorActor);
     expect(notifications.filter((n) => n.type === "article_unpublished_by_admin")).toHaveLength(1);
+  });
+});
+
+// --- Session 45 (Outstanding Fixes & Consolidation) ----------------------
+// The review-workflow notifications Session 39 documented as an extension
+// point and nobody wired through Session 44.
+
+describe("review workflow -> article_approved / article_changes_requested / article_rejected", () => {
+  async function submittedArticle(title: string) {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const reviewerActor = await actorFromUser(admin.id);
+
+    const article = await createArticle({ title }, authorActor);
+    createdArticleIds.push(article.id);
+    await submitForReview(article.id, authorActor);
+    return { authorActor, reviewerActor, article };
+  }
+
+  it("approveArticle notifies the author (not the reviewer) and links to their editor view", async () => {
+    const { authorActor, reviewerActor, article } = await submittedArticle("Review Approve");
+    await approveArticle(article.id, reviewerActor);
+    await waitForNotificationCount(authorActor, "article_approved", 1);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    const notif = notifications.find((n) => n.type === "article_approved");
+    expect(notif).toBeDefined();
+    expect(notif!.title).toContain("Review Approve");
+    expect(notif!.entityType).toBe("article");
+    expect(notif!.entityId).toBe(article.id);
+    expect(notificationHref(notif!)).toBe(`/articles/${article.id}/edit`);
+
+    const { notifications: reviewerNotifs } = await listMyNotifications(reviewerActor);
+    expect(reviewerNotifs.some((n) => n.type === "article_approved")).toBe(false);
+  });
+
+  it("requestChanges notifies the author and carries the reviewer's note in the body", async () => {
+    const { authorActor, reviewerActor, article } = await submittedArticle("Review Changes");
+    await requestChanges(article.id, "tighten the second section", reviewerActor);
+    await waitForNotificationCount(authorActor, "article_changes_requested", 1);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    const notif = notifications.find((n) => n.type === "article_changes_requested");
+    expect(notif).toBeDefined();
+    expect(notif!.body).toContain("tighten the second section");
+  });
+
+  it("rejectArticle notifies the author, carries the reason, and says rejection isn't terminal", async () => {
+    const { authorActor, reviewerActor, article } = await submittedArticle("Review Reject");
+    await rejectArticle(article.id, "out of scope for Keen Africans", reviewerActor);
+    await waitForNotificationCount(authorActor, "article_rejected", 1);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    const notif = notifications.find((n) => n.type === "article_rejected");
+    expect(notif).toBeDefined();
+    expect(notif!.body).toContain("out of scope for Keen Africans");
+    expect(notif!.body).toContain("submit for review again");
+  });
+
+  it("a changes_requested -> resubmit -> approved cycle produces two independent notifications (dedupe keyed on reviewedAt)", async () => {
+    const { authorActor, reviewerActor, article } = await submittedArticle("Review Cycle");
+    await requestChanges(article.id, "first pass", reviewerActor);
+    await waitForNotificationCount(authorActor, "article_changes_requested", 1);
+
+    await submitForReview(article.id, authorActor);
+    await approveArticle(article.id, reviewerActor);
+    await waitForNotificationCount(authorActor, "article_approved", 1);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    expect(notifications.filter((n) => n.type === "article_changes_requested")).toHaveLength(1);
+    expect(notifications.filter((n) => n.type === "article_approved")).toHaveLength(1);
+  });
+
+  it("an opted-out author gets no review notification at all (the generic Session 39 preference applies to the new types too)", async () => {
+    const { authorActor, reviewerActor, article } = await submittedArticle("Review Opt Out");
+    await setNotificationPreference(authorActor, "article_approved", false);
+
+    await approveArticle(article.id, reviewerActor);
+    await new Promise((r) => setTimeout(r, 60));
+
+    const { notifications } = await listMyNotifications(authorActor);
+    expect(notifications.some((n) => n.type === "article_approved")).toBe(false);
+  });
+});
+
+describe("publish -> article_published", () => {
+  it("an author publishing their OWN article gets no notification — that would be noise", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const article = await createArticle({ title: "Self Publish" }, authorActor);
+    createdArticleIds.push(article.id);
+
+    await publishArticle(article.id, authorActor);
+    await new Promise((r) => setTimeout(r, 60));
+
+    const { notifications } = await listMyNotifications(authorActor);
+    expect(notifications.some((n) => n.type === "article_published")).toBe(false);
+  });
+
+  it("a reviewer publishing on the author's behalf DOES notify the author, and not the reviewer", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const admin = await user({ roles: ["ADMIN"] });
+    const reviewerActor = await actorFromUser(admin.id);
+
+    const article = await createArticle({ title: "Published For Me" }, authorActor);
+    createdArticleIds.push(article.id);
+
+    await publishArticle(article.id, reviewerActor);
+    await waitForNotificationCount(authorActor, "article_published", 1);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    const notif = notifications.find((n) => n.type === "article_published");
+    expect(notif).toBeDefined();
+    expect(notif!.body).toContain("on your behalf");
+    expect(notificationHref(notif!)).toBe(`/articles/${article.id}/edit`);
+
+    const { notifications: reviewerNotifs } = await listMyNotifications(reviewerActor);
+    expect(reviewerNotifs.some((n) => n.type === "article_published")).toBe(false);
+  });
+
+  it("a scheduled publish going live notifies the author with the scheduled wording", async () => {
+    const { actor: authorActor } = await keenAfricanVerified();
+    const article = await createArticle({ title: "Scheduled Live" }, authorActor);
+    createdArticleIds.push(article.id);
+
+    await scheduleArticle(article.id, new Date(Date.now() + 1000), authorActor);
+    // Move the schedule into the past directly — scheduleArticle() refuses a
+    // past date by design, and this test is about what flipDueScheduledArticles()
+    // does once a schedule is genuinely due, not about the guard.
+    await prisma.article.update({ where: { id: article.id }, data: { scheduledAt: new Date(Date.now() - 1000) } });
+
+    await flipDueScheduledArticles();
+    await waitForNotificationCount(authorActor, "article_published", 1);
+
+    const { notifications } = await listMyNotifications(authorActor);
+    const notif = notifications.find((n) => n.type === "article_published");
+    expect(notif).toBeDefined();
+    expect(notif!.body).toContain("scheduled");
   });
 });
 

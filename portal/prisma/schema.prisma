@@ -219,6 +219,25 @@ enum NotificationType {
   // unfollowed you" notification, per docs/NOTIFICATIONS.md's extension
   // point), notifying the followed user, never the follower.
   user_followed
+  // Session 45 (Outstanding Fixes & Consolidation). The review-workflow
+  // values Session 39's comment above anticipated and deliberately left
+  // unadded until Session 38's workflow existed. Session 38 landed them
+  // (approveArticle/requestChanges/rejectArticle in src/lib/articles.ts)
+  // but no session ever wired the notifications, so through Session 44 an
+  // author who submitted an article for review was told nothing about the
+  // outcome either way. Own migration, same "can't use a new enum value in
+  // the transaction that adds it" rule every prior addition followed.
+  //
+  // article_published is the one value NOT anticipated by Session 39's
+  // list: it fires only when an article goes live without its author
+  // pressing publish at that moment — a reviewer/admin publishing on the
+  // author's behalf, or scheduleArticle()'s deferred publish being flipped
+  // by flipDueScheduledArticles(). A plain self-publish never notifies the
+  // author of their own click.
+  article_approved
+  article_changes_requested
+  article_rejected
+  article_published
 }
 
 // --- Organization Core (Session 17) --------------------------------------

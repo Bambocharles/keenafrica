@@ -474,6 +474,15 @@ export async function publishArticle(articleId: string, actor: AuthzActor) {
   );
 
   await recordAuditEvent({ actorId: actor.id, action: "article.published", entityType: "Article", entityId: articleId });
+
+  // Session 45: only when SOMEONE ELSE published on the author's behalf (an
+  // articles.manage holder — see requireArticleOwnerOrManage). An author
+  // publishing their own article needs no notification about their own
+  // click; emitting one would be pure noise, the same reasoning
+  // events.ts's UserFollowed uses for never notifying the follower.
+  if (actor.id !== article.authorId) {
+    emitDomainEvent("ArticlePublished", { articleId, authorId: article.authorId, actorId: actor.id, scheduled: false });
+  }
   return updated;
 }
 
@@ -569,6 +578,16 @@ export async function flipDueScheduledArticles(): Promise<void> {
       })
     )
   );
+
+  // Session 45: a deferred publish going live is a real outcome the author
+  // did not trigger at that moment (this runs on someone else's page load —
+  // see this function's own docstring), so unlike an immediate self-publish
+  // it does warrant a notification. actorId is the author's own id because
+  // there is no acting user here at all; `scheduled: true` is what the
+  // listener branches on for its wording.
+  for (const a of due) {
+    emitDomainEvent("ArticlePublished", { articleId: a.id, authorId: a.authorId, actorId: a.authorId, scheduled: true });
+  }
 }
 
 /** Self-service — returns a published article to draft. Distinct from adminUnpublishArticle below (moderation). */
@@ -670,6 +689,13 @@ export async function approveArticle(articleId: string, actor: AuthzActor) {
     entityId: articleId,
     metadata: { authorId: article.authorId },
   });
+
+  // Session 45: Session 39 documented this exact extension point and left
+  // it for whoever finished the review workflow; Session 38 finished the
+  // workflow but never came back for it, so until now an author was told
+  // nothing about a review outcome. notifications.ts's listener re-fetches
+  // reviewedAt itself for its dedupe key.
+  emitDomainEvent("ArticleApproved", { articleId, authorId: article.authorId, actorId: actor.id });
   return updated;
 }
 
@@ -693,6 +719,9 @@ export async function requestChanges(articleId: string, note: string, actor: Aut
     entityId: articleId,
     metadata: { authorId: article.authorId, note: trimmed },
   });
+
+  // Session 45 — see approveArticle() above.
+  emitDomainEvent("ArticleChangesRequested", { articleId, authorId: article.authorId, actorId: actor.id });
   return updated;
 }
 
@@ -716,6 +745,9 @@ export async function rejectArticle(articleId: string, reason: string, actor: Au
     entityId: articleId,
     metadata: { authorId: article.authorId, reason: trimmed },
   });
+
+  // Session 45 — see approveArticle() above.
+  emitDomainEvent("ArticleRejected", { articleId, authorId: article.authorId, actorId: actor.id });
   return updated;
 }
 

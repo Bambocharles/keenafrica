@@ -109,15 +109,55 @@ export interface CreateCourseInput {
    * caller and test is unaffected. Supplying an organizationId creates an
    * ORGANIZATION-scoped course instead, visible only to that
    * organization's members plus courses.manage/super_admin (unchanged).
-   * Still gated by courses.create only — this session does not grant
-   * org_admin a course-creation capability of its own (see this session's
-   * handoff "Known limitations").
+   * Session 45: no longer gated by courses.create ALONE — see
+   * assertMayCreateCourse() below for the organization-scoped path a
+   * TEACHER now has.
    */
   organizationId?: string;
 }
 
+/**
+ * Session 45 (Outstanding Fixes & Consolidation), implementing the decision
+ * recorded in status/project-status.md on 2026-08-31 and never landed by
+ * any session since: who may create a course, and of what scope.
+ *
+ *   - super_admin / courses.create (ADMIN, SUPER_ADMIN): unchanged from
+ *     Session 04/21 — may create a PLATFORM course, or one scoped to any
+ *     organization, member or not. A Platform Admin's cross-tenant reach is
+ *     deliberately untouched here (PLATFORM_CONTEXT.md's Organization/Tenant
+ *     rule).
+ *   - courses.create.organization (TEACHER, by default): may create ONLY an
+ *     ORGANIZATION-scoped course, and only for an organization they are an
+ *     ACTIVE member of. No platform-wide course, no other organization's
+ *     course.
+ *
+ * Membership is resolved server-side via organizations.ts's
+ * isActiveOrganizationMember() — never trusted from the client, exactly as
+ * PLATFORM_ARCHITECTURE.md §15 requires for anything organization-scoped.
+ * This is the application-layer half; courses_write's RLS policy enforces
+ * the same rule independently at the database level (see the
+ * 20260905120000_teacher_org_scoped_course_creation migration), so a
+ * crafted request that somehow bypassed this function still cannot insert
+ * the row.
+ */
+async function assertMayCreateCourse(input: CreateCourseInput, actor: AuthzActor): Promise<void> {
+  if (actor.isSuperAdmin || hasPermission(actor, PERMISSIONS.COURSES_CREATE)) return;
+
+  // Throws AuthorizationError with the usual message if they hold neither
+  // key — so an actor with no course-creation rights at all is rejected
+  // exactly as before this session.
+  requirePermission(actor, PERMISSIONS.COURSES_CREATE_ORG);
+
+  if (!input.organizationId) {
+    throw new AuthorizationError("Not authorized to create a platform-wide course");
+  }
+  if (!(await isActiveOrganizationMember(input.organizationId, actor.id))) {
+    throw new AuthorizationError("Not a member of this organization");
+  }
+}
+
 export async function createCourse(input: CreateCourseInput, actor: AuthzActor) {
-  requirePermission(actor, PERMISSIONS.COURSES_CREATE);
+  await assertMayCreateCourse(input, actor);
 
   const course = await withRls(actorRlsCtx(actor), async (tx) => {
     if (input.organizationId) {
@@ -232,6 +272,53 @@ export async function listMyCourses(actor: AuthzActor) {
       orderBy: { createdAt: "desc" },
     })
   );
+}
+
+/**
+ * Session 45 (Outstanding Fixes & Consolidation). listMyCourses() above
+ * answers "which courses do I TEACH" — the question the teacher dashboard
+ * and the assessments picker ask, and it deliberately still answers only
+ * that (every page behind those lists needs a cohort_teachers row to do
+ * anything at all, so widening them would surface courses whose every
+ * action would then correctly refuse).
+ *
+ * This variant additionally includes courses the actor CREATED but is not
+ * yet assigned to teach — the state a teacher's own organization-scoped
+ * course sits in between createCourse() and an admin attaching a cohort to
+ * it. Used only by the teacher workspace's own /courses list, which labels
+ * that state explicitly rather than offering a "Manage" link that would
+ * 403. `isTaught` is the discriminator, computed from the same
+ * cohort_teachers ownership the rest of this module uses — never inferred
+ * from createdBy.
+ *
+ * Still fully RLS-scoped: courses_select's created_by branch carries the
+ * same organization-membership condition as its teacher branch, so a
+ * creator who has left the organization stops seeing the course here too.
+ */
+export async function listMyCoursesForWorkspace(actor: AuthzActor) {
+  if (
+    !actor.isSuperAdmin &&
+    !hasPermission(actor, PERMISSIONS.COURSES_MANAGE) &&
+    !hasPermission(actor, PERMISSIONS.COURSES_CONTENT_WRITE) &&
+    !hasPermission(actor, PERMISSIONS.COURSES_CONTENT_PUBLISH)
+  ) {
+    throw new AuthorizationError("Not authorized");
+  }
+
+  const courses = await withRls(actorRlsCtx(actor), (tx) =>
+    tx.course.findMany({
+      where: {
+        OR: [
+          { cohorts: { some: { teachers: { some: { teacherUserId: actor.id } } } } },
+          { createdBy: actor.id },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      include: { cohorts: { where: { teachers: { some: { teacherUserId: actor.id } } }, select: { id: true }, take: 1 } },
+    })
+  );
+
+  return courses.map(({ cohorts, ...course }) => ({ ...course, isTaught: cohorts.length > 0 }));
 }
 
 /** Requires courses.manage, super_admin, or being a teacher on the course. */

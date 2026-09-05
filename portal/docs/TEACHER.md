@@ -144,9 +144,19 @@ Session 04's handoff to Session 07).
 
 ## Permissions
 
-No new permission keys. Reuses Session 04's `courses.content.write`/
-`courses.content.publish` (both already default to `TEACHER`) for every
-authoring action, and Session 02's self-ownership pattern
+**Updated by Session 45**: `TEACHER` now also holds
+`courses.create.organization`, which lets a teacher create a course scoped
+to an organization they are an ACTIVE member of — never a platform-wide
+one, and never another organization's. See
+`docs/ORGANIZATION_CORE.md`'s "Teacher org-scoped course creation" for the
+full contract and why it is a separate key from `courses.create`. The
+teacher workspace's `/courses` page carries the form; the course is not
+teachable until an admin attaches a cohort and assigns the teacher to it
+(unchanged — `courses.manage` still owns cohorts).
+
+Otherwise unchanged from Session 05: reuses Session 04's
+`courses.content.write`/`courses.content.publish` (both already default to
+`TEACHER`) for every authoring action, and Session 02's self-ownership pattern
 (`requireOwnResourceOrPermission`) for profile edits. `TEACHER_PORTAL_ROLES`
 (`src/lib/authz.ts`) is a new *role list*, not a new permission — same
 shape as `ADMIN_CONSOLE_ROLES`.

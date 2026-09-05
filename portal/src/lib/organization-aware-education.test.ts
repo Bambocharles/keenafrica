@@ -7,6 +7,8 @@ import {
   createCourse,
   enrollStudent,
   getCourseById,
+  listMyCourses,
+  listMyCoursesForWorkspace,
 } from "@/lib/courses";
 import { createAssessment } from "@/lib/assessments";
 import { createQuestion } from "@/lib/questions";
@@ -90,6 +92,141 @@ describe("createCourse: scope/organizationId", () => {
     await expect(createCourse({ title: "Bad Org Course", organizationId: randomUUID() }, adminActor)).rejects.toThrow(
       /Organization not found/
     );
+  });
+});
+
+// --- Session 45 (Outstanding Fixes & Consolidation) ----------------------
+//
+// Teacher org-scoped course creation: the decision recorded in
+// status/project-status.md on 2026-08-31 that no session between 21 and 44
+// implemented. A TEACHER holds courses.create.organization (never
+// courses.create) and may create ONLY an organization-scoped course, for an
+// organization they are an ACTIVE member of.
+//
+// Both halves are proven: the positive case, and every negative case that
+// defines the boundary (no organizationId at all; an organization they've
+// never joined; one they only have a PENDING request for; one they were
+// removed from). The RLS backstop for the same rule is proven independently
+// in organization-aware-education-rls.integration.test.ts against the real
+// non-superuser role — these are the application-layer assertions.
+describe("createCourse: teacher org-scoped creation (Session 45)", () => {
+  async function teacherInOrg() {
+    const founder = await user();
+    const org = await createOrganization({ name: "Teacher Create Org", slug: uniqueSlug() }, await orgActorFromUser(founder.id));
+    createdOrgIds.push(org.id);
+
+    const teacher = await user({ roles: ["TEACHER"] });
+    await makeActiveOrgMember(org.id, founder.id, teacher.id);
+    return { founder, org, teacher };
+  }
+
+  it("a TEACHER holds courses.create.organization but NOT courses.create or courses.manage", async () => {
+    const teacher = await user({ roles: ["TEACHER"] });
+    const teacherActor = await actorFromUser(teacher.id);
+    expect(teacherActor.permissions).toContain("courses.create.organization");
+    expect(teacherActor.permissions).not.toContain("courses.create");
+    expect(teacherActor.permissions).not.toContain("courses.manage");
+  });
+
+  it("POSITIVE: a teacher who is an active member creates an ORGANIZATION-scoped course in that organization", async () => {
+    const { org, teacher } = await teacherInOrg();
+    const teacherActor = await orgActorFromUser(teacher.id);
+
+    const course = await createCourse({ title: "Teacher Org Course", organizationId: org.id }, teacherActor);
+    createdCourseIds.push(course.id);
+
+    expect(course.scope).toBe("organization");
+    expect(course.organizationId).toBe(org.id);
+    expect(course.createdBy).toBe(teacher.id);
+    expect(course.status).toBe("draft");
+  });
+
+  it("NEGATIVE: the same teacher cannot create a PLATFORM-wide course (no organizationId)", async () => {
+    const { teacher } = await teacherInOrg();
+    const teacherActor = await orgActorFromUser(teacher.id);
+
+    await expect(createCourse({ title: "Teacher Platform Course" }, teacherActor)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("NEGATIVE: the same teacher cannot create a course in an organization they don't belong to", async () => {
+    const { teacher } = await teacherInOrg();
+    const teacherActor = await orgActorFromUser(teacher.id);
+
+    const otherFounder = await user();
+    const otherOrg = await createOrganization(
+      { name: "Someone Else's Org", slug: uniqueSlug() },
+      await orgActorFromUser(otherFounder.id)
+    );
+    createdOrgIds.push(otherOrg.id);
+
+    await expect(
+      createCourse({ title: "Cross-Tenant Course", organizationId: otherOrg.id }, teacherActor)
+    ).rejects.toThrow(AuthorizationError);
+  });
+
+  it("NEGATIVE: a PENDING (unapproved) join request is not membership — creation is still refused", async () => {
+    const founder = await user();
+    const org = await createOrganization({ name: "Pending Org", slug: uniqueSlug() }, await orgActorFromUser(founder.id));
+    createdOrgIds.push(org.id);
+
+    const teacher = await user({ roles: ["TEACHER"] });
+    // Requested, deliberately NOT approved — this is the exact "nobody can
+    // grant themselves membership by naming an organization" rule
+    // organizations.ts's module docstring states, applied to course
+    // creation.
+    await requestToJoinOrganization(org.id, await orgActorFromUser(teacher.id));
+
+    await expect(
+      createCourse({ title: "Pending Member Course", organizationId: org.id }, await orgActorFromUser(teacher.id))
+    ).rejects.toThrow(AuthorizationError);
+  });
+
+  it("NEGATIVE: an actor with neither courses.create nor courses.create.organization is refused, exactly as before this session", async () => {
+    const stranger = await user();
+    const strangerActor = await actorFromUser(stranger.id);
+    await expect(createCourse({ title: "Stranger Course" }, strangerActor)).rejects.toThrow(AuthorizationError);
+  });
+
+  it("an ADMIN's own reach is unchanged: still creates platform-wide courses, and org-scoped ones for organizations they are NOT a member of", async () => {
+    const admin = await user({ roles: ["ADMIN"] });
+    const adminActor = await actorFromUser(admin.id);
+    const founder = await user();
+    const org = await createOrganization({ name: "Admin Reach Org", slug: uniqueSlug() }, await orgActorFromUser(founder.id));
+    createdOrgIds.push(org.id);
+
+    const platform = await createCourse({ title: "Admin Platform Course" }, adminActor);
+    createdCourseIds.push(platform.id);
+    expect(platform.scope).toBe("platform");
+
+    // adminActor has no OrganizationMembership row in this org at all.
+    const scoped = await createCourse({ title: "Admin Org Course", organizationId: org.id }, adminActor);
+    createdCourseIds.push(scoped.id);
+    expect(scoped.organizationId).toBe(org.id);
+  });
+
+  it("the created course appears in the creating teacher's own workspace list before any cohort exists, flagged as not-yet-taught", async () => {
+    const { org, teacher } = await teacherInOrg();
+    const teacherActor = await orgActorFromUser(teacher.id);
+
+    const course = await createCourse({ title: "Visible To Creator", organizationId: org.id }, teacherActor);
+    createdCourseIds.push(course.id);
+
+    const mine = await listMyCoursesForWorkspace(teacherActor);
+    const row = mine.find((c) => c.id === course.id);
+    expect(row).toBeDefined();
+    // Creating a course does NOT make you its teacher — that still needs a
+    // cohort_teachers row an admin creates.
+    expect(row!.isTaught).toBe(false);
+
+    // listMyCourses() (the "which courses do I teach" question the teacher
+    // dashboard and assessments picker ask) is deliberately unchanged and
+    // does NOT include it.
+    expect((await listMyCourses(teacherActor)).map((c) => c.id)).not.toContain(course.id);
+
+    // ...and it is in no unrelated teacher's list either.
+    const outsider = await user({ roles: ["TEACHER"] });
+    const outsiderCourses = await listMyCoursesForWorkspace(await orgActorFromUser(outsider.id));
+    expect(outsiderCourses.map((c) => c.id)).not.toContain(course.id);
   });
 });
 

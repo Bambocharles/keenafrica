@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { prisma } from "@/lib/db";
 import { AuthorizationError } from "@/lib/authz";
 import { assignTeacherToCohort, createCohort, createCourse, enrollStudent } from "@/lib/courses";
 import { createQuestion } from "@/lib/questions";
@@ -210,6 +211,17 @@ describe("assignment — cohort/student, ownership + enrollment validation", () 
     await unassignAssessment(assignment.id, teacherActor);
     const after = await listAssignmentsForAssessment(assessment.id, teacherActor);
     expect(after).toHaveLength(0);
+
+    // Session 33 (landed by Session 45): unassignAssessment() used to be
+    // the only deletion path in the codebase for assessment_assignments
+    // with no audit trail at all — found while investigating why that
+    // table turned up completely empty in production with nothing in
+    // audit_events either way.
+    const auditRow = await prisma.auditEvent.findFirst({
+      where: { action: "assessment.unassigned", entityType: "AssessmentAssignment", entityId: assignment.id },
+    });
+    expect(auditRow).not.toBeNull();
+    expect(auditRow?.actorId).toBe(teacherActor.id);
 
     const outsider = await user({ roles: ["TEACHER"] });
     const outsiderActor = await actorFromUser(outsider.id);

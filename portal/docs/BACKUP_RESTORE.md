@@ -9,6 +9,36 @@ Proxmox host. That mirror protects against a single disk failure; it is
 `DELETE`, or an accidental `DROP TABLE`, and there was no logical-backup or
 restore-tested procedure before this session).
 
+**`postgres01` is not single-purpose** (discovered by Session 30, documented
+here by Session 45 — Session 33 wrote this up but was never merged): the
+instance hosts `keenafrica_portal_prod` alongside three sibling databases,
+sharing the cluster-wide role catalog and instance-level resources
+(`max_connections`, WAL, checkpoint I/O, buffer pool). All four were
+re-confirmed live on 2026-09-05 by querying `pg_database` on `postgres01`
+directly:
+
+| Database | Size | Owner | State |
+|---|---|---|---|
+| `keenafrica_portal_prod` | 14 MB | `kf_portal_prod_migrator` | **Live production.** The only database `DATABASE_URL` points at. |
+| `keenafrica_portal` | 9.0 MB | `keenafrica_migrator` | The pre-cutover `dev.keenafrica.com` database. Deliberately preserved for its historical data; confirmed dormant (traced via git history, `68c0eea` "Decommission dev.keenafrica.com") — nothing in the live k8s cluster references it. **Live evidence (2026-09-05)**: 5 tables total (`users`, `sponsors`, `projects`, `_prisma_migrations`, one more), 4 rows between them, and only 5 inserts / 2 updates / 1 delete in `pg_stat_user_tables` across the whole database since its `stats_reset` of 2026-07-24 — i.e. effectively no activity since the cutover. |
+| `postgres` | 8.6 MB | `postgres` | The default administrative database every Postgres instance ships with. |
+| `testdb` | 8.6 MB | `keen` | Untraced. No reference anywhere in this repo's history; likely unrelated VM-setup scratch, not this application's. **Live evidence (2026-09-05)**: zero ordinary tables in any non-system schema, zero write activity ever recorded in `pg_stat_user_tables`. It is genuinely empty. |
+
+None of these three are written to by the portal application. This is a
+documentation gap fix, not a change in behavior — `pg-backup.sh`/
+`pg-restore.sh` below operate on `DATABASE_URL`'s target database only
+(`keenafrica_portal_prod` in production), so the sibling databases were
+never included or excluded by any backup decision; they simply were never
+mentioned. **They are not backed up by `backup-portal-db.yml`** — that is
+the correct behavior for `postgres` and `testdb`, and an accepted, now
+explicit, decision for the dormant `keenafrica_portal` (its historical data
+lives only on `postgres01`'s ZFS mirror, which is redundancy, not a
+backup). Whether to delete the dormant `keenafrica_portal` database remains
+an open, low-priority decision for whoever owns `postgres01` — deliberately
+not made by Session 45, which was asked to document its existence, not to
+decide its fate. If it is ever deleted, take a one-off `pg_dump` of it
+first.
+
 The self-hosted GitHub Actions runner (`keenafrica-vm`) already has network
 access to the DB (used today by `deploy-portal.yml` to run
 `prisma migrate deploy`) and has Docker installed. Backups run there rather

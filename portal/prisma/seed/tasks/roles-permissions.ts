@@ -29,6 +29,7 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   [PERMISSIONS.AUDIT_READ]: "Read the security/audit event log.",
   [PERMISSIONS.FLAGS_MANAGE]: "Toggle feature flags on/off.",
   [PERMISSIONS.COURSES_CREATE]: "Create a new course.",
+  [PERMISSIONS.COURSES_CREATE_ORG]: "Create a course scoped to an organization the holder is an active member of (never a platform-wide one).",
   [PERMISSIONS.COURSES_MANAGE]: "Manage course metadata, cohorts, teacher assignment, and enrollment.",
   [PERMISSIONS.COURSES_PUBLISH]: "Publish or archive a course.",
   [PERMISSIONS.COURSES_CONTENT_WRITE]: "Create or edit module/lesson draft content (ownership-scoped).",

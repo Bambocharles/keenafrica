@@ -69,7 +69,15 @@ export type NotificationTypeValue =
   // Session 42 (Follow & Author Reputation Display). The "follow" value
   // Session 39's own docstring anticipated — see the listener below and
   // events.ts's UserFollowed comment.
-  | "user_followed";
+  | "user_followed"
+  // Session 45 (Outstanding Fixes & Consolidation). The review-workflow
+  // values Session 39's own docstring anticipated — see the listeners
+  // below and events.ts's ArticleApproved/ArticleChangesRequested/
+  // ArticleRejected/ArticlePublished comments.
+  | "article_approved"
+  | "article_changes_requested"
+  | "article_rejected"
+  | "article_published";
 
 const ACTIVE_ENROLLMENT_STATUSES = ["active", "completed"] as const;
 
@@ -584,6 +592,106 @@ onDomainEvent("VerificationStatusChanged", async ({ userId, status, reason }) =>
   });
 });
 
+// --- Review workflow (Session 45) ---------------------------------------
+//
+// The listeners docs/NOTIFICATIONS.md's "Extension points" specified when
+// Session 39 deliberately left them unbuilt. All four notify the ARTICLE'S
+// AUTHOR and nobody else — never the reviewer, who took the action and
+// already knows (same "never notify the actor" rule ArticleUnpublishedByAdmin
+// and UserFollowed follow).
+//
+// Every review transition stamps a fresh `reviewedAt` (see
+// src/lib/articles.ts), so keying dedupe on it makes a real
+// submit -> changes_requested -> resubmit -> approved cycle produce one
+// notification per real decision — the same "timestamp column as the real
+// occurrence key" convention as ArticleUnpublishedByAdmin's moderatedAt and
+// VerificationStatusChanged's reviewedAt.
+
+/** Shared re-fetch for the three review listeners — each re-reads under SYSTEM_CTX rather than trusting a row passed across the module boundary (events.ts's "Payload discipline" rule). */
+async function fetchReviewedArticle(articleId: string) {
+  return withRls(SYSTEM_CTX, (tx) =>
+    tx.article.findUnique({ where: { id: articleId }, select: { title: true, reviewNote: true, reviewedAt: true } })
+  );
+}
+
+onDomainEvent("ArticleApproved", async ({ articleId, authorId }) => {
+  const article = await fetchReviewedArticle(articleId);
+  if (!article?.reviewedAt) return;
+
+  await createNotification({
+    recipientId: authorId,
+    type: "article_approved",
+    title: `Approved: ${article.title}`,
+    body: `A reviewer approved "${article.title}". You can publish it whenever you're ready.`,
+    entityType: "article",
+    entityId: articleId,
+    dedupeKey: `article:${articleId}:approved:${article.reviewedAt.toISOString()}`,
+  });
+});
+
+onDomainEvent("ArticleChangesRequested", async ({ articleId, authorId }) => {
+  const article = await fetchReviewedArticle(articleId);
+  if (!article?.reviewedAt) return;
+
+  await createNotification({
+    recipientId: authorId,
+    type: "article_changes_requested",
+    title: `Changes requested: ${article.title}`,
+    // requestChanges() rejects an empty note, so reviewNote is always set
+    // here — the fallback exists only for the theoretical case of the row
+    // being edited between the emit and this re-fetch.
+    body: article.reviewNote
+      ? `A reviewer asked for changes to "${article.title}": ${article.reviewNote}. Edit it and submit for review again.`
+      : `A reviewer asked for changes to "${article.title}". Edit it and submit for review again.`,
+    entityType: "article",
+    entityId: articleId,
+    dedupeKey: `article:${articleId}:changes_requested:${article.reviewedAt.toISOString()}`,
+  });
+});
+
+onDomainEvent("ArticleRejected", async ({ articleId, authorId }) => {
+  const article = await fetchReviewedArticle(articleId);
+  if (!article?.reviewedAt) return;
+
+  await createNotification({
+    recipientId: authorId,
+    type: "article_rejected",
+    title: `Not accepted: ${article.title}`,
+    // Rejection is deliberately not terminal in Session 38's state machine
+    // (rejected -> in_review via submitForReview again) — the body says so,
+    // so the notification doesn't read as more final than the workflow is.
+    body: article.reviewNote
+      ? `A reviewer didn't accept "${article.title}": ${article.reviewNote}. You can still revise it and submit for review again.`
+      : `A reviewer didn't accept "${article.title}". You can still revise it and submit for review again.`,
+    entityType: "article",
+    entityId: articleId,
+    dedupeKey: `article:${articleId}:rejected:${article.reviewedAt.toISOString()}`,
+  });
+});
+
+onDomainEvent("ArticlePublished", async ({ articleId, authorId, scheduled }) => {
+  // Only ever emitted for a publish the author did not perform themselves
+  // right then — see events.ts's ArticlePublished comment. Keyed on
+  // publishedAt, which both publish paths stamp fresh, so an
+  // unpublish -> republish cycle correctly notifies again.
+  const article = await withRls(SYSTEM_CTX, (tx) =>
+    tx.article.findUnique({ where: { id: articleId }, select: { title: true, publishedAt: true } })
+  );
+  if (!article?.publishedAt) return;
+
+  await createNotification({
+    recipientId: authorId,
+    type: "article_published",
+    title: `Published: ${article.title}`,
+    body: scheduled
+      ? `Your scheduled article "${article.title}" is now live on Keen Africans.`
+      : `A reviewer published "${article.title}" on your behalf. It's now live on Keen Africans.`,
+    entityType: "article",
+    entityId: articleId,
+    dedupeKey: `article:${articleId}:published:${article.publishedAt.toISOString()}`,
+  });
+});
+
 onDomainEvent("UserFollowed", async ({ followerId, followedUserId }) => {
   // Session 42 (Follow & Author Reputation Display). The "follow" listener
   // Session 39's own docstring anticipated. Re-fetches the Follow row for
@@ -758,6 +866,17 @@ export function notificationHref(n: Pick<NotificationSummary, "type" | "entityTy
     case "certificate_issued":
       return "/certificates";
     case "article_unpublished_by_admin":
+    // Session 45 (review workflow). All four land on the author's own
+    // editor view of the article — the place they act on the outcome
+    // (publish an approved one, revise a changes-requested/rejected one).
+    // article_published deliberately does NOT link to the public
+    // /<username>/<slug> URL: that needs a username lookup, and this is a
+    // pure function with no DB access (same constraint that leaves
+    // user_followed hrefless below).
+    case "article_approved":
+    case "article_changes_requested":
+    case "article_rejected":
+    case "article_published":
       return n.entityType === "article" && n.entityId ? `/articles/${n.entityId}/edit` : null;
     case "account_suspended":
     case "role_changed":

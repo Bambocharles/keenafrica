@@ -248,6 +248,54 @@ above already supports it fully.
   block — the same boundaries proven against the real non-superuser role,
   not just application code. See "RLS" above for exactly what's covered.
 
+## Teacher org-scoped course creation (Session 45)
+
+The decision recorded in `status/project-status.md` on 2026-08-31 —
+"teachers may create courses, but only organization-scoped ones, for
+organizations they belong to" — was implemented by Session 45. Session 21
+had left `createCourse()` gated on `courses.create` alone and explicitly
+noted it did not grant any org-scoped creation capability; Sessions 22-44
+never picked it up.
+
+**Permission**: a new key, `courses.create.organization`, granted to
+`TEACHER` by default (`DEFAULT_ROLE_PERMISSIONS`). It is deliberately NOT
+`courses.create`: `courses_select`'s policy contains a bare
+`? 'courses.create'` branch (Session 04), so granting `TEACHER` that key
+would have silently made every course on the platform visible to every
+teacher, of every organization. `courses.create.organization` appears in
+no SELECT policy at all — it grants creation only.
+
+**Rule** (enforced twice, independently):
+- `src/lib/courses.ts`'s `assertMayCreateCourse()` — application layer.
+- `courses_write`'s RLS policy — database layer, so a crafted request that
+  never went through the application code still cannot insert the row.
+
+A holder of `courses.create.organization` may insert a course only when
+`scope = 'organization'`, `organization_id IS NOT NULL`, and that
+organization is in the caller's server-resolved `app.organization_ids`.
+A platform-scoped insert fails. Another organization's insert fails.
+`super_admin`/`courses.create` holders (ADMIN/SUPER_ADMIN) are completely
+unaffected — their cross-tenant reach is untouched, per this repo's
+standing rule that a Platform Admin's reach is never narrowed by an
+org-scoped addition.
+
+`courses_select` also gained a `created_by` branch, carrying the same
+organization guard as its teacher-of-cohort branch. This is required, not
+cosmetic: Postgres applies the SELECT policy to `INSERT ... RETURNING`,
+which is how Prisma reads a newly created row back. It also keeps the
+course visible in the creator's own workspace before an admin attaches a
+cohort. A creator who later leaves the organization stops seeing it,
+exactly like a teacher removed from it would.
+
+**What a teacher still cannot do**: create the course's cohorts, or assign
+themselves (or anyone) to teach it. `cohorts_write`/`cohort_teachers_write`
+remain `courses.manage`-only, unchanged. So a teacher-created course sits
+in a "created, not yet teachable" state until an admin attaches a cohort —
+the teacher workspace's `/courses` list labels exactly that state
+("Awaiting cohort setup") rather than offering a Manage link that would
+correctly 403. Widening cohort creation is a real product decision beyond
+Session 45's brief and is flagged in that session's handoff, not assumed.
+
 ## Known limitations
 
 - No public-facing UI for join-request/invite-accept flows — Session 18's
