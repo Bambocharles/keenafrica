@@ -1,0 +1,52 @@
+{
+  "edition_date": "2026-09-04",
+  "edition_title": "September 2026: Build Season Opens for Nigeria's Next Builders",
+  "edition_intro": "You are not waiting for permission to matter, you are already building. This edition rounds up currently open scholarships, grants, conferences, competitions, and free certifications for ambitious young Nigerians ready to move. Read the deadlines carefully, some close within weeks, and go apply.",
+  "posts": [
+    {
+      "slug": "2026-09-04-knight-hennessy-scholars-2027-stanford-university",
+      "category": "scholarships",
+      "title": "Knight-Hennessy Scholars 2027 (Stanford University)",
+      "summary": "Fully funded graduate study in any field at Stanford University for up to three years, covering tuition, living stipend, and travel, for future global leaders.",
+      "deadline": "6 October 2026",
+      "eligibility": "Applicants of any nationality applying to a full-time Stanford graduate degree program, who have completed an undergraduate degree by matriculation",
+      "apply_url": "https://knight-hennessy.stanford.edu/admission"
+    },
+    {
+      "slug": "2026-09-04-mandela-rhodes-scholarship-2027-postgraduate-study-in-south-",
+      "category": "scholarships",
+      "title": "Mandela Rhodes Scholarship 2027 (Postgraduate Study in South Africa)",
+      "summary": "Fully funded postgraduate scholarship for African students to study at a South African university while receiving structured leadership development.",
+      "deadline": "14 April 2027",
+      "eligibility": "African citizens under 30, completing or holding an undergraduate degree, applying for Honours or Master's study in South Africa",
+      "apply_url": "https://www.mandelarhodes.org/scholarship/apply/"
+    },
+    {
+      "slug": "2026-09-04-bridge-seed-global-impact-accelerator-2026",
+      "category": "grants",
+      "title": "Bridge Seed Global Impact Accelerator 2026",
+      "summary": "Equity-free $5,000 seed funding plus a three-month accelerator for young African founders building real businesses, no ownership given up.",
+      "deadline": "Rolling",
+      "eligibility": "African founders aged 18 to 35 with an early-stage venture addressing a social or economic challenge",
+      "apply_url": "https://bridgeseedglobal.org/accelerator-program/"
+    },
+    {
+      "slug": "2026-09-04-digital-nigeria-international-conference-exhibition-and-awar",
+      "category": "conferences",
+      "title": "Digital Nigeria International Conference, Exhibition and Awards (DNICE) 2026",
+      "summary": "A three-day government-backed gathering in Abuja on Nigeria's digital economy, with a dedicated student registration tier and virtual attendance option.",
+      "deadline": "10 November 2026",
+      "eligibility": "Open to students, innovators, entrepreneurs, and policy professionals; register online, virtual access available",
+      "apply_url": "https://digitalnigeria.gov.ng/digital/register"
+    },
+    {
+      "slug": "2026-09-04-aws-student-rewards-on-aws-builder-center",
+      "category": "certifications",
+      "title": "AWS Student Rewards on AWS Builder Center",
+      "summary": "Free 12 months of premium AWS Skill Builder training, AWS credits, and a certification exam voucher for verified students, part of a $500M AWS investment.",
+      "deadline": "Rolling",
+      "eligibility": "University students aged 18+ who verify enrollment through SheerID on AWS Builder Center",
+      "apply_url": "https://builder.aws.com/student-rewards"
+    }
+  ]
+}
