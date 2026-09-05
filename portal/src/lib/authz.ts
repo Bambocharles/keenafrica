@@ -59,6 +59,23 @@ export const PERMISSIONS = {
   // courses.manage or are super_admin. topics.manage guards the shared
   // Subject/Topic/Skill taxonomy (a catalog table, public-read).
   COURSES_CREATE: "courses.create",
+  // Added by Session 45 (Outstanding Fixes & Consolidation), implementing a
+  // decision recorded in status/project-status.md on 2026-08-31 that no
+  // session had landed: a TEACHER may create a course, but only an
+  // ORGANIZATION-scoped one, for an organization they are an active member
+  // of. Deliberately a SEPARATE key from courses.create rather than
+  // granting TEACHER that key — courses_select's policy has a bare
+  // `? 'courses.create'` branch (Session 04), so handing TEACHER
+  // courses.create would silently make every course on the platform
+  // visible to every teacher. This key appears in NO select policy; it
+  // grants creation only, and only for an organization the caller already
+  // belongs to (enforced in createCourse() AND independently in
+  // courses_write's RLS policy, per CLAUDE_BUILD_RULES.md §5). It is the
+  // same "global permission + ownership row" shape as
+  // courses.content.write + cohort_teachers and sponsor.projects.read +
+  // project_memberships — the permission is necessary, the membership row
+  // is what makes it sufficient.
+  COURSES_CREATE_ORG: "courses.create.organization",
   COURSES_MANAGE: "courses.manage",
   COURSES_PUBLISH: "courses.publish",
   COURSES_CONTENT_WRITE: "courses.content.write",
@@ -161,7 +178,16 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleName, PermissionKey[]> = {
   // Ownership-scoped in practice: a TEACHER only gets to exercise these on
   // courses where they hold a cohort_teachers row (see courses.ts). Holding
   // the permission with no matching cohort assignment grants nothing.
-  TEACHER: [PERMISSIONS.COURSES_CONTENT_WRITE, PERMISSIONS.COURSES_CONTENT_PUBLISH, PERMISSIONS.MESSAGES_SEND],
+  // courses.create.organization added by Session 45 — ownership-scoped in
+  // exactly the same way: holding it grants nothing without an active
+  // OrganizationMembership to scope a new course to, and it can never
+  // create a PLATFORM-scoped course (see createCourse()).
+  TEACHER: [
+    PERMISSIONS.COURSES_CONTENT_WRITE,
+    PERMISSIONS.COURSES_CONTENT_PUBLISH,
+    PERMISSIONS.COURSES_CREATE_ORG,
+    PERMISSIONS.MESSAGES_SEND,
+  ],
   STUDENT: [PERMISSIONS.MESSAGES_SEND],
   // Ownership-scoped in practice, same shape as TEACHER above: holding
   // these with no matching project_memberships row (role='sponsor_admin')

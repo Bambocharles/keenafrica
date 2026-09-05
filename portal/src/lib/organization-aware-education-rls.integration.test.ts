@@ -437,4 +437,130 @@ describeIfConfigured("Organization-Aware Education Row-Level Security (enforced 
       expect(memberRows).toHaveLength(1);
     });
   });
+
+  // --- Session 45 (Outstanding Fixes & Consolidation) -------------------
+  //
+  // courses_write/courses_select's new courses.create.organization branches
+  // (20260905120000_teacher_org_scoped_course_creation), proven by Postgres
+  // itself under the real non-superuser role — independently of
+  // src/lib/courses.ts's assertMayCreateCourse(), which is proven separately
+  // in organization-aware-education.test.ts. Every case below sets
+  // app.permissions/app.organization_ids by hand, i.e. it simulates a
+  // crafted request that reached the database WITHOUT going through the
+  // application-layer gate at all (CLAUDE_BUILD_RULES.md §5: "a user must
+  // not gain access merely because a UI route is hidden").
+  describe("Session 45: courses.create.organization is creation-only, and only inside the caller's own organizations", () => {
+    // Courses these tests insert directly (bypassing src/lib/courses.ts) are
+    // not tracked by the outer afterAll's fixed id list, so they're
+    // collected and removed here — courses.organization_id is ON DELETE NO
+    // ACTION, so leaving one behind breaks the outer organization cleanup.
+    const s45CourseIds: string[] = [];
+
+    afterAll(async () => {
+      if (s45CourseIds.length === 0) return;
+      const cleanup = new PrismaClient();
+      await cleanup.course.deleteMany({ where: { id: { in: s45CourseIds } } });
+      await cleanup.$disconnect();
+    });
+
+    const insertCourse = async (
+      ctx: { userId: string; permissions: string[]; organizationIds?: string[] },
+      row: { scope: "platform" | "organization"; organizationId: string | null }
+    ) => {
+      const inserted = await asContext(ctx, (tx) =>
+        tx.$queryRawUnsafe<{ id: string }[]>(
+          `INSERT INTO courses (title, description, status, scope, organization_id, created_by)
+           VALUES ($1, '', 'draft', $2::"CourseScope", $3::uuid, $4::uuid) RETURNING id`,
+          `S45 RLS ${randomUUID()}`,
+          row.scope,
+          row.organizationId,
+          ctx.userId
+        )
+      );
+      s45CourseIds.push(...inserted.map((r) => r.id));
+      return inserted.length;
+    };
+
+    it("ALLOWS an organization-scoped INSERT for an organization in the caller's own app.organization_ids", async () => {
+      await expect(
+        insertCourse(
+          { userId: memberTeacher.id, permissions: ["courses.create.organization"], organizationIds: [orgAId] },
+          { scope: "organization", organizationId: orgAId }
+        )
+      ).resolves.toBe(1);
+    });
+
+    it("REFUSES a PLATFORM-scoped INSERT — courses.create.organization can never create a platform-wide course", async () => {
+      await expect(
+        insertCourse(
+          { userId: memberTeacher.id, permissions: ["courses.create.organization"], organizationIds: [orgAId] },
+          { scope: "platform", organizationId: null }
+        )
+      ).rejects.toThrow(/row-level security/i);
+    });
+
+    it("REFUSES an INSERT scoped to an organization the caller is not a member of, even with a forged organization id in the row", async () => {
+      await expect(
+        insertCourse(
+          { userId: memberTeacher.id, permissions: ["courses.create.organization"], organizationIds: [orgAId] },
+          { scope: "organization", organizationId: orgBId }
+        )
+      ).rejects.toThrow(/row-level security/i);
+    });
+
+    it("REFUSES an INSERT from a caller holding the key but NO active membership at all (empty app.organization_ids)", async () => {
+      await expect(
+        insertCourse(
+          { userId: outsiderTeacher.id, permissions: ["courses.create.organization"], organizationIds: [] },
+          { scope: "organization", organizationId: orgAId }
+        )
+      ).rejects.toThrow(/row-level security/i);
+    });
+
+    it("the key grants NO extra visibility: holding courses.create.organization does not make another organization's course selectable", async () => {
+      const rows = await asContext(
+        { userId: outsiderTeacher.id, permissions: ["courses.create.organization"], organizationIds: [orgBId] },
+        (tx) => tx.course.findMany({ where: { id: orgCourseId } })
+      );
+      expect(rows).toHaveLength(0);
+    });
+
+    it("courses_select's new created_by branch is org-guarded: the creator sees their own course while a member, and stops seeing it once they are no longer one", async () => {
+      const created = await asContext(
+        { userId: memberTeacher.id, permissions: ["courses.create.organization"], organizationIds: [orgAId] },
+        (tx) =>
+          tx.$queryRawUnsafe<{ id: string }[]>(
+            `INSERT INTO courses (title, description, status, scope, organization_id, created_by)
+             VALUES ($1, '', 'draft', 'organization', $2::uuid, $3::uuid) RETURNING id`,
+            `S45 Creator Visibility ${randomUUID()}`,
+            orgAId,
+            memberTeacher.id
+          )
+      );
+      s45CourseIds.push(...created.map((r) => r.id));
+      // INSERT ... RETURNING is itself subject to courses_select — this
+      // returning a row IS the proof the created_by branch works, and is
+      // exactly why the migration had to touch courses_select at all.
+      expect(created).toHaveLength(1);
+      const courseId = created[0].id;
+
+      const asMember = await asContext({ userId: memberTeacher.id, organizationIds: [orgAId] }, (tx) =>
+        tx.course.findMany({ where: { id: courseId } })
+      );
+      expect(asMember).toHaveLength(1);
+
+      // Same creator, no longer carrying that organization — the same
+      // narrowing the teacher-of-cohort branch already applies.
+      const asFormerMember = await asContext({ userId: memberTeacher.id, organizationIds: [] }, (tx) =>
+        tx.course.findMany({ where: { id: courseId } })
+      );
+      expect(asFormerMember).toHaveLength(0);
+
+      // And never to anyone else.
+      const asOutsider = await asContext({ userId: outsiderTeacher.id, organizationIds: [orgAId] }, (tx) =>
+        tx.course.findMany({ where: { id: courseId } })
+      );
+      expect(asOutsider).toHaveLength(0);
+    });
+  });
 });

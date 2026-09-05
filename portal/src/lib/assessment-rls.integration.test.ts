@@ -226,6 +226,48 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
 
     const teacherRows = await asContext({ userId: teacher.id }, (tx) => tx.answer.findMany({ where: { id: answer.id } }));
     expect(teacherRows).toHaveLength(1);
+
+    // Session 45: the negative half of the teacher branch, added alongside
+    // the answers_select/answers_update join-depth fix below. The fix
+    // rewrote exactly this branch (join to cohorts via attempts.course_id
+    // instead of hopping through assessments), so the outsider-teacher case
+    // is the assertion that proves the rewrite did not widen access —
+    // "identical in access outcome," not merely cheaper. outsiderTeacher
+    // holds courses.content.write but no cohort_teachers row for this
+    // course, which is precisely the distinction the rewritten branch must
+    // still draw.
+    const outsiderTeacherRows = await asContext(
+      { userId: outsiderTeacher.id, permissions: ["courses.content.write"] },
+      (tx) => tx.answer.findMany({ where: { id: answer.id } })
+    );
+    expect(outsiderTeacherRows).toHaveLength(0);
+  });
+
+  // Session 45: answers_update's teacher branch was rewritten by the same
+  // migration as answers_select's, so it gets the same positive/negative
+  // pair rather than resting on the SELECT policy's proof.
+  it("answers_update: the course's own teacher may update an answer (grading); an outsider teacher with courses.content.write may not", async () => {
+    const setup = new PrismaClient();
+    // answers has a unique (attempt_id, question_id) — the answers_select
+    // test above already created this pair, so upsert rather than create.
+    const answer = await setup.answer.upsert({
+      where: { attemptId_questionId: { attemptId, questionId } },
+      create: { attemptId, questionId, selectedOptionIds: [correctOptionId], isCorrect: true, awardedPoints: 1 },
+      update: { awardedPoints: 1 },
+      select: { id: true },
+    });
+    await setup.$disconnect();
+
+    const ownerUpdated = await asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, (tx) =>
+      tx.answer.updateMany({ where: { id: answer.id }, data: { awardedPoints: 2 } })
+    );
+    expect(ownerUpdated.count).toBe(1);
+
+    const outsiderUpdated = await asContext(
+      { userId: outsiderTeacher.id, permissions: ["courses.content.write"] },
+      (tx) => tx.answer.updateMany({ where: { id: answer.id }, data: { awardedPoints: 99 } })
+    );
+    expect(outsiderUpdated.count).toBe(0);
   });
 
   // Session 31 P0 root cause: listAssessmentsForCourse() used to fetch its
@@ -251,11 +293,26 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
   // include pattern would make every assertion below fail.
   it("Session 31 P0 regression: per-assessment counts must be scoped to the specific assessment id(s), not an unfiltered whole-table scan under RLS", async () => {
     const explainOne = (table: "assessment_questions" | "attempts" | "assessment_assignments") =>
-      asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, (tx) =>
-        tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(
+      asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, async (tx) => {
+        // enable_seqscan=off (transaction-local, alongside the app.* settings
+        // asContext already sets) — repaired by Session 45. Without it this
+        // test asserts a planner CHOICE that depends on fixture size, not the
+        // structural property it means to protect: on a near-empty local
+        // `attempts`/`assessment_assignments` (one heap page) Postgres
+        // correctly prefers a Seq Scan, so the `Index Cond` line never
+        // appears and the test fails for a reason that has nothing to do
+        // with the regression it guards. It had been failing on `main` for
+        // exactly this reason (confirmed by running it on an unmodified
+        // checkout) since this machine's dev database was last reset. Turning
+        // seq scans off makes the planner express the same narrowing as an
+        // Index Cond at any table size, and does NOT weaken the
+        // discriminator: the old unfiltered `_count` include pattern has no
+        // assessment_id condition to express at all, so it still fails here.
+        await tx.$executeRawUnsafe(`SET LOCAL enable_seqscan = off`);
+        return tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(
           `EXPLAIN SELECT COUNT(*), assessment_id FROM ${table} WHERE assessment_id = '${assessmentId}'::uuid GROUP BY assessment_id`
-        )
-      );
+        );
+      });
 
     for (const table of ["assessment_questions", "attempts", "assessment_assignments"] as const) {
       const rows = await explainOne(table);
@@ -305,5 +362,43 @@ describeIfConfigured("Assessment Core Row-Level Security (enforced by a non-supe
     const planText = rows.map((r) => r["QUERY PLAN"]).join("\n");
     expect(planText).not.toMatch(/\bon assessments\b/);
     expect(planText).not.toMatch(/\bon assessment_assignments\b/);
+  });
+
+  // Session 33 (Data Integrity Investigation & RLS Depth Audit, Part 2),
+  // landed by Session 45: the systemic follow-up to Session 31's Bug 2
+  // above. answers_select/answers_update's teacher-ownership branch had the
+  // SAME shape Session 31 fixed for attempts_select — EXISTS (SELECT 1 FROM
+  // attempts att JOIN assessments asm ON asm.id = att.assessment_id JOIN
+  // cohorts c ...) — a hop through "assessments" that pulls in
+  // assessments_select's entire policy (which itself references
+  // assessment_assignments and cohorts again). Never touched by Session 31
+  // because that session was root-causing one specific reported symptom,
+  // not auditing the schema. Found via EXPLAIN under this same real
+  // portal_rls_test role: 36,300.84 estimated cost / 127 plan nodes against
+  // this file's tiny fixture — 4x to 28x every other RLS-depth candidate
+  // checked in the same audit (scripts/dev/explain-rls-policies.ts), still
+  // under Postgres's JIT threshold today but the same structural risk
+  // shape, not yet a live incident. Fixed
+  // (20260905100000_answers_select_join_depth_fix) by reusing
+  // attempts.course_id (already denormalized by Session 31 for the exact
+  // same reason) instead of hopping through "assessments" — same "provably
+  // identical access, one less redundant hop" reasoning as Session 31's own
+  // fix. This test proves "assessments" is never referenced by
+  // answers_select/answers_update any more.
+  it("Session 33 RLS depth audit: answers_select/answers_update must never reference \"assessments\" — same join-depth risk shape Session 31 fixed in attempts_select", async () => {
+    const explainOne = (sql: string) =>
+      asContext({ userId: teacher.id, permissions: ["courses.content.write"] }, (tx) =>
+        tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(sql)
+      );
+
+    const selectRows = await explainOne(`EXPLAIN SELECT id FROM answers WHERE 1=0`);
+    const selectPlan = selectRows.map((r) => r["QUERY PLAN"]).join("\n");
+    expect(selectPlan).not.toMatch(/\bon assessments\b/);
+    expect(selectPlan).not.toMatch(/\bon assessment_assignments\b/);
+
+    const updateRows = await explainOne(`EXPLAIN UPDATE answers SET text_response = text_response WHERE 1=0`);
+    const updatePlan = updateRows.map((r) => r["QUERY PLAN"]).join("\n");
+    expect(updatePlan).not.toMatch(/\bon assessments\b/);
+    expect(updatePlan).not.toMatch(/\bon assessment_assignments\b/);
   });
 });

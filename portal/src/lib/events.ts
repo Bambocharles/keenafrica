@@ -103,6 +103,33 @@ export interface DomainEventMap {
   // id/createdAt), rather than trusting an already-loaded row passed across
   // the module boundary.
   UserFollowed: { followerId: string; followedUserId: string };
+  // Added by Session 45 (Outstanding Fixes & Consolidation) — the
+  // "review workflow" sibling events Session 39's own docstring
+  // anticipated and deliberately left unadded until Session 38's workflow
+  // existed. Session 38 landed the workflow (src/lib/articles.ts's
+  // approveArticle()/requestChanges()/rejectArticle()) but never emitted
+  // anything, so an author learned nothing about a review outcome.
+  //
+  // One event per transition, exactly as docs/NOTIFICATIONS.md's
+  // "Extension points" specified — deliberately NOT a single event with an
+  // outcome discriminator (the shape VerificationStatusChanged uses),
+  // because these three carry genuinely different author-facing meanings
+  // and the doc that the owning session wrote named this contract.
+  // Payloads stay minimal per this file's own "Payload discipline" rule:
+  // the listener re-fetches the article (title, reviewNote, reviewedAt)
+  // under its own RLS context rather than receiving a loaded row.
+  ArticleApproved: { articleId: string; authorId: string; actorId: string };
+  ArticleChangesRequested: { articleId: string; authorId: string; actorId: string };
+  ArticleRejected: { articleId: string; authorId: string; actorId: string };
+  // Not on Session 39's original list. Emitted ONLY when an article goes
+  // live without its author pressing publish at that moment: `scheduled:
+  // false` = a reviewer/admin published on the author's behalf
+  // (publishArticle() with actorId !== authorId); `scheduled: true` =
+  // flipDueScheduledArticles() flipped a deferred publish the author set
+  // earlier via scheduleArticle(). A plain self-publish emits nothing —
+  // notifying someone of their own click is noise, the same reasoning
+  // UserFollowed uses for never notifying the follower.
+  ArticlePublished: { articleId: string; authorId: string; actorId: string; scheduled: boolean };
 }
 
 export type DomainEventName = keyof DomainEventMap;

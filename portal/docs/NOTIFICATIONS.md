@@ -153,28 +153,40 @@ Session 39 wired exactly one real event:
   notification (moderatedAt is refreshed on every call), while redelivering
   the same occurrence is suppressed.
 
-### Extension points — deliberately NOT built yet
+### Extension points — deliberately NOT built by Session 39
 
-Per this session's own brief ("order-independent from Sessions 40/42... if
+Per that session's own brief ("order-independent from Sessions 40/42... if
 those haven't shipped yet, wire only the events that exist today"), the
 following were checked and confirmed **not yet landed** as of Session 39,
 so no `NotificationType` values or listeners were added for them —
 guessing at their shape ahead of the owning session risks a Postgres enum
 value this codebase can never cleanly drop:
 
-- **Review workflow (Session 38)** — `docs/KEEN_AFRICANS.md` and
-  `prisma/schema.prisma`'s `Article` model have no `reviewStatus`/
-  `in_review`/`changes_requested`/`approved`/`rejected` states as of this
-  session. Once Session 38 lands: add `article_approved`,
-  `article_changes_requested`, `article_rejected` `NotificationType`
-  values (own migration, same "can't use a new enum value in the same
-  transaction it's added in" rule every prior addition followed), a
-  `DomainEventMap` entry per transition (emitted from wherever Session 38
-  implements `approveArticle()`/`requestChanges()`/`rejectArticle()`), and
-  a listener per type here notifying the article's author. Follow this
-  session's `ArticleUnpublishedByAdmin` listener as the template
-  (fetch-based dedupe key off a timestamp column Session 38 adds, e.g.
-  `reviewedAt`).
+- ~~**Review workflow (Session 38)**~~ — **DONE, Session 45.** Session 38
+  landed the workflow but never came back for the notifications, and
+  neither did Sessions 39-44, so until Session 45 an author who submitted
+  an article for review was told nothing about the outcome either way.
+  Built exactly to the contract this entry specified: four
+  `NotificationType` values in their own migration
+  (`20260905110000_keen_africans_notification_type_review_workflow`), one
+  `DomainEventMap` entry per transition (`ArticleApproved`,
+  `ArticleChangesRequested`, `ArticleRejected`, plus `ArticlePublished` —
+  see below), one listener each here, all notifying the article's author
+  and never the reviewer, dedupe keyed on `Article.reviewedAt` exactly as
+  this entry proposed.
+
+  `article_published` is the one addition beyond this entry's original
+  three. It fires only where an article goes live without its author
+  pressing publish at that moment: an `articles.manage` holder publishing
+  on the author's behalf (`publishArticle()` with `actorId !== authorId`),
+  and `flipDueScheduledArticles()` flipping a deferred publish the author
+  set earlier via `scheduleArticle()`. A plain self-publish emits nothing.
+
+  All four `notificationHref()` to `/articles/<id>/edit` — the author's own
+  editor view, where they act on the outcome. `article_published`
+  deliberately does not link to the public `/<username>/<slug>` URL:
+  resolving a username needs DB access that pure function doesn't have (the
+  same constraint that leaves `user_followed` hrefless).
 - **Verification status (Session 40)** — `Profile`
   (`prisma/schema.prisma`) has no verification-status field yet (Session
   36's handoff explicitly reserved a `data-verification-badge-slot` UI hook
