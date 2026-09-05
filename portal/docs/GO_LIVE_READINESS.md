@@ -417,12 +417,12 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 |---|---|---|---|
 | 1 | Session 33's `answers_select` RLS fix + the data-integrity question | **Closed** | See §9.1 below. |
 | 2 | LinkedIn OAuth credentials in production | **Partially closed — one owner-side step remains** | See §9.2 below. |
-| 3 | Teacher org-scoped course creation | **Closed (code); deploy-gated** | See §9.3 below. |
-| 4 | Review-workflow notifications | **Closed (code); deploy-gated** | See §9.3 below. |
+| 3 | Teacher org-scoped course creation | **Closed, deployed, verified live** | See §9.3 below. |
+| 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
 | 6 | Cloudflare R2 API token rotation | **Blocked on site owner** | See §9.5 below. |
 | 7 | `postgres01`'s sibling databases documented | **Closed** | See §9.6 below. |
-| 8 | `rollback-portal.yml` dispatched once | See §9.7 below. |
+| 8 | `rollback-portal.yml` dispatched once | **Closed — dispatched and green** | See §9.7 below. |
 
 ### 9.1 `answers_select` join-depth fix, and what actually emptied `assessment_assignments`/`attempts`
 
@@ -440,13 +440,44 @@ renamed to `20260905100000_answers_select_join_depth_fix` so it applies after th
 migrations that landed while it sat unmerged. Both policies now reach `cohorts` directly via
 `attempts.course_id` — the column Session 31 denormalized for exactly this reason.
 
-Measured live under the **real enforcing role** (`kf_portal_prod_app`, `NOBYPASSRLS`) against
-real production data, EXPLAIN-only:
+**Deployed and confirmed in production** (`_prisma_migrations`,
+`20260905100000_answers_select_join_depth_fix` finished `2026-09-05 20:17:07.939135+00`).
+`pg_policy` on production now reports, for both `answers_select` and `answers_update`:
+`hops_assessments=false`, `uses_course_id=true`.
 
-| | Plan nodes | Top-level estimated cost |
+Measured under the **real enforcing role** (`kf_portal_prod_app`, `NOBYPASSRLS`), EXPLAIN-only,
+against real production data — the isolated teacher branch that actually changed:
+
+| | Plan nodes | Estimated cost |
 |---|---|---|
 | Old (through `assessments`) | 123 | 1,312.93 |
 | New (through `attempts.course_id`) | 51 | 357.72 |
+
+And the **whole `answers_select` policy in situ**, measured on a version-matched (PostgreSQL
+14.24, same as production) and statistics-matched (unanalyzed, `reltuples = -1`) restore of the
+live production database, under a non-superuser RLS-enforcing role:
+
+| | Plan nodes | Estimated cost | JIT section in plan? |
+|---|---|---|---|
+| Old (through `assessments`) | 131 | 255,562.87 | **yes** |
+| New (through `attempts.course_id`) | 67 | 77,710.00 | **no** |
+
+That is the meaningful result: the fix takes this policy from **above** Postgres's default
+`jit_above_cost` (100,000) to **below** it — the same threshold crossing Session 31 achieved for
+`attempts_select`, and the actual mechanism behind that session's P0.
+
+**One residual, worth a Session 46 look (new finding, not a regression).** On production itself
+the post-fix estimate is still 273,283.92 with a JIT section present, higher than the
+version/stats-matched copy. The cause is not the policy shape — it is that production's
+`answers`, `attempts` and `assessment_assignments` have **never been analyzed**
+(`reltuples = -1`, `last_vacuum` and `last_autovacuum` both NULL — they have never held a row, so
+autovacuum has never had a reason to visit them). The planner is therefore costing an expensive
+per-row policy against a default row estimate for tables that are in fact empty. Running `ANALYZE`
+on the restored copy collapses the identical plan to `cost=0.00` with no JIT section at all. This
+is latent, not live (the tables are empty, and any query against them returns instantly), but a
+one-off `ANALYZE answers, attempts, assessment_assignments;` on production would remove the
+residual JIT exposure ahead of real data arriving. Deliberately **not** run by Session 45 — it is
+a production maintenance action outside this session's brief.
 
 **Access is proven identical, not merely cheaper.** The removed hop was "the cohort of the course
 that owns the assessment this attempt belongs to"; `attempts.course_id` was backfilled from that
@@ -522,12 +553,47 @@ is why Google sign-in works in production despite the same quirk. **Re-test thro
 
 ### 9.3 Teacher org-scoped course creation, and the review-workflow notifications
 
-Both are code changes on `session-45-outstanding-fixes`; both are proven by tests against the real
-non-superuser `portal_rls_test` role and by a migration pre-flight against a **restored copy of
-the live production database** (`pg_dump` of `keenafrica_portal_prod` taken 2026-09-05, restored
-locally, all three new migrations applied cleanly and produced the intended policy/enum state).
-Their production status is whatever `deploy-portal.yml` last did with this branch — see
-`status/project-status.md`'s Session 45 entry for the deploy record.
+Both shipped in PR #89, merged to `main` and deployed to production on 2026-09-05 (run
+33989528071, image `9a19fc48bef4c61f8115cc68cc63989286ece844`, all three migrations applied at
+20:17:07-08 UTC). Both were also pre-flighted before deploy against a **restored copy of the live
+production database** and are covered by tests against the real non-superuser `portal_rls_test`
+role.
+
+**Course creation — verified live in production**, against the real RLS-enforcing
+`kf_portal_prod_app` role, using the existing QA fixtures (`adebiyibanbo+qa.teacher@gmail.com`, an
+active member of both `QA Test Org (Session 22)` and `QA Test Org B (Session 24)`). Every probe
+ran inside a transaction that was rolled back, so no production row was created — confirmed after
+the fact: production still holds exactly 1 course and 0 leftovers.
+
+| Case | Expected | Result |
+|---|---|---|
+| Teacher, org-scoped course in an org they are an active member of | allowed | **INSERT succeeded, and `RETURNING` returned the row** — which also proves `courses_select`'s new `created_by` branch, since Postgres applies SELECT policies to `INSERT … RETURNING` |
+| Same teacher, **platform-wide** course | refused | `ERROR: new row violates row-level security policy for table "courses"` |
+| Same teacher, org-scoped course in an organization they hold **no membership row for** | refused | same RLS error |
+| A **STUDENT** (no `courses.create.organization`) in an org they *are* an active member of | refused | same RLS error |
+
+Note on what RLS can and cannot do here: `app.organization_ids` is a **server-resolved** session
+variable — `withRls()` derives it from `OrganizationMembership`, never from client input. A probe
+that sets it by hand is simulating an actor who already holds direct database credentials, at
+which point RLS was never the boundary. That is precisely why `createCourse()` independently calls
+`isActiveOrganizationMember()` rather than trusting the session variable: the two layers answer
+the question separately, and the application-layer half is covered by
+`organization-aware-education.test.ts`'s positive/negative/pending-membership cases.
+
+**Notifications — deployed and confirmed present in the running image**, but with one residual
+verification gap. Confirmed in production: all four enum values exist on the live
+`NotificationType` type (`article_approved`, `article_changes_requested`, `article_rejected`,
+`article_published`), and `kubectl exec` into the running pod shows each of the four appearing in
+the compiled server chunks of the deployed build. **Not verified**: an end-to-end review cycle
+against production, because doing so means creating a real article, submitting it, and having an
+admin approve/reject it — real production content this session declined to manufacture. The
+behaviour itself is covered by 8 tests in `notifications.test.ts` (recipient is the author and
+never the reviewer; the reviewer's note/reason reaches the body; a
+changes-requested → resubmit → approved cycle produces two distinct notifications; the Session 39
+opt-out preference suppresses them; a self-publish stays silent; a reviewer-on-behalf publish and
+a scheduled publish each notify with the right wording). **A two-minute owner-side close-out**:
+submit any draft for review from `keenafricans.keenafrica.com`, approve it from the admin console,
+and confirm the notification bell shows it.
 
 **Course creation** implements the 2026-08-31 decision no session since 21 had landed. A new
 `courses.create.organization` permission (granted to `TEACHER`) allows creating an
@@ -610,11 +676,32 @@ say to `pg_dump` it first if it ever is.
 
 ### 9.7 `rollback-portal.yml` — first-ever dispatch
 
-Flagged since Session 16, never run. See `status/project-status.md`'s Session 45 entry for the
-dispatch record and outcome. The no-op form used is `image_tag` = the digest tag already running,
-so `kubectl set image` is a no-op for Kubernetes (no new ReplicaSet, no pod restart) and the run
-exercises only what it is meant to: the self-hosted runner, its kubeconfig, the `production`
-Environment approval gate, and the commands themselves.
+Flagged since Session 16, never dispatched once. **Dispatched 2026-09-05 with the site owner's
+explicit go-ahead, and it worked.**
+
+Run [33990023377](https://github.com/Bambocharles/keenafrica/actions/runs/33990023377),
+`image_tag = 9a19fc48bef4c61f8115cc68cc63989286ece844` — deliberately the digest already running,
+so `kubectl set image` is a no-op for Kubernetes. Conclusion **success**, job duration ~0.3s.
+
+What the run proved: the `self-hosted, keenafrica-vm` runner label resolves (job ran on
+`keenafrica-infra`); the `production` GitHub Environment approval gate engages (the run sat in
+`waiting` until approved); `KUBECONFIG=/home/keen/.kube/config` is valid and the runner's kubectl
+can reach and mutate `deployment/portal` in `keen-prod`; and all three commands
+(`set image`, `annotate`, `rollout status`) succeed — `deployment.apps/portal annotated`,
+`deployment "portal" successfully rolled out`.
+
+Confirmed a genuine no-op afterwards: the same ReplicaSet (`portal-74d546c88d`) still serves both
+pods, pod ages unchanged (8m, i.e. created by the earlier deploy, not by this run), `RESTARTS 0`,
+no new ReplicaSet created. The only persistent effect is the deployment's `change-cause`
+annotation, now `ROLLBACK to ghcr.io/bambocharles/keenafrica-portal:9a19fc48…`. All three portals
+(`keenafricans`/`teacher`/`admin`) returned HTTP 200 immediately after.
+
+**What this run did not exercise**, and should not be mistaken for: an actual image change and
+therefore an actual pod replacement. A real rollback additionally depends on the target image
+still existing in GHCR and on the schema being compatible with it — the compatibility caveat
+`docs/PRODUCTION_HARDENING.md`'s runbook already states (this workflow never touches the
+database). Testing that end of it means deliberately restarting production twice, which was
+offered and not chosen.
 
 ## Required next-session actions
 
