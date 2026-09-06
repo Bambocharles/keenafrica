@@ -416,7 +416,7 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 | # | Item | Status | Live evidence |
 |---|---|---|---|
 | 1 | Session 33's `answers_select` RLS fix + the data-integrity question | **Closed** | See §9.1 below. |
-| 2 | LinkedIn OAuth credentials in production | **Partially closed — one owner-side step remains** | See §9.2 below. |
+| 2 | LinkedIn OAuth credentials in production | **Closed at the provider level 2026-09-06** — one human click-through left to exercise identity linking | See §9.2 below. |
 | 3 | Teacher org-scoped course creation | **Closed, deployed, verified live** | See §9.3 below. |
 | 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
@@ -466,18 +466,10 @@ That is the meaningful result: the fix takes this policy from **above** Postgres
 `jit_above_cost` (100,000) to **below** it — the same threshold crossing Session 31 achieved for
 `attempts_select`, and the actual mechanism behind that session's P0.
 
-**One residual, worth a Session 46 look (new finding, not a regression).** On production itself
-the post-fix estimate is still 273,283.92 with a JIT section present, higher than the
-version/stats-matched copy. The cause is not the policy shape — it is that production's
-`answers`, `attempts` and `assessment_assignments` have **never been analyzed**
-(`reltuples = -1`, `last_vacuum` and `last_autovacuum` both NULL — they have never held a row, so
-autovacuum has never had a reason to visit them). The planner is therefore costing an expensive
-per-row policy against a default row estimate for tables that are in fact empty. Running `ANALYZE`
-on the restored copy collapses the identical plan to `cost=0.00` with no JIT section at all. This
-is latent, not live (the tables are empty, and any query against them returns instantly), but a
-one-off `ANALYZE answers, attempts, assessment_assignments;` on production would remove the
-residual JIT exposure ahead of real data arriving. Deliberately **not** run by Session 45 — it is
-a production maintenance action outside this session's brief.
+**This led to a systemic finding, now also fixed — see §9.8.** The post-fix estimate on
+production was initially still 273,283.92 with a JIT section, higher than the version/stats-matched
+copy. The cause turned out not to be the policy shape at all, but missing table statistics — which
+on investigation affected 49 of 61 tables, not just these three.
 
 **Access is proven identical, not merely cheaper.** The removed hop was "the cohort of the course
 that owns the assessment this attempt belongs to"; `attempts.course_id` was backfilled from that
@@ -518,9 +510,50 @@ deletion path for `assessment_assignments` anywhere in the codebase and had no a
 all. It now records an `assessment.unassigned` AuditEvent. That gap was real regardless of the
 conclusion above.
 
-### 9.2 LinkedIn OAuth — credentials are provisioned; the redirect URI is not registered
+### 9.2 LinkedIn OAuth — RESOLVED at the provider level (2026-09-06)
 
-State has moved since the 2026-09-01 audit, but the feature still does not work end to end.
+> **Update — 2026-09-06.** The site owner registered
+> `https://keenafricans.keenafrica.com/auth/callback/linkedin` in the LinkedIn Developer Portal.
+> Re-probed immediately: **LinkedIn now accepts the full authorization request.** Both legs of
+> the flow are verified against production; the only step not exercised is a human completing a
+> real LinkedIn login, which is what the "Remaining" note at the end of this section covers.
+>
+> **Outbound leg — verified live against production**, by driving the real Server Action on
+> `keenafricans.keenafrica.com` (the Google button on the public login page, which uses the
+> identical `signIn()` mechanism):
+> - emits `redirect_uri=https://keenafricans.keenafrica.com/auth/callback/google` — the correct
+>   host, matching the registered LinkedIn string exactly. This confirms in production what had
+>   only been shown by local reproduction.
+> - stores `__Secure-authjs.callback-url = https://keenafricans.keenafrica.com/dashboard` — an
+>   **absolute URL on the real host**. That cookie is what the callback route redirects to on
+>   success, so the return leg lands correctly too.
+>
+> **LinkedIn's side — verified by following the authorization request through**: it now answers
+> `303` to LinkedIn's own sign-in/consent page (`pageKey:
+> d_checkpoint_lg_consumer_login_oauth`), carrying a flow blob that shows every parameter
+> accepted — `appId 266117470`, `scope "openid profile email"` (so the "Sign In with LinkedIn
+> using OpenID Connect" product is genuinely active — an inactive product returns
+> `unauthorized_scope_error` here), `redirectUri
+> https://keenafricans.keenafrica.com/auth/callback/linkedin`, `authorizationType
+> OAUTH2_AUTHORIZATION_CODE`, `authFlowName generic-permission-list`. No error text anywhere on
+> the page.
+>
+> **On the `0.0.0.0:3000` error redirect, so it isn't mistaken for a new problem**: hitting
+> `/auth/callback/linkedin` with a bogus `code`/`state` redirects to
+> `https://0.0.0.0:3000/auth/error?error=Configuration`. **Google does exactly the same thing**
+> under the identical probe, and Google sign-in is verified working end-to-end in production —
+> so this is the known cosmetic quirk on the raw Auth.js routes (see the root-cause note below),
+> reached only on the *error* path, not the success path. `error=Configuration` here is an
+> artifact of the deliberately invalid state, not a provider misconfiguration.
+>
+> **Remaining, and genuinely worth doing once**: a human completing a real LinkedIn login and
+> consent. That is the only way to exercise `resolveLinkedInSignIn()`'s identity linking and the
+> verification-status flip to `linkedin_connected` against real LinkedIn profile data — logic
+> that has never run against the real provider. Expect: LinkedIn consent → back to
+> `/account?linkedinConnected=1` → a `user_identities` row with `provider='linkedin'` → the
+> account's verification status showing `linkedin_connected`, pending admin review.
+
+The original finding, kept for the record:
 
 **Done (not by this session):** `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` are present in
 the `portal-secrets` k8s Secret and live in the running pods. Verified live by driving the real
@@ -543,13 +576,42 @@ it. Until `https://keenafricans.keenafrica.com/auth/callback/linkedin` is added 
 "Sign In with LinkedIn using OpenID Connect" product enabled), "Connect LinkedIn" cannot complete
 for any real user. This session has no LinkedIn Developer Portal access and could not add it.
 
-Separately worth knowing when re-testing: hitting Auth.js's raw `/auth/signin/<provider>` REST
-endpoint emits `redirect_uri=https://0.0.0.0:3000/auth/callback/<provider>` — the long-documented,
-low-severity Auth.js host-resolution quirk (Session 30 §8, `docs/QA_AUTHENTICATION_LIVE_PASS.md`
-item 3). The app's own buttons go through server-side `signIn()` in a Server Action instead, which
-is why Google sign-in works in production despite the same quirk. **Re-test through the real
-"Connect LinkedIn" button, not through curl against the raw endpoint**, or the raw endpoint's bad
-`redirect_uri` will mask whether the registration fix worked.
+#### Is registering that URL actually sufficient? Yes — proven, not assumed (2026-09-06)
+
+The obvious worry: hitting Auth.js's raw `/auth/signin/<provider>` REST endpoint emits
+`redirect_uri=https://0.0.0.0:3000/auth/callback/<provider>` — the long-flagged, repeatedly
+re-investigated Auth.js host-resolution quirk (Session 30 §8,
+`docs/QA_AUTHENTICATION_LIVE_PASS.md` item 3). If the real button emitted that too, registering
+the correct URL in LinkedIn would change nothing and the fix would be a code change instead. That
+question was settled by reproduction rather than left open a fourth time.
+
+**Method**: the production runtime was reproduced locally — the same `output: "standalone"` build,
+started through the same `server-entrypoint.js` the container uses — and both paths were driven
+with `curl` against a `keenafricans.*` Host header.
+
+| Path | Emitted `redirect_uri` |
+|---|---|
+| Raw REST endpoint, `POST /auth/signin/linkedin` | `http://0.0.0.0:3100/auth/callback/linkedin` ❌ |
+| The real **"Connect LinkedIn" button** (server-side `signIn()` in a Server Action), driven as a logged-in Keen African | `http://keenafricans.portal.local/auth/callback/linkedin` ✅ |
+| Same button, with `X-Forwarded-Proto: https` (what Traefik sends) | scheme correctly becomes `https://…` ✅ |
+
+So the two paths genuinely differ, and only the unused one is broken. **Root cause of the raw-path
+quirk, for the record**: Next.js's standalone `server.js` does
+`const hostname = process.env.HOSTNAME || '0.0.0.0'`. `server-entrypoint.js` deletes `HOSTNAME`
+(to stop Kubernetes' pod-name injection leaking into redirect URLs), which makes that fall through
+to the literal `'0.0.0.0'`, and the raw Auth.js route builds its absolute URL from the bound
+address rather than the request. The Server Action path doesn't go through that route at all — it
+resolves the host from the request headers, which is why Google sign-in has always worked in
+production.
+
+**Conclusion: no code change is needed.** Registering
+`https://keenafricans.keenafrica.com/auth/callback/linkedin` is sufficient and will make "Connect
+LinkedIn" work. The `0.0.0.0` quirk is cosmetic, affects only an endpoint nothing calls, and is
+deliberately left alone — changing server startup or Auth.js URL resolution to tidy it carries
+real risk for zero user-facing gain.
+
+**Still re-test through the real button, not curl against the raw endpoint** — the raw endpoint
+will keep showing the bad `redirect_uri` afterwards and would mask a successful fix.
 
 ### 9.3 Teacher org-scoped course creation, and the review-workflow notifications
 
@@ -702,6 +764,98 @@ still existing in GHCR and on the schema being compatible with it — the compat
 `docs/PRODUCTION_HARDENING.md`'s runbook already states (this workflow never touches the
 database). Testing that end of it means deliberately restarting production twice, which was
 offered and not chosen.
+
+## 10. Systemic finding: production had never been ANALYZEd (2026-09-06)
+
+Found while verifying §9.1's fix, fixed the same day with the site owner's go-ahead. This was not
+in Session 45's brief; it is recorded here because it is the same *class* of defect as Session
+31's P0 and materially changes the platform's risk picture.
+
+### What was wrong
+
+**49 of 61 user tables in `keenafrica_portal_prod` had never been analyzed** — `reltuples = -1`,
+`relpages = 0`, both `last_analyze` and `last_autoanalyze` NULL. Autoanalyze had never fired and,
+at these row counts, never would have: its threshold is 50 changed rows
+(`autovacuum_analyze_threshold`), and the largest table held 40.
+
+With no statistics, Postgres plans against default row estimates. That is normally a minor
+inefficiency. It is not minor in this schema: the RLS policies nest `EXISTS` subqueries three to
+four tables deep, so a default estimate multiplies out through the whole policy tree into a plan
+whose **estimated** cost crosses Postgres's `jit_above_cost` (100,000) — at which point Postgres
+JIT-compiles the entire expression tree before executing a query that returns almost nothing.
+Exactly the mechanism Session 31 root-caused for `attempts_select`.
+
+Six tables were over the threshold, measured live under the real `kf_portal_prod_app` role:
+
+| Table | Est. cost | JIT? | Actual rows |
+|---|---|---|---|
+| `assets` | 857,784 | yes — over `jit_optimize_above_cost` (500,000) too | 6 |
+| `asset_attachments` | 502,936 | yes — same | 4 |
+| `modules` | 249,750 | yes | 1 |
+| `resources` | 188,353 | yes | 1 |
+| `courses` | 180,616 | yes | 1 |
+| `lessons` | 176,749 | yes | 1 |
+
+The worst was measured for real, not just estimated: `EXPLAIN (ANALYZE) SELECT id FROM assets`
+took **15,399.711 ms, JIT-compiling 4,796 functions — on a 6-row table.** For comparison, Session
+31's P0 was 2,148 functions and 6.7s.
+
+**It was not a live outage, and that distinction matters.** Every `asset` query in `src/` is
+`findUnique({ where: { id } })`, which planned at ~11 ms throughout; no application code path
+issues an unfiltered scan. This was a landmine, not a fire — but Prisma's interactive-transaction
+timeout is 5s, so the first `findMany` over `assets` anyone added would have reproduced Session
+31's P0 on a different table.
+
+### The fix
+
+A single database-wide `ANALYZE;` — statistics only, no data or schema change. **996 ms** for the
+whole database. Every user table is now analyzed (`still_never_analyzed = 0`).
+
+Verified by re-running the same sweep under the same role. **No table has a JIT section any more,
+and every plan improved — none regressed:**
+
+| Table | Before | After |
+|---|---|---|
+| `assets` | 857,784 (JIT) | 1,246 |
+| `asset_attachments` | 502,936 (JIT) | 799 |
+| `modules` | 249,750 (JIT) | 111 |
+| `resources` | 188,353 (JIT) | 112 |
+| `courses` | 180,616 (JIT) | 113 |
+| `lessons` | 176,749 (JIT) | 111 |
+| `assessments` | 72,272 | 49 |
+| `questions` | 57,816 | 48 |
+| `certificates` | 54,204 | 47 |
+| `cohorts` | 27,600 | 37 |
+| `users` | 27,450 | 176 |
+| `enrollments` | 12,912 | 38 |
+| `answers` | 273,284 (JIT) | 0.00 |
+
+And the real-world measurement, same query as above: **15,399.711 ms → 10.896 ms**, no JIT
+section. All five portals returned HTTP 200 in ~0.1s afterwards; R2-backed cover reads unchanged
+(3/3, byte-identical).
+
+### The part that would have brought it straight back
+
+`scripts/backup/pg-restore.sh` did **not** run `ANALYZE`. A dump does not carry statistics, so
+every restored table comes up with `reltuples = -1` — meaning a real disaster-recovery restore of
+production would have come up in exactly the pathological state described above, and stayed there,
+because autoanalyze would never fire. That is now fixed: the restore script runs `ANALYZE` on the
+target as its final step, and `scripts/backup/test-restore-drill.sh` passes with it in place.
+
+**This matters for Session 48** (production data purge and relaunch): any purge/reload path must
+end with `ANALYZE`, or it re-creates this problem on a freshly emptied database.
+
+### What is still worth doing
+
+- **Session 46**: this fix removes the *current* exposure but not the underlying fragility — RLS
+  policies three to four tables deep are inherently one bad row-estimate away from the JIT
+  threshold. The policy-depth reduction Sessions 31 and 45 applied to `attempts_select` and
+  `answers_select` (denormalise, join directly, drop the redundant hop) is the durable fix and
+  has not been applied to `assets_select`/`asset_attachments_select`, which are the two deepest
+  remaining (83 and 82 plan nodes even when cheap).
+- **Ongoing**: autoanalyze will maintain these tables correctly once any of them exceeds ~50 rows.
+  Below that it will not fire, but statistics are now accurate rather than absent, which is the
+  condition that actually caused the problem.
 
 ## Required next-session actions
 

@@ -54,7 +54,21 @@ out its own backups.
   weekly + 6 monthly, configurable).
 - `scripts/backup/pg-restore.sh` — `pg_restore --clean --if-exists` into a
   target `DATABASE_URL`, gated behind `RESTORE_CONFIRM=yes` so it can't be
-  run by accident.
+  run by accident. **Ends with `ANALYZE;` on the restored database (added by
+  Session 45).** A dump carries no statistics, so every restored table comes
+  up `reltuples = -1` ("never analyzed") and Postgres plans against default
+  row estimates. In this schema that is not cosmetic: the RLS policies nest
+  `EXISTS` subqueries 3-4 tables deep, so a default estimate multiplies out
+  into a plan whose *estimated* cost crosses Postgres's `jit_above_cost` and
+  triggers multi-second JIT compilation for a query returning almost nothing
+  — the same mechanism as the Session 31 production P0. Measured on live
+  production 2026-09-06: an unfiltered `SELECT id FROM assets` (6 rows) took
+  **15,399 ms and JIT-compiled 4,796 functions** before `ANALYZE`, and
+  **10.9 ms** after. Without this step a disaster-recovery restore would come
+  up pathological and stay that way, since autoanalyze never fires below 50
+  changed rows. A full-database `ANALYZE` costs ~1 second. Any other
+  bulk-load or purge path (e.g. Session 48's planned production data purge)
+  must do the same.
 - `scripts/backup/test-restore-drill.sh` — the same two scripts run
   end-to-end against **disposable, local-only** Postgres containers: spins
   up a source DB, applies real migrations, inserts a marker row, backs it
