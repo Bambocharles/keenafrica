@@ -420,7 +420,7 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 | 3 | Teacher org-scoped course creation | **Closed, deployed, verified live — including through the real UI 2026-09-06** | See §9.3 below. |
 | 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
-| 6 | Cloudflare R2 API token rotation | **Done 2026-09-06** — rotated, reads and writes both verified | See §9.5 below. |
+| 6 | Cloudflare R2 API token rotation | **Done 2026-09-06** — rotated, reads + writes verified, old token revoked and re-verified after | See §9.5 below. |
 | 7 | `postgres01`'s sibling databases documented | **Closed** | See §9.6 below. |
 | 8 | `rollback-portal.yml` dispatched once | **Closed — dispatched and green** | See §9.7 below. |
 
@@ -752,9 +752,22 @@ is a real data-lifecycle decision about those consumers, not an orphan cleanup �
 > the new credential. Zero storage errors in the pod logs throughout (Session 32 added
 > `console.error` on every driver failure path, so a bad credential would be loud).
 >
-> **Remaining hygiene for the site owner**: revoke the old Session 32 token in the Cloudflare
-> dashboard, and `shred -u` the pre-rotation Secret backup — it contains every production secret
-> in base64.
+> **Old token revoked (2026-09-06), and re-verified after the fact.** Re-checking after a
+> revocation matters: revoking the wrong one of two similarly-named tokens breaks every upload and
+> download instantly, with no restart needed, because R2 credentials are used per request. Six
+> cache-busted reads (`cf-cache-status: DYNAMIC` on all of them, so genuinely origin→R2) returned
+> HTTP 200 / 102,959 B / identical `sha256` after the revocation, with zero storage errors in the
+> logs and all five portals at 200.
+>
+> That check was strengthened by coincidence: PR #92's deploy landed at 09:50, so the pods were
+> rebuilt and restarted *after* the revocation and re-read the Secret from scratch — the surviving
+> credential is unambiguously the new one, and it works.
+>
+> **Item 6 is fully closed.** One optional piece of hygiene remains for the site owner: `shred -u`
+> the pre-rotation Secret backup (`~/portal-secrets-backup-<timestamp>.yaml`). Nothing unique is
+> lost by deleting it — the only value in it that is not still live in `portal-secrets` is the
+> now-revoked R2 token — but it holds every other production secret in base64, so it should not
+> sit around.
 
 The original finding, kept for the record:
 
