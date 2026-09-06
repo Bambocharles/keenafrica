@@ -417,10 +417,10 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 |---|---|---|---|
 | 1 | Session 33's `answers_select` RLS fix + the data-integrity question | **Closed** | See §9.1 below. |
 | 2 | LinkedIn OAuth credentials in production | **Closed at the provider level 2026-09-06** — one human click-through left to exercise identity linking | See §9.2 below. |
-| 3 | Teacher org-scoped course creation | **Closed, deployed, verified live** | See §9.3 below. |
+| 3 | Teacher org-scoped course creation | **Closed, deployed, verified live — including through the real UI 2026-09-06** | See §9.3 below. |
 | 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
-| 6 | Cloudflare R2 API token rotation | **Blocked on site owner** | See §9.5 below. |
+| 6 | Cloudflare R2 API token rotation | **Done 2026-09-06** — rotated, reads and writes both verified | See §9.5 below. |
 | 7 | `postgres01`'s sibling databases documented | **Closed** | See §9.6 below. |
 | 8 | `rollback-portal.yml` dispatched once | **Closed — dispatched and green** | See §9.7 below. |
 
@@ -621,18 +621,42 @@ Both shipped in PR #89, merged to `main` and deployed to production on 2026-09-0
 production database** and are covered by tests against the real non-superuser `portal_rls_test`
 role.
 
-**Course creation — verified live in production**, against the real RLS-enforcing
-`kf_portal_prod_app` role, using the existing QA fixtures (`adebiyibanbo+qa.teacher@gmail.com`, an
-active member of both `QA Test Org (Session 22)` and `QA Test Org B (Session 24)`). Every probe
-ran inside a transaction that was rolled back, so no production row was created — confirmed after
-the fact: production still holds exactly 1 course and 0 leftovers.
+**Course creation — verified live in production twice over: through the real UI, and at the RLS
+layer.**
 
-| Case | Expected | Result |
+**Through the UI (2026-09-06, the strongest evidence).** The site owner, logged in as
+`adebiyibanbo+qa.teacher@gmail.com` (global role `TEACHER`, active `org_admin` of `QA Test Org
+(Session 22)`), created a course through the teacher portal's own "New organization course" form.
+Result in production: course `09037e48-823b-4e13-ad09-f11d9969c428` — `scope = organization`,
+`organization_id = 2f440a07…` (QA Test Org (Session 22)), `status = draft`,
+`created_by = <the teacher>`, with a matching `course.created` AuditEvent. That is the whole
+feature working end to end for a real user: permission → Server Action → `createCourse()` →
+`courses_write` RLS → `INSERT … RETURNING` through `courses_select`'s new `created_by` branch.
+
+**At the RLS layer**, separately, against the real enforcing `kf_portal_prod_app` role. Each probe
+set `app.permissions`/`app.organization_ids` by hand — i.e. it simulates a crafted request that
+never went through the application code — and ran inside a transaction that was rolled back, so no
+row was created.
+
+| Case (session variables set explicitly) | Expected | Result |
 |---|---|---|
-| Teacher, org-scoped course in an org they are an active member of | allowed | **INSERT succeeded, and `RETURNING` returned the row** — which also proves `courses_select`'s new `created_by` branch, since Postgres applies SELECT policies to `INSERT … RETURNING` |
-| Same teacher, **platform-wide** course | refused | `ERROR: new row violates row-level security policy for table "courses"` |
-| Same teacher, org-scoped course in an organization they hold **no membership row for** | refused | same RLS error |
-| A **STUDENT** (no `courses.create.organization`) in an org they *are* an active member of | refused | same RLS error |
+| Holds `courses.create.organization`, row scoped to an org in `app.organization_ids` | allowed | **INSERT succeeded, and `RETURNING` returned the row** — which also proves `courses_select`'s new `created_by` branch, since Postgres applies SELECT policies to `INSERT … RETURNING` |
+| Same, but a **platform-wide** row (`scope='platform'`, `organization_id NULL`) | refused | `ERROR: new row violates row-level security policy for table "courses"` |
+| Same, but row scoped to `TS Attempted Org` — an organization neither QA account holds any membership row for | refused | same RLS error |
+| `app.permissions` **without** `courses.create.organization` | refused | same RLS error |
+
+> **Correction (2026-09-06).** An earlier revision of this section named the wrong QA account for
+> these probes: it called user `9ece7390…` "the QA teacher" when that id is in fact
+> `adebiyibanbo+qa.student@gmail.com`; the teacher is `bb133a3c…`. **No conclusion changes** —
+> `courses_write`'s new branch reads only `app.permissions`, `scope`, `organization_id` and
+> `app.organization_ids`, never `app.user_id`, so each probe's outcome was determined entirely by
+> the session variables set for it, which were correct in every case. Only the fixture labels were
+> wrong. The table above is restated in terms of the session variables actually set, which is what
+> the policy actually evaluates. For anyone reproducing this: the useful fixture is
+> `adebiyibanbo+qa.teacher@gmail.com` — active `org_admin` of `QA Test Org (Session 22)` and
+> **`removed`** from `QA Test Org B (Session 24)`, so it gives a genuine positive and a genuine
+> cross-tenant negative from one account. `adebiyibanbo+qa.student@gmail.com` is active in both
+> orgs and is therefore *not* a valid cross-tenant negative.
 
 Note on what RLS can and cannot do here: `app.organization_ids` is a **server-resolved** session
 variable — `withRls()` derives it from `OrganizationMembership`, never from client input. A probe
@@ -695,7 +719,44 @@ carry live `asset_attachments` rows (a certificate and a sponsor document), so s
 is a real data-lifecycle decision about those consumers, not an orphan cleanup — out of Session
 45's scope, which named exactly one row.
 
-### 9.5 Cloudflare R2 API token rotation — blocked on the site owner
+### 9.5 Cloudflare R2 API token rotation — DONE (2026-09-06)
+
+> **Rotated and verified.** The site owner created a replacement R2 API token (Object Read &
+> Write, scoped to `keenafrica-portal-assets-prod` only — same scope as the original, deliberately
+> not broadened) and applied it with `~/rotate-r2-token.sh`, which reads the credentials with
+> hidden input and hands them to `kubectl` through a `0600` temp file so they never reach a chat
+> interface, a shell history, or a process list. That was the whole point of this item: the
+> Session 32 token's values had been pasted into a chat interface twice during setup.
+>
+> **Rollout**: new ReplicaSet `portal-5bf6fd5d97`, both pods replaced, `RESTARTS 0`, old
+> ReplicaSets scaled to zero, `restartedAt 2026-09-06T09:39:54Z`. The image did not change — this
+> was purely a credential rotation. All 14 keys still present in `portal-secrets` (the merge patch
+> touched only the two S3 keys). A backup of the pre-rotation Secret was taken first, since
+> Cloudflare shows an R2 secret access key exactly once.
+>
+> **Reads verified — and verified properly.** 12 requests for an R2-backed article cover, all
+> HTTP 200 / 102,959 bytes. Crucially, four of those were **cache-busted with unique query
+> strings** and every response carried `cf-cache-status: DYNAMIC`, so they genuinely reached the
+> pod and the pod genuinely reached R2 — a plain read could have been served from Cloudflare's
+> edge and proven nothing. All four were byte-identical (`sha256 ff2c41cf…`).
+>
+> **Writes verified by a real upload**, which is the half reads cannot prove (a read-only-scoped
+> token passes every read test and still fails the first `PUT`). The site owner uploaded a real
+> file through the teacher portal: asset `55a2b071-c43a-42a8-8641-b5fa93fbf07f`, 217,325 bytes,
+> `application/pdf`, **`storage_driver = 's3'`**, attached as a `lesson_resource`, with
+> `asset.uploaded` and `resource.added` AuditEvents 78 ms apart.
+>
+> That the row exists is itself conclusive proof the R2 write succeeded:
+> `src/lib/assets.ts`'s `uploadAsset()` `await`s `driver.put()` **before** creating the row, and
+> the S3 driver throws on any non-2xx — so the row cannot exist unless R2 accepted the bytes under
+> the new credential. Zero storage errors in the pod logs throughout (Session 32 added
+> `console.error` on every driver failure path, so a bad credential would be loud).
+>
+> **Remaining hygiene for the site owner**: revoke the old Session 32 token in the Cloudflare
+> dashboard, and `shred -u` the pre-rotation Secret backup — it contains every production secret
+> in base64.
+
+The original finding, kept for the record:
 
 Not done. Creating an R2 API token requires either the Cloudflare dashboard's "Manage R2 API
 Tokens" flow or the Cloudflare API's token endpoints; this session's sandbox classifier denies
