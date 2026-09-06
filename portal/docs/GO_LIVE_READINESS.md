@@ -416,7 +416,7 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 | # | Item | Status | Live evidence |
 |---|---|---|---|
 | 1 | Session 33's `answers_select` RLS fix + the data-integrity question | **Closed** | See §9.1 below. |
-| 2 | LinkedIn OAuth credentials in production | **Credentials done; one owner-side portal step remains — proven to be the only thing left** | See §9.2 below. |
+| 2 | LinkedIn OAuth credentials in production | **Closed at the provider level 2026-09-06** — one human click-through left to exercise identity linking | See §9.2 below. |
 | 3 | Teacher org-scoped course creation | **Closed, deployed, verified live** | See §9.3 below. |
 | 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
@@ -518,9 +518,50 @@ deletion path for `assessment_assignments` anywhere in the codebase and had no a
 all. It now records an `assessment.unassigned` AuditEvent. That gap was real regardless of the
 conclusion above.
 
-### 9.2 LinkedIn OAuth — credentials are provisioned; the redirect URI is not registered
+### 9.2 LinkedIn OAuth — RESOLVED at the provider level (2026-09-06)
 
-State has moved since the 2026-09-01 audit, but the feature still does not work end to end.
+> **Update — 2026-09-06.** The site owner registered
+> `https://keenafricans.keenafrica.com/auth/callback/linkedin` in the LinkedIn Developer Portal.
+> Re-probed immediately: **LinkedIn now accepts the full authorization request.** Both legs of
+> the flow are verified against production; the only step not exercised is a human completing a
+> real LinkedIn login, which is what the "Remaining" note at the end of this section covers.
+>
+> **Outbound leg — verified live against production**, by driving the real Server Action on
+> `keenafricans.keenafrica.com` (the Google button on the public login page, which uses the
+> identical `signIn()` mechanism):
+> - emits `redirect_uri=https://keenafricans.keenafrica.com/auth/callback/google` — the correct
+>   host, matching the registered LinkedIn string exactly. This confirms in production what had
+>   only been shown by local reproduction.
+> - stores `__Secure-authjs.callback-url = https://keenafricans.keenafrica.com/dashboard` — an
+>   **absolute URL on the real host**. That cookie is what the callback route redirects to on
+>   success, so the return leg lands correctly too.
+>
+> **LinkedIn's side — verified by following the authorization request through**: it now answers
+> `303` to LinkedIn's own sign-in/consent page (`pageKey:
+> d_checkpoint_lg_consumer_login_oauth`), carrying a flow blob that shows every parameter
+> accepted — `appId 266117470`, `scope "openid profile email"` (so the "Sign In with LinkedIn
+> using OpenID Connect" product is genuinely active — an inactive product returns
+> `unauthorized_scope_error` here), `redirectUri
+> https://keenafricans.keenafrica.com/auth/callback/linkedin`, `authorizationType
+> OAUTH2_AUTHORIZATION_CODE`, `authFlowName generic-permission-list`. No error text anywhere on
+> the page.
+>
+> **On the `0.0.0.0:3000` error redirect, so it isn't mistaken for a new problem**: hitting
+> `/auth/callback/linkedin` with a bogus `code`/`state` redirects to
+> `https://0.0.0.0:3000/auth/error?error=Configuration`. **Google does exactly the same thing**
+> under the identical probe, and Google sign-in is verified working end-to-end in production —
+> so this is the known cosmetic quirk on the raw Auth.js routes (see the root-cause note below),
+> reached only on the *error* path, not the success path. `error=Configuration` here is an
+> artifact of the deliberately invalid state, not a provider misconfiguration.
+>
+> **Remaining, and genuinely worth doing once**: a human completing a real LinkedIn login and
+> consent. That is the only way to exercise `resolveLinkedInSignIn()`'s identity linking and the
+> verification-status flip to `linkedin_connected` against real LinkedIn profile data — logic
+> that has never run against the real provider. Expect: LinkedIn consent → back to
+> `/account?linkedinConnected=1` → a `user_identities` row with `provider='linkedin'` → the
+> account's verification status showing `linkedin_connected`, pending admin review.
+
+The original finding, kept for the record:
 
 **Done (not by this session):** `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` are present in
 the `portal-secrets` k8s Secret and live in the running pods. Verified live by driving the real
