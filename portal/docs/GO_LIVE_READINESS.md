@@ -921,12 +921,25 @@ end with `ANALYZE`, or it re-creates this problem on a freshly emptied database.
 
 ### What is still worth doing
 
-- **Session 46**: this fix removes the *current* exposure but not the underlying fragility — RLS
+- ~~**Session 46**: this fix removes the *current* exposure but not the underlying fragility — RLS
   policies three to four tables deep are inherently one bad row-estimate away from the JIT
   threshold. The policy-depth reduction Sessions 31 and 45 applied to `attempts_select` and
   `answers_select` (denormalise, join directly, drop the redundant hop) is the durable fix and
   has not been applied to `assets_select`/`asset_attachments_select`, which are the two deepest
-  remaining (83 and 82 plan nodes even when cheap).
+  remaining (83 and 82 plan nodes even when cheap).~~ — **DONE by Session 46, differently and
+  more completely than expected.** Session 46 enumerated all 52 RLS policies at 3+ table depth
+  and found the denormalisation pattern **provably does not transfer** to `assets_select`/
+  `asset_attachments_select`: unlike `attempts.course_id` (immutable), asset visibility is
+  *dynamic* (it tracks the linked entity's live RLS), so there is no stable column to denormalise
+  without a cache-invalidation system. The durable fix applied instead is `jit = off` at the
+  database level (migration `20260906120000_disable_jit_deep_rls_policies`), which removes the
+  entire class for all 52 policies at once with provably identical query results (plans unchanged,
+  compile step skipped) — `assets` at 1,000 rows went from 1,595 ms / 4,717 JIT functions to
+  20.7 ms / 0. `pg-restore.sh` re-applies it after a restore. Full audit:
+  `docs/SECURITY_RLS_AUDIT_S46.md`. **Not yet deployed to production** — see that doc / the
+  Session 46 status handoff. Session 46 also found and fixed an unrelated live-exploitable P1
+  (`X-Forwarded-For` spoofing defeating every IP-based rate limit — report-flood, view
+  inflation, weakened login-IP limit); fix in `src/lib/client-ip.ts`, also pending deploy.
 - **Ongoing**: autoanalyze will maintain these tables correctly once any of them exceeds ~50 rows.
   Below that it will not fire, but statistics are now accurate rather than absent, which is the
   condition that actually caused the problem.

@@ -58,4 +58,17 @@ docker run --rm \
 echo "==> Running ANALYZE on the restored database (statistics are not included in a dump)"
 docker run --rm   --network host   -e PGRESTORE_URL="$target_url"   "$PG_IMAGE"   bash -c 'psql --quiet --no-psqlrc -v ON_ERROR_STOP=1 -d "$PGRESTORE_URL" -c "ANALYZE;"'   || echo "WARNING: ANALYZE failed. The restore itself succeeded, but query plans on this database will be poor until you run 'ANALYZE;' against it yourself." >&2
 
+# Re-apply the database-level jit=off setting (Session 46). Like statistics,
+# a database's own GUC defaults (pg_db_role_setting) are NOT carried in a
+# dump — they are a property of the database object, not its contents. The
+# 20260906120000_disable_jit_deep_rls_policies migration sets jit=off because
+# this schema's deep RLS policies otherwise cross Postgres's jit_above_cost
+# and JIT-compile thousands of functions for trivial queries (Session 31's P0
+# mechanism). A disaster-recovery restore into a freshly created database
+# would come up WITHOUT that setting and reproduce the pathology until the
+# next `prisma migrate deploy` re-ran the migration — so set it here too, the
+# same defense-in-depth reasoning as the ANALYZE step above.
+echo "==> Setting jit=off on the restored database (a database-level setting is not carried in a dump)"
+docker run --rm   --network host   -e PGRESTORE_URL="$target_url"   "$PG_IMAGE"   bash -c 'psql --quiet --no-psqlrc -v ON_ERROR_STOP=1 -d "$PGRESTORE_URL" -c "DO \$\$ BEGIN EXECUTE format('"'"'ALTER DATABASE %I SET jit = off'"'"', current_database()); END \$\$;"'   || echo "WARNING: setting jit=off failed. The restore itself succeeded, but deep RLS-policy queries may JIT-compile pathologically until you run it yourself." >&2
+
 echo "==> Restore command completed. Run your own row-count/spot-check queries against the target before trusting it."

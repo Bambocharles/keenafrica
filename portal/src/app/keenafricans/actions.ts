@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { AuthorizationError } from "@/lib/authz";
+import { resolveClientIp } from "@/lib/client-ip";
 import { EmailNotVerifiedError } from "@/lib/articles";
 import { createReport, ReportRateLimitedError, ReportTargetNotFoundError } from "@/lib/reports";
 import { AlreadyFollowingError, CannotFollowSelfError, FollowTargetNotFoundError, followUser, unfollowUser } from "@/lib/follows";
@@ -53,7 +54,7 @@ export async function reportAction(formData: FormData) {
 
   const session = await auth();
   const h = await headers();
-  const ipAddress = h.get("x-forwarded-for");
+  const ipAddress = resolveClientIp(h);
 
   let error: string | null = null;
   try {

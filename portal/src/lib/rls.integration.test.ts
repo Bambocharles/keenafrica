@@ -747,3 +747,44 @@ describeIfConfigured("Row-Level Security (enforced by a non-superuser role)", ()
     });
   });
 });
+
+/**
+ * Session 46 (Full-Platform Security & RLS Audit), Part A regression.
+ *
+ * This schema's deep RLS policies cross Postgres's jit_above_cost at low row
+ * counts and JIT-compile thousands of functions for trivial queries — the
+ * Session 31 P0 mechanism. The 20260906120000_disable_jit_deep_rls_policies
+ * migration disables JIT at the database level. This pins that setting in
+ * place: a new connection (which is what the running app makes) must see
+ * jit=off, and a deep-policy scan must produce no JIT section even when the
+ * cost threshold is forced to zero — proving the database-level setting wins
+ * over a per-session attempt to re-enable it.
+ */
+describeIfConfigured("JIT disabled for deep RLS policies (Session 46)", () => {
+  const client = new PrismaClient({ datasourceUrl: RLS_TEST_URL });
+
+  afterAll(async () => {
+    await client.$disconnect();
+  });
+
+  it("jit is off on the database (inherited by every new connection)", async () => {
+    const rows = await client.$queryRawUnsafe<{ jit: string }[]>("SHOW jit");
+    expect(rows[0]?.jit).toBe("off");
+  });
+
+  it("a deep-policy scan produces no JIT section even with jit_above_cost forced to 0", async () => {
+    const plan = await client.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.user_id', ${randomUUID()}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.is_super_admin', 'false', true)`;
+      await tx.$executeRaw`SELECT set_config('app.permissions', '[]', true)`;
+      await tx.$executeRaw`SELECT set_config('app.organization_ids', '[]', true)`;
+      // Force the planner to WANT to JIT; the db-level jit=off must still win.
+      await tx.$executeRawUnsafe("SET LOCAL jit_above_cost = 0");
+      const rows = await tx.$queryRawUnsafe<{ "QUERY PLAN": string }[]>(
+        "EXPLAIN SELECT * FROM assets"
+      );
+      return rows.map((r) => r["QUERY PLAN"]).join("\n");
+    });
+    expect(plan).not.toMatch(/JIT:/);
+  });
+});

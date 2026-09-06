@@ -1,0 +1,52 @@
+-- Session 46 (Full-Platform Security & RLS Audit), Part A.
+--
+-- Disable Postgres JIT compilation for this database.
+--
+-- WHY. This schema's RLS policies nest EXISTS subqueries three to four tables
+-- deep, and Postgres applies the same policy tree to a query that scans a
+-- table without a selective indexed filter. As such a table grows, the
+-- policy's ESTIMATED plan cost rises linearly and crosses `jit_above_cost`
+-- (default 100000) at low, realistic row counts. At that point Postgres
+-- JIT-compiles the entire expression tree — thousands of functions — before
+-- running a query that returns almost nothing. This is the exact mechanism
+-- behind Session 31's production P0 (attempts_select: 6.7s, 2148 JIT
+-- functions) and Session 45's `assets` landmine (15.4s, 4796 functions on 6
+-- rows once statistics were present).
+--
+-- Session 46 enumerated every RLS policy with 3+ table reference depth (52 of
+-- them) and measured, under the real non-superuser role on a version- and
+-- data-matched restore of production, how many rows each may scan before it
+-- crosses the threshold. The margins are small and shrink with schema depth,
+-- not data — the two deepest cross at ~465 (`assets_select`) and ~483
+-- (`asset_attachments_select`) rows; `organization_invitations_select` at
+-- ~541; the whole Education-Core family (courses/lessons/modules/…) between
+-- ~635 and ~2100. Every one is a landmine that a single unfiltered `findMany`,
+-- or ordinary data growth, would step on.
+--
+-- WHY NOT DENORMALIZATION HERE. Sessions 31/45 fixed `attempts_select`/
+-- `answers_select` by denormalizing `course_id` and joining `cohorts`
+-- directly, dropping a hop. That works there because `attempts.course_id` is
+-- immutable — the denormalized value cannot drift from the access rule. It
+-- does NOT transfer to the deepest remaining policies: an asset's visibility
+-- is *dynamic* (a lesson_resource is visible to whoever can currently see its
+-- lesson's cohort — which changes as cohort_teachers/enrollments change), so
+-- there is no stable column to denormalize onto `assets`/`asset_attachments`
+-- without building a cache-invalidation system (a new pattern this session is
+-- explicitly forbidden to introduce). Disabling JIT removes the entire class
+-- of risk for all 52 policies at once, with provably identical query results
+-- (EXPLAIN plans are unchanged; only the compile step is skipped), and is
+-- reversible. It is the correct fix for deep, dynamic-visibility RLS on an
+-- OLTP workload whose tables are small enough that JIT never pays for itself.
+--
+-- PROVEN, not asserted (Session 46, on the production replica): at 1000
+-- assets, `SELECT id FROM assets` under the app role went from 1595 ms /
+-- 4717 JIT functions to 21 ms / 0 with this setting, returning the identical
+-- rows.
+--
+-- Takes effect on every new connection. current_database() keeps this correct
+-- across dev/prod without hardcoding a database name. Idempotent.
+DO $$
+BEGIN
+  EXECUTE format('ALTER DATABASE %I SET jit = off', current_database());
+END
+$$;

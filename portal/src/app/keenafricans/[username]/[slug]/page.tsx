@@ -7,6 +7,7 @@ import { ARTICLE_TOPIC_LABELS, deriveExcerpt, getPublicArticleBySlug, hashViewer
 import { isFollowing } from "@/lib/follows";
 import { listCommentsForArticle } from "@/lib/comments";
 import { getReactionCount, hasReacted } from "@/lib/reactions";
+import { resolveClientIp } from "@/lib/client-ip";
 import { ShareLinks } from "./ShareLinks";
 import { LegalFooter } from "../../LegalFooter";
 import { VerificationBadge } from "../../VerificationBadge";
@@ -138,7 +139,7 @@ export default async function ArticlePage({
     article.id,
     hashViewerKey({
       userId: session?.user?.id,
-      ipAddress: h.get("x-forwarded-for"),
+      ipAddress: resolveClientIp(h),
       userAgent: h.get("user-agent"),
     })
   );
