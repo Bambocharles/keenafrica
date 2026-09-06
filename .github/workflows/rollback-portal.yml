@@ -9,10 +9,32 @@ name: Rollback Portal
 # migrate deploy has no automatic "down" migration, so a rollback that also
 # tried to reverse schema changes would need a hand-written, per-incident
 # reverse migration anyway. See portal/docs/PRODUCTION_HARDENING.md's
-# rollback runbook for the full procedure and its compatibility caveat
-# (this is only safe when every migration between the target and the
-# current revision was additive, which is true of every migration in this
-# repo to date).
+# rollback runbook for the full procedure.
+#
+# COMPATIBILITY FLOOR — corrected by Session 49 (2026-09-06).
+# This header used to claim rolling back was safe "all the way back",
+# because "every migration in this repo to date was additive". That stopped
+# being true in Session 31 and nobody updated it (docs/GO_LIVE_READINESS.md
+# §11.4). Two migrations add a column, backfill it, and then SET NOT NULL,
+# and the code that populates the column ships in the same commit — so an
+# older image keeps writing NULL into a column the schema still forbids,
+# and the write fails immediately:
+#
+#   9871a03  Session 36  articles.author_name    SET NOT NULL
+#            -> below this, article creation fails (Keen Africans publishing is dead)
+#   6b1c2b3  Session 31  attempts.course_id      SET NOT NULL
+#            -> below this, every new assessment attempt fails as well
+#
+# The safe rollback floor is therefore 9871a03 (the later of the two), not
+# "anything". Rolling back below it loses no data — both columns are
+# derived and reconstructible — but it breaks core writes silently, which
+# is worse during an incident than not rolling back at all.
+#
+# THIS FLOOR IS MAINTAINED, NOT DISCOVERED: any future migration that adds
+# a NOT NULL column (or any other constraint older code cannot satisfy)
+# MUST raise the floor below and in portal/docs/PRODUCTION_HARDENING.md in
+# the same PR. See that doc's "Rollback compatibility floor" section for
+# the rule and how to re-derive the list.
 on:
   workflow_dispatch:
     inputs:
@@ -23,15 +45,56 @@ on:
           (Session 16 added a change-cause annotation carrying the image tag
           for each revision) or `git log --oneline` on main.
         required: true
+      acknowledge_below_floor:
+        description: >-
+          Roll back below the compatibility floor anyway. Only tick this if
+          you have read the floor note above and accept that assessment
+          attempts and/or article creation will fail until you roll forward.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+env:
+  # The safe rollback floor. Raise this whenever a migration adds a
+  # constraint older code cannot satisfy — see the header.
+  ROLLBACK_FLOOR_SHA: 9871a03ca09eb018675b4b96d75e7c881e8ed50f
+  ROLLBACK_FLOOR_DESC: "Session 36 (9871a03) — articles.author_name SET NOT NULL"
 
 jobs:
   rollback-portal-prod:
     runs-on: [self-hosted, keenafrica-vm]
     environment: production
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Turn the floor note above into something an operator cannot miss at
+      # 3am. Advisory-by-default would just be the old header again: this
+      # refuses, and the override is one deliberate checkbox.
+      - name: Check the target is at or above the compatibility floor
+        run: |
+          set -euo pipefail
+          TARGET="${{ inputs.image_tag }}"
+          if ! git cat-file -e "${TARGET}^{commit}" 2>/dev/null; then
+            echo "::warning::Could not resolve ${TARGET} to a commit in this checkout — cannot verify it against the rollback floor (${ROLLBACK_FLOOR_DESC}). Verify by hand before trusting this rollback."
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$ROLLBACK_FLOOR_SHA" "$TARGET"; then
+            echo "OK: ${TARGET} is at or above the rollback floor (${ROLLBACK_FLOOR_DESC})."
+            exit 0
+          fi
+          if [ "${{ inputs.acknowledge_below_floor }}" = "true" ]; then
+            echo "::warning::${TARGET} is BELOW the rollback floor (${ROLLBACK_FLOOR_DESC}). Proceeding because acknowledge_below_floor was ticked. Expect assessment attempts and/or article creation to fail until you roll forward."
+            exit 0
+          fi
+          echo "::error::${TARGET} is BELOW the rollback compatibility floor (${ROLLBACK_FLOOR_DESC})."
+          echo "::error::Rolling back to it leaves the schema enforcing NOT NULL columns that this image never populates: every new assessment attempt and/or article creation would fail immediately."
+          echo "::error::Pick a newer image, or re-run with acknowledge_below_floor ticked if you have accepted that breakage deliberately."
+          exit 1
+
       - name: Roll back to the specified image
         env:
           KUBECONFIG: /home/keen/.kube/config
