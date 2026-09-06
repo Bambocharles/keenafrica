@@ -1,4 +1,20 @@
-# Go-Live Readiness (Session 30)
+# Go-Live Readiness
+
+> ## CURRENT VERDICT: **NO-GO** — Session 47, 2026-09-06
+>
+> The authoritative, current verdict is **[§11, Session 47's re-declaration](#11-session-47--go-live-readiness-re-declaration-2026-09-06)**.
+> Four blockers: disaster recovery does not work (§11.2), automated backups are not reliably
+> running (§11.3), the rollback plan is stale and its tooling asserts something now false (§11.4),
+> and QA accounts can still authenticate against production (§11.5). **No product defect blocks
+> launch** — every portal including Keen Africans passes its authorization boundary and Sessions
+> 45's and 46's fixes are independently confirmed closed.
+>
+> Sections 1–10 below are Session 30's original report and the Session 31/32/45/46 updates to it,
+> preserved as historical record. Where §11 contradicts them, §11 is current.
+
+---
+
+# Session 30's original report (2026-08-29)
 
 **Verdict: NO-GO.** Two confirmed, currently-live, currently-reproducible defects block real
 students/teachers from using core product surfaces: assessments (P0, platform-wide 500/stuck-
@@ -948,7 +964,413 @@ end with `ANALYZE`, or it re-creates this problem on a freshly emptied database.
   Below that it will not fire, but statistics are now accurate rather than absent, which is the
   condition that actually caused the problem.
 
+
+## 11. Session 47 — Go-Live Readiness Re-Declaration (2026-09-06)
+
+> **VERDICT: NO-GO.** Four blockers, all newly established with live evidence this session, none
+> of them known before today. Three of the four are in disaster recovery and incident response —
+> the parts of the system that have never been exercised. Nothing in the *product* surface blocks
+> launch: every portal including Keen Africans passes its authorization boundary, the test suite
+> is green, and Sessions 45's and 46's fixes are independently confirmed closed. What blocks
+> launch is that **the platform cannot currently be restored, is not reliably being backed up, and
+> cannot safely be rolled back** — and the QA-account exception Session 30 named is still open.
+
+### 11.0 Precondition check — passed
+
+Session 46 (Full-Platform Security & RLS Audit) reports **"No finding remains open, and both
+fixes are now live."** Read in full, not just the summary line: F1 (`X-Forwarded-For` spoofing)
+and F2 (deep-RLS JIT) are both fixed, merged as PR #93 → `main` `2d395a8`, deployed via
+`deploy-portal.yml` run `34029642801` (success), and verified live. Independently re-confirmed
+this session: `kubectl -n keen-prod get deploy portal` reports the running image as
+`ghcr.io/bambocharles/keenafrica-portal:2d395a8035f447d22b23146dc643c6e76b3d94c7` — the Session 46
+merge commit itself. **This session was not blocked by its precondition.**
+
+### 11.1 Evidence standard — what this session could and could not do
+
+Same standard Session 30 set: live HTTP, real DNS, real workflow logs, real production data.
+Stated plainly, because it bounds several verdicts below:
+
+- **Available**: public HTTPS against all five production hosts; `kubectl` read access to
+  `keen-prod`; `gh` (workflow runs and logs); Docker; and **today's real production dump**
+  (`portal-20260906T095712Z.dump`, `pg_dump` of `keenafrica_portal_prod` at 09:57:12 UTC, PG 14.24
+  — 61 tables, 196 policies, real production row counts). Every "production data" claim below was
+  measured against a restore of that dump, not recalled from a prior session's document.
+- **Not available**: direct connections to `keenafrica_portal_prod` (classifier-blocked in this
+  sandbox, in every form attempted — the same intermittent wall Sessions 45 and 46 documented);
+  `kubectl get secret` value reads; **and therefore any authenticated production session at all**.
+  QA account passwords are deliberately never given to an agent (`docs/QA_LIVE_TEST_ACCOUNTS.md`:
+  they live in the site owner's password manager and in a credential-vault Secret outside the
+  app's `envFrom`). This is correct security design, and it means **no portal below carries an
+  authenticated live sign-off from this session.** That limitation is named per-area in §11.7
+  rather than papered over.
+
+### 11.2 BLOCKER 1 — Disaster recovery does not work. First real restore test, and it failed.
+
+`docs/BACKUP_RESTORE.md` has claimed a working restore procedure since Session 01. The
+`test-restore-drill.sh` drill only ever proved that a synthetic database round-trips through the
+two scripts; the daily workflow only ever proved that a dump *can be read back* by a PG 16
+superuser. **A restore of real production data into a target shaped like production had never been
+performed.** It has now. It does not work.
+
+Method: today's real production dump, restored into a disposable **PostgreSQL 14.24** container —
+byte-for-byte the same server version as production (`PostgreSQL 14.24 on x86_64-pc-linux-musl`)
+— using the project's own `scripts/backup/pg-restore.sh`, following `docs/BACKUP_RESTORE.md`'s
+runbook as literally written.
+
+**(a) A restore into a fresh database produces a database the application cannot read at all.**
+
+The runbook's step 2 says to confirm the target database exists and that `pgcrypto`/`citext` are
+present. That is the entire preparation it specifies. Doing exactly that and restoring, the
+application's runtime role is left with **zero privileges on every table**:
+
+```
+$ psql -d "postgresql://kf_portal_prod_app@.../dr_fresh" -Atc "select count(*) from users"
+ERROR:  permission denied for table users
+
+$ select count(*) from information_schema.role_table_grants where grantee='kf_portal_prod_app';
+ 0
+```
+
+Cause: `pg-backup.sh` dumps with `--no-privileges` and `pg-restore.sh` restores with `--no-owner
+--no-privileges`, so no `GRANT` is carried. The grants production actually runs on come from
+`~/portal-db-setup-prod.sh` (`GRANT USAGE ON SCHEMA public` plus `ALTER DEFAULT PRIVILEGES FOR
+ROLE kf_portal_prod_migrator …`), and `ALTER DEFAULT PRIVILEGES` is per-database catalog state
+(`pg_default_acl`) — also not in a dump, for the same reason statistics and `jit=off` are not.
+The runbook never mentions roles, grants, or default privileges. **Following it after a total loss
+gives you a database with all your data in it that the portal cannot serve a single row from.**
+
+**(b) `pg-restore.sh` aborts before its own ANALYZE and `jit=off` steps whenever `pg_restore`
+reports any ignorable error** — silently reinstating both pathologies Sessions 45 and 46 fixed.
+
+`pg_restore` exits non-zero on *ignorable* errors ("errors ignored on restore: 4" — here, four
+harmless extension-ownership `DROP EXTENSION`/`COMMENT` failures that occur whenever the
+extensions were created by a different role than the one restoring, which is exactly what the
+runbook's step 2 produces). The script runs under `set -euo pipefail`, so it exits 1 at that
+point and never reaches its last two steps:
+
+```
+pg-restore.sh exit code: 1
+never_analyzed=16 of 61 tables        # Session 45's fix did not run
+show jit  ->  on                      # Session 46's fix did not run
+pg_db_role_setting rows for the DB: 0
+```
+
+Both of those steps exist *specifically* because a dump does not carry them, and both are
+defended in long comments in the script. They are skipped precisely in the scenario they were
+written for. Measured honestly: at today's row counts the *consequence* stays latent — the
+`assets` plan under the RLS role costs ~1,561, far below `jit_above_cost`, so the multi-second
+JIT compilation does not currently reproduce. Session 46 puts the crossover at ~465 rows for
+`assets_select`. **The defect is structural and certain; its performance impact is bounded by
+current data volume and would appear as the platform grows.** Named as bounded, not inflated.
+
+**(c) PostgreSQL 14's `pg_restore` cannot read the backups at all.**
+
+Production is PG 14.24. Dumps are written by `pg_dump` 16.14 (archive format 1.15), because both
+scripts default to `PG_IMAGE=postgres:16-alpine` — directly against that variable's own
+documented contract, *"Keep this in sync with the server's major version."*
+
+```
+$ PG_IMAGE=postgres:14-alpine ./scripts/backup/pg-restore.sh <today's prod dump> <PG14 target>
+pg_restore: error: unsupported version (1.15) in file header
+```
+
+It works today only because the scripts happen to default to a PG 16 container. Anyone recovering
+with tooling matched to the production server — the `psql`/`pg_restore` actually installed on
+`postgres01`, or a rebuilt PG 14 host — is stopped dead by a one-line error, during an incident.
+
+**(d) The daily verification cannot catch any of (a), (b) or (c) — by construction.**
+
+`backup-portal-db.yml`'s verify step restores into a `postgres:16-alpine` container **as the
+`postgres` superuser**, then asserts `count(*) FROM users` and `count(*) FROM pg_policies`. A
+superuser bypasses the missing grants entirely, so (a) is invisible to it; it never uses the
+production major version, so (c) is invisible to it; and it never inspects `jit` or statistics,
+so (b) is invisible to it. The check that was supposed to make "a backup that fails to restore
+fails the workflow" true is testing a scenario that resembles disaster recovery only superficially.
+
+**What did work, and is worth recording**: an **in-place** restore over a target already carrying
+production's roles and `ALTER DEFAULT PRIVILEGES` completes correctly — exit 0, `jit=off` applied,
+0 of 61 tables unanalyzed, 244 grants present, and the RLS-scoped app role connects and correctly
+returns 0 rows with no session context. Restoring *over the existing production database* (the
+runbook's step 4, the likely case for a bad migration or a bad `DELETE`) is sound. It is
+**total-loss recovery onto fresh infrastructure that is broken**, and that is the case backups
+exist for.
+
+### 11.3 BLOCKER 2 — Automated backups are not actually running daily
+
+`backup-portal-db.yml` is scheduled at 02:17 UTC daily. Its real run history (`gh run list`) since
+2026-08-27, against the dumps actually on disk:
+
+| Outcome | Count | Dates |
+|---|---|---|
+| Succeeded | 4 | 08-30, 08-31, 09-02, 09-05 |
+| Failed (backup taken, **verification failed**) | 3 | 08-27, 09-03, **09-06 (today)** |
+| **Never ran** — still `waiting` | 4 | 08-28, 08-29, 09-01, 09-04 |
+
+**Four days have no backup at all.** Those runs are queued behind `environment: production`'s
+manual-approval gate and were never approved; they sit in `waiting` indefinitely (one for 213
+hours). A scheduled job that silently requires a human to approve it is not an automated backup.
+The successful runs took 2–28 hours wall-clock for the same reason — they are approval latency,
+not work.
+
+The three failures are a race in the verification step, not a bad dump: it polls `pg_isready`,
+which answers during the postgres image's temporary init server, so the following command lands
+either before the database exists or while that temp server is shutting down —
+`FATAL: database "verify" does not exist` (today) and `FATAL: the database system is shutting
+down` (09-03). Both dumps are on disk and readable.
+
+Net effect: over the last 11 scheduled days, **7 produced either no backup or no verified one**,
+and the "failure is the alert" design has been alerting into a void.
+
+### 11.4 BLOCKER 3 — The rollback plan is stale, and the rollback tool asserts something now false
+
+Session 30 §5 concluded that code rollback was safe "all the way back to pre-Session-17, without
+any schema rollback." `rollback-portal.yml`'s own header still states the underlying claim:
+
+> *"this is only safe when every migration between the target and the current revision was
+> additive, **which is true of every migration in this repo to date**."*
+
+Re-walked all **34 migrations from Session 21 onward**, including the 23 added by the Keen
+Africans build-out. Thirty-two are purely additive. **Two are not**, and both landed after Session
+30 wrote that conclusion:
+
+| Migration | Session | Shape | Consequence of rolling code back past it |
+|---|---|---|---|
+| `20260831100000_attempts_course_id_denormalization` | 31 | `ADD COLUMN course_id` → backfill `UPDATE` → **`SET NOT NULL`** | `src/lib/attempts.ts:196` supplies `courseId` on insert (added by Session 31, `1b316d3`). Older images do not. **Every new assessment attempt fails** on a NOT NULL violation. |
+| `20260901130000_keen_africans_article_author_name` | 36 | `ADD COLUMN author_name` → backfill `UPDATE` → **`SET NOT NULL`** | `src/lib/articles.ts:374` supplies `authorName` via `resolveAuthorName()`. Older images do not. **Every article creation fails** — Keen Africans publishing is dead. |
+
+Because `rollback-portal.yml` deliberately (and correctly) does not touch the database, the schema
+keeps enforcing both `NOT NULL`s while the rolled-back image stops satisfying them. **The true
+safe rollback floor is Session 36, not "all the way back."** No data is at risk in either case —
+both columns are derived and reconstructible — but an operator following the current runbook
+during an incident would roll back to a "known good" image and silently break core writes.
+
+### 11.5 BLOCKER 4 — QA accounts: resolved, and the answer is that the item does not pass
+
+Session 30 recorded this as a site-owner-accepted, time-bound exception with no date. Session 47
+was asked to resolve it rather than accept it again. Measured against real production data
+(restore of today's dump) rather than against `docs/QA_LIVE_TEST_ACCOUNTS.md`:
+
+**Production contains 13 user accounts. Twelve of them are QA test accounts.**
+
+| Class | Count | Can authenticate |
+|---|---|---|
+| Real user (site owner, `SUPER_ADMIN` + `TEACHER` + `KEEN_AFRICAN`) | 1 | yes |
+| QA accounts, `status = active` | 9 | **yes** |
+| QA accounts, `status = suspended` | 3 | no |
+
+Among the nine active ones is `adebiyibanbo+qa.superadmin@gmail.com` — `is_super_admin = true`,
+bcrypt password set, unsuspended. **A live, password-authenticating super-admin test account
+exists in production today.** One of the suspended ones is literally named *"QA Disposable
+(Session 25, delete me)"*.
+
+The demo/seed half of the item still holds and was re-confirmed at the code level:
+`assertDemoSeedAllowed()` refuses in `NODE_ENV=production` and by `DATABASE_URL` pattern, its
+tests pass in this session's run, and `deploy-portal.yml` never invokes the demo seed. The
+production data confirms it — there is no synthetic demo user in the 13.
+
+**Resolution (site owner, this session)**: the exception is **re-confirmed with a real terminating
+event attached — Session 48**, which owns the full production purge and creates a single fresh
+super-admin. This is no longer "a future date, not yet scheduled": it is the next session, gated
+only on the blockers above. The site owner declined an interim suspension of the QA super-admin,
+and this session deliberately did **not** mutate production accounts — Session 48 owns that
+boundary, and purging now would destroy fixtures a follow-up session may need.
+
+**This item therefore still does not pass as worded**, and it is recorded as a blocker rather than
+an exception, because "no QA account can authenticate against production" is false today. It is
+the one blocker here that is cleared *by* going live rather than *before* it — see the sequencing
+note in the verdict.
+
+### 11.6 Session 30's original checklist, re-walked item by item
+
+| Item | Status | Evidence gathered this session |
+|---|---|---|
+| Passwords hashed | ✅ Confirmed on real production data | All 13 production `password_hash` values are `$2a$12$…` — bcrypt, cost 12. Measured, not recalled. |
+| Secrets externalized | ⚠️ App-level yes; **host-level no** | App reads everything via `envFrom: portal-secrets`; the deployment defines exactly one plain env var (`ROOT_DOMAIN`). But production DB credentials sit in plaintext in world-readable `~/portal-db-setup-prod.sh` (mode 0775), and the `cloudflared` tunnel token is visible in the process command line to any local user. See §11.8 N2. |
+| Encryption at rest | ❌ Still absent, now with a second location | Unchanged since Session 01 for `postgres01`'s ZFS pool. Additionally: backup dumps are `-rw-r--r-- root:root` on plain ext4/LVM on this runner (`no dm-crypt/LUKS devices present`). See §11.8 N1. |
+| TLS / secure transport | ✅ at the edge, ⚠️ origin | HSTS `max-age=31536000; includeSubDomains; preload` live on all five hosts. Traefik's ingress uses entrypoint `web` (HTTP only) — TLS terminates at Cloudflare and origin traffic is plaintext over the private LAN. |
+| Server-side authorization | ✅ | Every protected route on all five portals rejects anonymous access (§11.7). 894/895 tests pass, including the full RLS integration suite against the real non-superuser `portal_rls_test` role. |
+| RLS / ownership boundaries | ✅ re-confirmed structurally | 196 policies present in the real production schema (counted in the restore). Session 46's 52-policy depth audit is the current authority and is closed. |
+| Audit logging | ✅ extended correctly by Keen Africans | 38 `recordAuditEvent()` call sites across the six Keen Africans modules (`articles` 17, `profiles` 6, `reports` 5, `verification` 4, `follows` 3, `comments` 3) — the canonical helper, no parallel audit system. Confirmed *actually firing* in production: `article.updated` ×10, `article.published` ×5, `article.unpublished` ×4, `article.cover_set` ×3, `article.created` ×2, plus email-verification events. |
+| Session revocation | ✅ | `src/lib/sessions.ts:93` rejects on `revokedAt`/expiry at every session resolution; revocation is idempotent (`:201`). Covered by the passing suite. |
+| Rate limiting | ✅ and materially stronger than at Session 30 | Session 46's `resolveClientIp()` is used at **all 5** IP-keyed call sites, and **zero** raw `x-forwarded-for` reads remain outside `client-ip.ts`. Its premise is sound from the internet (§11.6a). |
+| Secure uploads | ✅ | `src/lib/assets.ts` enforces a MIME allowlist with content sniffing (`ALLOWED_MIME_TYPES` + `Sniffer`), server-side. Storage confirmed on the shared S3/R2 driver in production — all 4 assets created since Session 32's fix are `storage_driver='s3'`, most recent today. |
+| No sensitive logs | ✅ swept, not assumed | 12 `console.*` call sites in non-test source; **zero** mention `password`, `secret`, `token`, `hash`, `credential`, `otp`, `apikey`, `authorization` or `cookie`. |
+| No demo/QA account in production | ❌ **Blocker** | Demo/seed half holds; QA half does not. §11.5. |
+| Security headers | ✅ consistent across all five hosts, ⚠️ CSP report-only | HSTS, `x-frame-options: DENY`, `nosniff`, `referrer-policy`, `permissions-policy` present and byte-identical on admin/teacher/student/sponsor **and keenafricans**. CSP remains `content-security-policy-report-only` with `script-src 'self' 'unsafe-inline'` — not enforcing. Unchanged known gap. |
+| Transactional email (DKIM/SPF/DMARC) | ✅ configured, ⚠️ DMARC still monitor-only | Re-verified live by `dig` today: SPF `v=spf1 include:amazonses.com ~all` on `send.keenafrica.com`, MX `feedback-smtp.eu-west-1.amazonses.com`, a published `resend._domainkey` RSA key, DMARC `v=DMARC1; p=none; …; adkim=r; aspf=r`. Correct relaxed-alignment setup; still `p=none` **and `sp=none`**, i.e. not enforcing. No fresh live send was triggered (no authenticated path available). |
+| Backup / restore | ❌ **Blocker** | §11.2, §11.3. |
+| Rollback plan | ❌ **Blocker** | §11.4. |
+
+#### 11.6a One bounded qualification to Session 46's F1 fix
+
+Session 46 fixed IP spoofing by preferring `CF-Connecting-IP`, on the premise that "Cloudflare
+overwrites it, so unforgeable — prod is confirmed behind Cloudflare." Re-tested that premise
+adversarially rather than accepting it:
+
+- **From the internet the premise holds, and is stronger than stated.** `server: cloudflare` and a
+  `cf-ray` on live responses; the zone resolves to Cloudflare IPs; and the origin is published
+  through a **`cloudflared` tunnel**, so there is no public origin address to reach around the
+  edge at all. Traefik's LoadBalancer addresses are RFC1918 (`192.168.2.52/.56/.57`).
+- **From the LAN it does not hold.** The origin answers plaintext HTTP directly
+  (`http://192.168.2.52/` with a `Host:` header → `200`) and accepts a client-supplied
+  `CF-Connecting-IP` verbatim → `200`. Anyone with LAN or in-cluster network access can forge the
+  client IP and defeat every IP-based control — login brute-force limiting, anonymous-report flood
+  limiting, and article-view dedup.
+
+This is **not a go-live blocker**: it requires network access that already implies a far larger
+compromise. It is recorded because Session 46's "unforgeable" is true of the internet, not of the
+origin, and the durable fix is to restrict the origin to the tunnel (or enforce a Cloudflare-only
+allowlist at Traefik) rather than to rely on the header alone.
+
+### 11.6b Confirming Sessions 45 and 46 are genuinely closed, not just claimed closed
+
+Spot-checked independently against real production data and live artifacts, per this session's
+scope. All held:
+
+| Claim | Source | Independent check | Result |
+|---|---|---|---|
+| `answers_select` join-depth fix landed | S45 §9.1 | Read the live policy from the production schema | ✅ Uses `attempts.course_id` → `cohorts` → `cohort_teachers`; the `assessments` hop is gone. |
+| Teacher org-scoped course creation shipped | S45 §9.3 | Query `permissions` in production | ✅ `courses.create.organization` present with its documented description. |
+| Orphaned `Asset` row resolved | S45 §9.4 | Enumerate all 7 production assets and their references | ✅ `10d94d8d` (`control-plane-bootstrap-og.png`) is `status=deleted`, `deleted_at=2026-09-05`. A second orphan (`42914f8e`) is also already soft-deleted. **No unaccounted orphan exists.** |
+| F1 (`X-Forwarded-For`) fixed and live | S46 | Deployed image digest + call-site sweep + Cloudflare fronting | ✅ Running image is the S46 merge commit; all 5 call sites use `resolveClientIp`; no raw XFF reads remain; Cloudflare confirmed in front. Qualified by §11.6a. |
+| F2 (`jit=off`) fixed and live | S46 | Deploy run `34029642801` log + migration present in repo | ✅ Migration `20260906120000_disable_jit_deep_rls_policies` applied in that run. Not re-queried on live production (DB access blocked); the restore proves the mechanism works, and `pg-restore.sh` re-applies it — except in the aborted path of §11.2(b). |
+| The one failing test is a known flake | S46 | Ran it in isolation | ✅ `notifications.test.ts` fails in the full run (fire-and-forget timing) and passes **33/33** alone. Not a regression. |
+
+Full suite this session: **894 / 895 passing**, 66 of 67 files clean, the single failure being that
+flake. `tsc --noEmit`: clean.
+
+### 11.7 Sign-off by area — every portal, including Keen Africans
+
+Read the caveat in §11.1 first: **no area below carries an authenticated live sign-off**, because
+QA credentials are correctly withheld from agents. Each verdict states what it actually rests on.
+
+| Area | Status | What it rests on |
+|---|---|---|
+| **Admin** | ✅ boundary-verified | All 14 protected routes (`/audit`, `/flags`, `/education/*`, `/certificates/*`, `/messages/*`, **`/keen-africans/*` moderation**) return 307→`/login` anonymously. Test suite green. Not exercised authenticated. |
+| **Teacher** | ✅ boundary-verified | All 14 protected routes redirect anonymously, including `/assessments/*` (Session 31's P0 surface) and `/organization/*`. Not exercised authenticated — the `/assessments` P0 has not been re-driven through a real teacher session since Session 31. |
+| **Student** | ✅ boundary-verified | All 14 protected routes redirect anonymously. Same caveat. |
+| **Sponsor** | ✅ boundary-verified, one cosmetic defect | All 7 protected routes redirect anonymously. **`sponsor.keenafrica.com/` returns 404** — the only one of the five portals with no index page (`src/app/sponsor/page.tsx` absent); the other four redirect to `/login`. Low severity, real. |
+| **Keen Africans — identity & auth** | ✅ boundary-verified | `/dashboard`, `/profile`, `/account`, `/account/delete`, `/security`, `/step-up`, `/notifications`, `/articles/new` **all** 307→`/login` anonymously. Public surfaces (`/`, `/latest`, `/search`, `/register`, `/login`, `/privacy`, `/terms`) all 200. |
+| **Keen Africans — publishing** | ✅ | Published article renders publicly at its `/{username}/{slug}` (200); the draft is not publicly reachable. Production holds 2 articles (1 published, 1 draft), 1 profile. Audit trail confirmed firing (§11.6). |
+| **Keen Africans — verification** | ⚠️ built, essentially unexercised | `keen_african_verifications` table present in the production schema; Session 46 proved server-side that self-granting `verified`, approving without `verification.review`, and rejected→verified replay are all blocked. But production holds **0 verification records** and the one profile is unverified — so the flow has no real production usage behind it. |
+| **Keen Africans — moderation** | ⚠️ built, entirely unexercised | `reports` table present; admin queue routes exist and are gated. Production holds **0 reports, 0 comments, 0 follows**. Session 46's report-flood fix is live. No real moderation event has ever occurred. |
+| **Keen Africans — discovery** | ✅ boundary-verified, thin | `/search` and `/latest` 200; FTS GIN indexes present on `profiles` and articles in the production schema. `/topics/technology` 404s — correct, no such topic exists in a dataset this small. |
+| **Security / RLS** | ✅ | Session 46 closed, independently spot-checked (§11.6b). |
+| **Disaster recovery** | ❌ **blocking** | §11.2, §11.3. |
+| **Incident rollback** | ❌ **blocking** | §11.4. |
+
+A fair reading of the Keen Africans rows: the surface is **built, gated correctly, and adversarially
+tested by Session 46 — but almost entirely unused.** Its production dataset is 2 articles, 1
+profile, and zero comments/follows/reports/verifications, all authored by the site owner. That is
+not a defect; it is the honest state of a pre-launch product, and it means "verified" here means
+"the boundaries hold," not "the workflows have proven themselves at any volume."
+
+### 11.8 Named non-blocking limitations
+
+Recorded explicitly rather than folded into any pass, per Session 30's own standard.
+
+- **N1 — No encryption at rest, in two places.** `postgres01`'s ZFS pool is unencrypted (Session
+  01). Backup dumps are additionally `-rw-r--r-- root:root` on unencrypted ext4 on this runner —
+  readable by any local user. Bounded by what a dump exposes: all PII and emails, and bcrypt
+  hashes (cost 12, strong). **Not** plaintext TOTP secrets (`totp_credentials.secret_ciphertext`
+  is application-encrypted) and **not** recovery codes (`recovery_codes.code_hash` is hashed) —
+  verified against the real schema.
+- **N2 — Host-local secret exposure.** Production DB credentials for both `kf_portal_prod_app` and
+  `kf_portal_prod_migrator` are in plaintext in `~/portal-db-setup-prod.sh`, mode `0775`. The
+  `cloudflared` tunnel token is visible in the process command line to any local user. Documented
+  only, per the site owner's decision this session; nothing was rotated or chmod'd. Both warrant
+  rotation, and this host holds the dumps *and* a working `KUBECONFIG`, so a local compromise is a
+  full compromise.
+- **N3 — Origin reachable and header-trusting on the LAN.** §11.6a.
+- **N4 — DMARC `p=none` / `sp=none`.** Unchanged since Session 30; aggregate reports still route to
+  a personal Gmail address, not a team alias.
+- **N5 — CSP is report-only, with `'unsafe-inline'` on `script-src`.** Unchanged.
+- **N6 — Four product capabilities are switched off in production.** All 10 `feature_flags` rows
+  are `enabled = false`, including **`messaging`, `certificates`, and `sponsor_reporting`** —
+  each enforced server-side at the page level (`isFeatureEnabled` in the student, teacher and
+  admin message/certificate routes). Launching today launches **without** messaging, certificates,
+  or sponsor reporting. This may well be the intended staged rollout, but it is not stated
+  anywhere, and Session 30's sign-off marked the Sponsor portal ✅ and the Teacher portal
+  messaging-verified without noting that these surfaces are flag-dark in production. **A
+  deliberate decision is needed on which flags flip at launch.**
+- **N7 — `sponsor.keenafrica.com/` 404s.** §11.7.
+- **N8 — Two legacy `storage_driver='local'` assets remain active with live attachments**
+  (`certificate-KA-2026-2FB5355B6CA3.txt`, `qa_doc.txt`, both 2026-08-31). Carried over from
+  Session 45, unchanged. Both are unreadable from whichever replica did not write them — the
+  Session 32 failure mode. Both are QA-era artifacts and evaporate with Session 48's purge.
+- **N9 — No backup contains the current migration state.** The newest dump (09:57 UTC) predates
+  today's Session 46 deploy, so `_prisma_migrations` in it holds 57 of the repo's 58 migrations
+  (missing `20260906120000_disable_jit_deep_rls_policies`). Benign — that migration only sets a
+  database-level GUC, is idempotent, and `pg-restore.sh` re-applies the setting independently.
+  Noted because it is the visible edge of §11.3: today's backup failed.
+- **N10 — No offsite copy and no PITR/WAL archiving.** Recovery granularity is "as of the last
+  good daily dump", and per §11.3 that is currently as much as four days.
+- **N11 — Organization-scoped data still unexercised in production.** Production has an
+  org-scoped course (Session 45's) but **0 org-scoped cohorts**, so Session 29's cross-org PII fix
+  still cannot be exercised against real production rows; Session 46 re-proved it on a replica.
+  Unchanged standing item since Session 21 — re-verify the day the first real org-scoped
+  cohort + enrollment exists.
+- **N12 — No authenticated production verification this session.** §11.1.
+
+### Go / No-Go statement
+
+> **NO-GO**, as of 2026-09-06.
+
+The product is in better shape than this verdict sounds. Every portal's authorization boundary
+holds under live anonymous probing, including all of Keen Africans; the suite is green against the
+real RLS-enforcing role; Session 45's and Session 46's fixes are independently confirmed closed
+rather than taken on trust; and both of Session 30's original NO-GO items (assessments, file
+storage) remain genuinely fixed. **No product defect blocks launch.**
+
+What blocks launch is everything around it. Three of the four blockers are in disaster recovery
+and incident response — the parts of a system that are only ever tested by testing them, and that
+had not been. The first genuine restore of real production data, performed today, failed. The
+backup that was supposed to prove this every night has been failing or not running for seven of
+the last eleven days. The rollback tool tells an operator it is safe to do something that has been
+unsafe since Session 31.
+
+**The blockers, and exactly what flips each to GO:**
+
+1. **Disaster recovery is broken (§11.2).** → Fix all three legs and re-run today's drill green:
+   (a) make role/grant/default-privilege reconstruction part of the restore — either emit them
+   from `pg-restore.sh` or add them to the runbook as an explicit, tested step; (b) stop
+   `pg-restore.sh` aborting on `pg_restore`'s ignorable-error exit so ANALYZE and `jit=off` always
+   run (capture the status, decide on it, then continue); (c) reconcile the dump's tooling version
+   with the server's — either pin `PG_IMAGE` to `postgres:14-alpine` to match production, or
+   upgrade production and say so. Then prove it: restore today's dump into a **fresh PG 14.24
+   database** and have the **`kf_portal_prod_app` role successfully read a table**. That single
+   assertion is the acceptance test, and it is the one that has never been run.
+2. **Backups are not reliably running (§11.3).** → Remove the manual-approval gate for the
+   scheduled backup (or move it to a job that does not need `environment: production` for a read
+   -only dump), fix the `pg_isready` race in the verify step (poll the real server, e.g.
+   `pg_isready` against the mapped TCP port, or wait for the "ready to accept connections" log
+   line on the *second* startup), and route failures somewhere a human sees. Flips to GO after
+   **seven consecutive unattended daily runs succeed**, with seven dumps on disk to show for it.
+3. **The rollback plan is stale (§11.4).** → Correct `rollback-portal.yml`'s header claim and
+   `docs/PRODUCTION_HARDENING.md`'s runbook to state the real floor (currently Session 36), and
+   add the two `NOT NULL` migrations to a maintained compatibility note so the floor moves
+   forward deliberately rather than silently. Cheap; it is documentation and one comment. Flips to
+   GO once the runbook tells the truth.
+4. **QA accounts can authenticate against production (§11.5).** → Cleared by **Session 48**, which
+   purges all production data and creates one fresh super-admin. **Sequencing note, deliberately
+   explicit:** this blocker is cleared *by* the launch step rather than before it, so it must not
+   be read as gating Session 48 — that would deadlock (Session 48 needs GO; GO needs the purge).
+   Blockers 1–3 are the real gate. Once they close, this document should be amended to GO **for
+   the purpose of authorizing Session 48**, and blocker 4 closes as Session 48 executes.
+
+**What a follow-up session should be scoped from this:** blockers 1–3 are one coherent piece of
+work — backup, restore and rollback are the same operational surface, all three are small, and all
+three are provable by a single re-run of §11.2's drill plus a week of clean backup runs. Scope
+them as one session (49). Do **not** scope it to touch the product; nothing in the product needs
+changing to reach GO.
+
 ## Required next-session actions
+
+> **Superseded in part by §11 (Session 47, 2026-09-06).** The current, authoritative action list
+> is §11's Go/No-Go statement — blockers 1–3 (disaster recovery, backups, rollback plan), scoped
+> as a single follow-up session. The items below are Session 30/45's originals, retained because
+> several are still open and none were re-closed by Session 47.
+
 
 - ~~**Whoever picks up the assessments P0**~~ — **resolved by Session 31; the follow-on
   data-integrity question it left open is resolved by Session 45, see §9.1** (nothing deleted those
