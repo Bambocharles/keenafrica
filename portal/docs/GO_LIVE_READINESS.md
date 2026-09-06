@@ -420,7 +420,7 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 | 3 | Teacher org-scoped course creation | **Closed, deployed, verified live — including through the real UI 2026-09-06** | See §9.3 below. |
 | 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
-| 6 | Cloudflare R2 API token rotation | **Done 2026-09-06** — rotated, reads and writes both verified | See §9.5 below. |
+| 6 | Cloudflare R2 API token rotation | **Done 2026-09-06** — rotated, reads + writes verified, old token revoked and re-verified after | See §9.5 below. |
 | 7 | `postgres01`'s sibling databases documented | **Closed** | See §9.6 below. |
 | 8 | `rollback-portal.yml` dispatched once | **Closed — dispatched and green** | See §9.7 below. |
 
@@ -752,9 +752,22 @@ is a real data-lifecycle decision about those consumers, not an orphan cleanup �
 > the new credential. Zero storage errors in the pod logs throughout (Session 32 added
 > `console.error` on every driver failure path, so a bad credential would be loud).
 >
-> **Remaining hygiene for the site owner**: revoke the old Session 32 token in the Cloudflare
-> dashboard, and `shred -u` the pre-rotation Secret backup — it contains every production secret
-> in base64.
+> **Old token revoked (2026-09-06), and re-verified after the fact.** Re-checking after a
+> revocation matters: revoking the wrong one of two similarly-named tokens breaks every upload and
+> download instantly, with no restart needed, because R2 credentials are used per request. Six
+> cache-busted reads (`cf-cache-status: DYNAMIC` on all of them, so genuinely origin→R2) returned
+> HTTP 200 / 102,959 B / identical `sha256` after the revocation, with zero storage errors in the
+> logs and all five portals at 200.
+>
+> That check was strengthened by coincidence: PR #92's deploy landed at 09:50, so the pods were
+> rebuilt and restarted *after* the revocation and re-read the Secret from scratch — the surviving
+> credential is unambiguously the new one, and it works.
+>
+> **Item 6 is fully closed.** One optional piece of hygiene remains for the site owner: `shred -u`
+> the pre-rotation Secret backup (`~/portal-secrets-backup-<timestamp>.yaml`). Nothing unique is
+> lost by deleting it — the only value in it that is not still live in `portal-secrets` is the
+> now-revoked R2 token — but it holds every other production secret in base64, so it should not
+> sit around.
 
 The original finding, kept for the record:
 
@@ -908,12 +921,25 @@ end with `ANALYZE`, or it re-creates this problem on a freshly emptied database.
 
 ### What is still worth doing
 
-- **Session 46**: this fix removes the *current* exposure but not the underlying fragility — RLS
+- ~~**Session 46**: this fix removes the *current* exposure but not the underlying fragility — RLS
   policies three to four tables deep are inherently one bad row-estimate away from the JIT
   threshold. The policy-depth reduction Sessions 31 and 45 applied to `attempts_select` and
   `answers_select` (denormalise, join directly, drop the redundant hop) is the durable fix and
   has not been applied to `assets_select`/`asset_attachments_select`, which are the two deepest
-  remaining (83 and 82 plan nodes even when cheap).
+  remaining (83 and 82 plan nodes even when cheap).~~ — **DONE by Session 46, differently and
+  more completely than expected.** Session 46 enumerated all 52 RLS policies at 3+ table depth
+  and found the denormalisation pattern **provably does not transfer** to `assets_select`/
+  `asset_attachments_select`: unlike `attempts.course_id` (immutable), asset visibility is
+  *dynamic* (it tracks the linked entity's live RLS), so there is no stable column to denormalise
+  without a cache-invalidation system. The durable fix applied instead is `jit = off` at the
+  database level (migration `20260906120000_disable_jit_deep_rls_policies`), which removes the
+  entire class for all 52 policies at once with provably identical query results (plans unchanged,
+  compile step skipped) — `assets` at 1,000 rows went from 1,595 ms / 4,717 JIT functions to
+  20.7 ms / 0. `pg-restore.sh` re-applies it after a restore. Full audit:
+  `docs/SECURITY_RLS_AUDIT_S46.md`. **Not yet deployed to production** — see that doc / the
+  Session 46 status handoff. Session 46 also found and fixed an unrelated live-exploitable P1
+  (`X-Forwarded-For` spoofing defeating every IP-based rate limit — report-flood, view
+  inflation, weakened login-IP limit); fix in `src/lib/client-ip.ts`, also pending deploy.
 - **Ongoing**: autoanalyze will maintain these tables correctly once any of them exceeds ~50 rows.
   Below that it will not fire, but statistics are now accurate rather than absent, which is the
   condition that actually caused the problem.

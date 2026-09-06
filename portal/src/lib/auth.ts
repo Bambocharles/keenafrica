@@ -8,6 +8,7 @@ import { withRls } from "@/lib/rls";
 import { createSession, resolveSessionAuthz, revokeSessionAsSystem } from "@/lib/sessions";
 import { recordAuditEvent } from "@/lib/audit";
 import { isLoginRateLimited } from "@/lib/rate-limit";
+import { resolveClientIp } from "@/lib/client-ip";
 import { resolveGoogleSignIn, resolveLinkedInSignIn, type GoogleSignInRejectionReason } from "@/lib/oauth-identity";
 import type { RegisterableRole } from "@/lib/registration";
 import { shouldRequireLoginMfa } from "@/lib/mfa";
@@ -89,7 +90,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        const ipAddress = request.headers.get("x-forwarded-for");
+        const ipAddress = resolveClientIp(request.headers);
 
         const user = await withRls({ authLookup: true }, (tx) =>
           tx.user.findUnique({ where: { email } })
@@ -251,7 +252,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!account.providerAccountId) return false;
 
         const h = await headers();
-        const ipAddress = h.get("x-forwarded-for");
+        const ipAddress = resolveClientIp(h);
 
         const result = await resolveLinkedInSignIn({
           providerAccountId: account.providerAccountId,
@@ -280,7 +281,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!account.providerAccountId) return false;
 
       const h = await headers();
-      const ipAddress = h.get("x-forwarded-for");
+      const ipAddress = resolveClientIp(h);
       const signupRole = await subdomainSignupRole();
 
       const result = await resolveGoogleSignIn({

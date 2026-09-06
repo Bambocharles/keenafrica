@@ -5,6 +5,7 @@ import { AuthorizationError } from "@/lib/authz";
 import { createArticle, publishArticle } from "@/lib/articles";
 import { createComment } from "@/lib/comments";
 import { ensureProfile } from "@/lib/profiles";
+import { resolveClientIp } from "@/lib/client-ip";
 import {
   InvalidReportTransitionError,
   ReportNotFoundError,
@@ -151,6 +152,38 @@ describe("createReport — anonymous-capable, rate-limited", () => {
     await expect(createReport({ entityType: "article", entityId: article.id, reason: "one more" }, null, ip)).rejects.toThrow(
       ReportRateLimitedError
     );
+  });
+
+  // Session 46 (Full-Platform Security & RLS Audit) — regression for the
+  // confirmed live finding. Before the fix, the report action keyed the IP
+  // limit on the raw `x-forwarded-for` header, which Cloudflare builds as
+  // "<client-supplied>, <real-ip>". An attacker rotating the client-supplied
+  // prefix got a distinct key per request and never tripped the limit (proven
+  // live: 30/30 anonymous reports through an 8/hour/IP limit). This exercises
+  // the composition the action now uses — resolveClientIp() over rotating
+  // spoofed headers — and asserts the limit HOLDS.
+  it("rotating a spoofed X-Forwarded-For prefix no longer bypasses the per-IP limit (resolveClientIp)", async () => {
+    const article = await publishedArticle();
+    const realIp = randomIp();
+
+    // The attacker's real connection (same client) with a different spoofed
+    // prefix each time — exactly the crafted request that bypassed the limit
+    // before the fix.
+    const spoofedHeaders = (i: number): Headers => {
+      const h = new Headers();
+      h.set("x-forwarded-for", `203.0.113.${i}, 10.0.0.${i}, ${realIp}`);
+      return h;
+    };
+
+    for (let i = 0; i < 8; i++) {
+      const ip = resolveClientIp(spoofedHeaders(i));
+      await createReport({ entityType: "article", entityId: article.id, reason: `rotating ${i}` }, null, ip);
+    }
+
+    const ninth = resolveClientIp(spoofedHeaders(99));
+    await expect(
+      createReport({ entityType: "article", entityId: article.id, reason: "one more, new spoof" }, null, ninth)
+    ).rejects.toThrow(ReportRateLimitedError);
   });
 });
 
