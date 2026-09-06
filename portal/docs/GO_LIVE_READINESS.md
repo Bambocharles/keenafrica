@@ -936,10 +936,14 @@ end with `ANALYZE`, or it re-creates this problem on a freshly emptied database.
   entire class for all 52 policies at once with provably identical query results (plans unchanged,
   compile step skipped) — `assets` at 1,000 rows went from 1,595 ms / 4,717 JIT functions to
   20.7 ms / 0. `pg-restore.sh` re-applies it after a restore. Full audit:
-  `docs/SECURITY_RLS_AUDIT_S46.md`. **Not yet deployed to production** — see that doc / the
-  Session 46 status handoff. Session 46 also found and fixed an unrelated live-exploitable P1
-  (`X-Forwarded-For` spoofing defeating every IP-based rate limit — report-flood, view
-  inflation, weakened login-IP limit); fix in `src/lib/client-ip.ts`, also pending deploy.
+  `docs/SECURITY_RLS_AUDIT_S46.md`. **DEPLOYED to production 2026-09-06** (PR #93 → `main`
+  `2d395a8` → `deploy-portal.yml` run `34029642801`, success; migration applied per the run
+  log). **Verified live:** `SHOW jit` on `keenafrica_portal_prod` returns `off`. Session 46 also
+  found and fixed an unrelated live-exploitable P1 (`X-Forwarded-For` spoofing defeating every
+  IP-based rate limit — report-flood, view inflation, weakened login-IP limit); fix in
+  `src/lib/client-ip.ts`, **deployed in the same rollout and verified live** (six rotating
+  `X-Forwarded-For` hits with a fixed User-Agent now increment the view counter by 1, not 6 —
+  the spoofed prefixes collapse to one `CF-Connecting-IP`).
 - **Ongoing**: autoanalyze will maintain these tables correctly once any of them exceeds ~50 rows.
   Below that it will not fire, but statistics are now accurate rather than absent, which is the
   condition that actually caused the problem.
