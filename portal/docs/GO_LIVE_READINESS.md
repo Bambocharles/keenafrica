@@ -416,7 +416,7 @@ applied as equivalent guarded SQL instead). Probe, don't assume, in either direc
 | # | Item | Status | Live evidence |
 |---|---|---|---|
 | 1 | Session 33's `answers_select` RLS fix + the data-integrity question | **Closed** | See §9.1 below. |
-| 2 | LinkedIn OAuth credentials in production | **Partially closed — one owner-side step remains** | See §9.2 below. |
+| 2 | LinkedIn OAuth credentials in production | **Credentials done; one owner-side portal step remains — proven to be the only thing left** | See §9.2 below. |
 | 3 | Teacher org-scoped course creation | **Closed, deployed, verified live** | See §9.3 below. |
 | 4 | Review-workflow notifications | **Closed and deployed; one residual verification gap** | See §9.3 below. |
 | 5 | Orphaned `Asset` row `10d94d8d-…` | **Closed in production** | See §9.4 below. |
@@ -543,13 +543,42 @@ it. Until `https://keenafricans.keenafrica.com/auth/callback/linkedin` is added 
 "Sign In with LinkedIn using OpenID Connect" product enabled), "Connect LinkedIn" cannot complete
 for any real user. This session has no LinkedIn Developer Portal access and could not add it.
 
-Separately worth knowing when re-testing: hitting Auth.js's raw `/auth/signin/<provider>` REST
-endpoint emits `redirect_uri=https://0.0.0.0:3000/auth/callback/<provider>` — the long-documented,
-low-severity Auth.js host-resolution quirk (Session 30 §8, `docs/QA_AUTHENTICATION_LIVE_PASS.md`
-item 3). The app's own buttons go through server-side `signIn()` in a Server Action instead, which
-is why Google sign-in works in production despite the same quirk. **Re-test through the real
-"Connect LinkedIn" button, not through curl against the raw endpoint**, or the raw endpoint's bad
-`redirect_uri` will mask whether the registration fix worked.
+#### Is registering that URL actually sufficient? Yes — proven, not assumed (2026-09-06)
+
+The obvious worry: hitting Auth.js's raw `/auth/signin/<provider>` REST endpoint emits
+`redirect_uri=https://0.0.0.0:3000/auth/callback/<provider>` — the long-flagged, repeatedly
+re-investigated Auth.js host-resolution quirk (Session 30 §8,
+`docs/QA_AUTHENTICATION_LIVE_PASS.md` item 3). If the real button emitted that too, registering
+the correct URL in LinkedIn would change nothing and the fix would be a code change instead. That
+question was settled by reproduction rather than left open a fourth time.
+
+**Method**: the production runtime was reproduced locally — the same `output: "standalone"` build,
+started through the same `server-entrypoint.js` the container uses — and both paths were driven
+with `curl` against a `keenafricans.*` Host header.
+
+| Path | Emitted `redirect_uri` |
+|---|---|
+| Raw REST endpoint, `POST /auth/signin/linkedin` | `http://0.0.0.0:3100/auth/callback/linkedin` ❌ |
+| The real **"Connect LinkedIn" button** (server-side `signIn()` in a Server Action), driven as a logged-in Keen African | `http://keenafricans.portal.local/auth/callback/linkedin` ✅ |
+| Same button, with `X-Forwarded-Proto: https` (what Traefik sends) | scheme correctly becomes `https://…` ✅ |
+
+So the two paths genuinely differ, and only the unused one is broken. **Root cause of the raw-path
+quirk, for the record**: Next.js's standalone `server.js` does
+`const hostname = process.env.HOSTNAME || '0.0.0.0'`. `server-entrypoint.js` deletes `HOSTNAME`
+(to stop Kubernetes' pod-name injection leaking into redirect URLs), which makes that fall through
+to the literal `'0.0.0.0'`, and the raw Auth.js route builds its absolute URL from the bound
+address rather than the request. The Server Action path doesn't go through that route at all — it
+resolves the host from the request headers, which is why Google sign-in has always worked in
+production.
+
+**Conclusion: no code change is needed.** Registering
+`https://keenafricans.keenafrica.com/auth/callback/linkedin` is sufficient and will make "Connect
+LinkedIn" work. The `0.0.0.0` quirk is cosmetic, affects only an endpoint nothing calls, and is
+deliberately left alone — changing server startup or Auth.js URL resolution to tidy it carries
+real risk for zero user-facing gain.
+
+**Still re-test through the real button, not curl against the raw endpoint** — the raw endpoint
+will keep showing the bad `redirect_uri` afterwards and would mask a successful fix.
 
 ### 9.3 Teacher org-scoped course creation, and the review-workflow notifications
 
