@@ -5,6 +5,29 @@ name: Backup Portal DB
 # portal/docs/BACKUP_RESTORE.md). Runs on the same self-hosted runner as
 # deploy-portal.yml, which already has network access to the DB and Docker
 # installed.
+#
+# Session 49 (2026-09-06) changed three things here, all from Session 47's
+# measurements in portal/docs/GO_LIVE_READINESS.md §11.2-§11.3:
+#
+#  1. NO `environment: production`. This workflow used to inherit that
+#     environment's required-reviewer gate, which is right for a deploy and
+#     wrong for a read-only scheduled dump: four of eleven scheduled runs
+#     never executed at all, sitting in `waiting` for as long as 213 hours,
+#     so four days had no backup. A scheduled job that silently needs a
+#     human to approve it is not an automated backup. Checked before
+#     removing it: PORTAL_DATABASE_URL_PROD is a REPOSITORY secret, not an
+#     environment secret, so nothing here ever depended on the environment
+#     for access. The gate remains on deploy-portal.yml and
+#     rollback-portal.yml, which is where it belongs.
+#  2. The verification restores the way a real disaster recovery would —
+#     production's Postgres major version, the migrator role, production's
+#     role names, and a final read AS THE APPLICATION ROLE. The old
+#     verification restored into postgres:16-alpine as the superuser, which
+#     bypasses privileges and the version mismatch entirely; it could never
+#     have caught the restore failure Session 47 found, and it did not.
+#  3. A genuine failure opens (or comments on) a GitHub issue. The previous
+#     design was "a failed run is the alert" — true, but three failed runs
+#     and four never-started ones went unnoticed for eleven days.
 on:
   schedule:
     - cron: "17 2 * * *" # 02:17 UTC daily
@@ -12,48 +35,157 @@ on:
 
 permissions:
   contents: read
+  issues: write
+
+env:
+  BACKUP_DIR: /home/keen/backups/portal-db
+  # Production's Postgres major version. Keep in sync with
+  # portal/scripts/backup/pg-backup.sh and pg-restore.sh.
+  EXPECTED_PG_MAJOR: "14"
+  VERIFY_PORT: "55599"
 
 jobs:
   backup:
     runs-on: [self-hosted, keenafrica-vm]
-    environment: production
     steps:
       - uses: actions/checkout@v4
 
       - name: Take backup
         env:
           DATABASE_URL: ${{ secrets.PORTAL_DATABASE_URL_PROD }}
-          BACKUP_DIR: /home/keen/backups/portal-db
         run: portal/scripts/backup/pg-backup.sh
 
-      - name: Verify latest backup restores cleanly
-        env:
-          BACKUP_DIR: /home/keen/backups/portal-db
+      - name: Verify the latest backup restores the way a real recovery would
         run: |
           set -euo pipefail
+          IMAGE="postgres:${EXPECTED_PG_MAJOR}-alpine"
           CONTAINER="portal-backup-verify-$$"
+          # Never the production credentials: this is a throwaway container.
+          VPW="verify-$RANDOM$RANDOM"
           cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
 
           docker run -d --name "$CONTAINER" \
-            -e POSTGRES_PASSWORD=verify -e POSTGRES_DB=verify \
-            -p 55599:5432 postgres:16-alpine >/dev/null
-          for _ in $(seq 1 30); do
-            docker exec "$CONTAINER" pg_isready -U postgres >/dev/null 2>&1 && break
+            -e POSTGRES_PASSWORD="$VPW" \
+            -p "${VERIFY_PORT}":5432 "$IMAGE" >/dev/null
+
+          # Wait for the REAL server, not the image's temporary init server.
+          # `docker exec pg_isready` answers during the entrypoint's unix-socket-only
+          # init phase, so the next command could land before the database existed or
+          # while that temp server was shutting down — the cause of all three verify
+          # failures in §11.3 ("database \"verify\" does not exist", "the database
+          # system is shutting down"). A successful query over the MAPPED TCP PORT
+          # cannot be answered by the init server, so this cannot race.
+          ready=0
+          for _ in $(seq 1 60); do
+            if docker run --rm --network host -e U="postgresql://postgres:${VPW}@127.0.0.1:${VERIFY_PORT}/postgres" \
+                 "$IMAGE" bash -c 'psql -X -q -tA -d "$U" -c "select 1"' >/dev/null 2>&1; then
+              ready=1; break
+            fi
             sleep 1
           done
-          docker exec "$CONTAINER" psql -U postgres -d verify -c \
-            "CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS citext;" >/dev/null
+          if [ "$ready" != "1" ]; then
+            echo "::error::Verification Postgres never became ready on port ${VERIFY_PORT}."
+            exit 1
+          fi
+
+          # Prepare the target exactly as the restore runbook says to: the
+          # cluster roles (never carried in a dump), a database owned by the
+          # migrator role, and the two extensions.
+          docker exec -i "$CONTAINER" psql -U postgres -q -v ON_ERROR_STOP=1 <<SQL
+          CREATE ROLE kf_portal_prod_migrator LOGIN PASSWORD '${VPW}' NOSUPERUSER NOCREATEROLE NOCREATEDB;
+          CREATE ROLE kf_portal_prod_app LOGIN PASSWORD '${VPW}' NOSUPERUSER NOCREATEROLE NOCREATEDB NOBYPASSRLS;
+          CREATE DATABASE verify OWNER kf_portal_prod_migrator;
+          SQL
+          docker exec "$CONTAINER" psql -U postgres -q -v ON_ERROR_STOP=1 -d verify \
+            -c "CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS citext;" >/dev/null
 
           latest="$(ls -t "$BACKUP_DIR"/*.dump | head -1)"
           echo "Verifying $latest"
           RESTORE_CONFIRM=yes portal/scripts/backup/pg-restore.sh \
-            "$latest" "postgresql://postgres:verify@localhost:55599/verify"
+            "$latest" "postgresql://kf_portal_prod_migrator:${VPW}@127.0.0.1:${VERIFY_PORT}/verify"
+
+          # The assertion that makes this verification mean something: the
+          # RLS-scoped application role — not the superuser — reads a table.
+          # 0 rows is the correct answer here (no session context); an ERROR
+          # is the failure this is looking for.
+          if ! app_read="$(docker run --rm --network host \
+                -e U="postgresql://kf_portal_prod_app:${VPW}@127.0.0.1:${VERIFY_PORT}/verify" \
+                "$IMAGE" bash -c 'psql -X -q -tA -d "$U" -c "select count(*) from users"' 2>&1)"; then
+            echo "::error::Restored backup is unreadable by the kf_portal_prod_app role: ${app_read}"
+            exit 1
+          fi
 
           users="$(docker exec "$CONTAINER" psql -U postgres -d verify -tAc "SELECT count(*) FROM users;")"
           policies="$(docker exec "$CONTAINER" psql -U postgres -d verify -tAc "SELECT count(*) FROM pg_policies;")"
-          echo "users=$users policies=$policies"
+          grants="$(docker exec "$CONTAINER" psql -U postgres -d verify -tAc \
+            "SELECT count(*) FROM information_schema.role_table_grants WHERE grantee='kf_portal_prod_app';")"
+          echo "users=$users policies=$policies app_role_grants=$grants app_role_read=$app_read"
           if [ "$policies" -lt 1 ]; then
             echo "::error::Restored backup has no RLS policies — treating backup as failed verification."
             exit 1
+          fi
+          if [ "$grants" -lt 1 ]; then
+            echo "::error::Restored backup grants the application role nothing — a real recovery would produce a database the portal cannot read."
+            exit 1
+          fi
+
+      - name: Summarize dumps on disk
+        if: always()
+        run: |
+          {
+            echo "### Portal DB backups on disk"
+            echo ""
+            echo '```'
+            ls -lh "$BACKUP_DIR"/*.dump | tail -10
+            echo '```'
+            echo ""
+            echo "Total dumps: $(ls "$BACKUP_DIR"/*.dump 2>/dev/null | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # "A failed run is the alert" was the previous design, and §11.3
+      # measured what that was worth: three failed runs and four that never
+      # started went unnoticed for eleven days. Raise it somewhere a human
+      # actually looks, using the channel this repo already has (GitHub
+      # itself) rather than standing up a new alerting integration — that
+      # remains an open, deliberate decision, see PRODUCTION_HARDENING.md.
+      # One issue per outage, commented on for repeats, so a week of
+      # failures is one notification thread rather than seven.
+      - name: Raise a GitHub issue on failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          API: ${{ github.api_url }}/repos/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TITLE="Portal DB backup failed"
+          BODY="The scheduled portal database backup/verification failed.
+
+          Run: ${RUN_URL}
+          When: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+
+          The database backup is the platform's only recovery path (no PITR/WAL
+          archiving — see portal/docs/BACKUP_RESTORE.md). Every day this stays
+          broken is a day of data with no restorable copy.
+
+          Runbook: portal/docs/BACKUP_RESTORE.md"
+
+          existing="$(curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${API}/issues?state=open&per_page=100" \
+            | jq -r --arg t "$TITLE" '[.[] | select(.title == $t)][0].number // empty')"
+
+          if [ -n "$existing" ]; then
+            echo "Commenting on existing issue #${existing}"
+            jq -n --arg body "$BODY" '{body: $body}' | curl -sS -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/issues/${existing}/comments" -d @- > /dev/null
+          else
+            echo "Opening a new issue"
+            jq -n --arg title "$TITLE" --arg body "$BODY" '{title: $title, body: $body}' | curl -sS -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/issues" -d @- > /dev/null
           fi

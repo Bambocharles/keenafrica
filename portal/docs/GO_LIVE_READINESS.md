@@ -9,8 +9,18 @@
 > launch** — every portal including Keen Africans passes its authorization boundary and Sessions
 > 45's and 46's fixes are independently confirmed closed.
 >
+> **Blocker status as of Session 49 (2026-09-06), which did not amend this verdict:** §11.2 and
+> §11.4 are **closed** with live evidence — see **[§12](#12-session-49--disaster-recovery-hardening-2026-09-06)**,
+> including the fresh-PG-14.24 restore in which `kf_portal_prod_app` reads a table for the first
+> time. §11.3's fix has landed but its criterion is **seven consecutive unattended daily backup
+> runs**, and that clock started **2026-09-06** — the earliest date this item can honestly be
+> re-judged is **2026-09-13**, and §12.2 names the two commands to check it with. §11.5 is
+> unchanged and belongs to Session 48. **The verdict stays NO-GO until §11.3's seven days have
+> actually elapsed and been verified.**
+>
 > Sections 1–10 below are Session 30's original report and the Session 31/32/45/46 updates to it,
-> preserved as historical record. Where §11 contradicts them, §11 is current.
+> preserved as historical record. Where §11 contradicts them, §11 is current; where §12 updates
+> §11's blocker status, §12 is current.
 
 ---
 
@@ -1364,12 +1374,268 @@ three are provable by a single re-run of §11.2's drill plus a week of clean bac
 them as one session (49). Do **not** scope it to touch the product; nothing in the product needs
 changing to reach GO.
 
+## 12. Session 49 — Disaster Recovery Hardening (2026-09-06)
+
+> **The Go/No-Go verdict in §11 is NOT amended by this section.** Two of §11's three
+> disaster-recovery blockers are closed with live evidence below. The third (backups running
+> unattended) cannot be closed on the day its fix lands — §11 defines it as *seven consecutive
+> unattended daily runs succeeding, with seven dumps on disk*. **That clock starts 2026-09-06.**
+> The earliest date anyone can honestly amend the verdict on that item is **2026-09-13**, and only
+> after checking the real run history. Anything sooner is rounding down.
+
+Scope: `scripts/backup/pg-backup.sh`, `scripts/backup/pg-restore.sh`,
+`scripts/backup/test-restore-drill.sh`, `.github/workflows/backup-portal-db.yml`,
+`.github/workflows/rollback-portal.yml`, and the two runbooks. **No product code, UI, schema,
+migration, permission or business logic was touched** — §11 was explicit that nothing in the
+product blocks launch, and nothing in the product was changed to reach these results.
+
+### 12.1 BLOCKER 1 (§11.2) — CLOSED. The acceptance test passes.
+
+§11.2's acceptance test, verbatim: *restore today's real production dump into a fresh PostgreSQL
+14.24 database and have the `kf_portal_prod_app` role successfully read a table.* It had never
+passed. It passes now. Full transcript, run 2026-09-06 against
+`portal-20260906T095712Z.dump` — the same dump §11 measured against, on a disposable
+`postgres:14-alpine` server (`PostgreSQL 14.24 on x86_64-pc-linux-musl`), prepared with the
+runbook's step 2 and nothing else:
+
+```
+Fresh database, prepared with runbook step 2 and nothing else:
+  public tables: 0
+  grants for kf_portal_prod_app: 0
+
+$ RESTORE_CONFIRM=yes ./scripts/backup/pg-restore.sh \
+    /home/keen/backups/portal-db/portal-20260906T095712Z.dump \
+    "postgresql://kf_portal_prod_migrator@127.0.0.1:55614/dr_fresh"
+==> Checking the target server's version
+    target server major: 14, client: 14.24, expected: 14
+!! LEGACY ARCHIVE: portal-20260906T095712Z.dump is archive format 1.15 ...
+!! Reading it with postgres:16-alpine instead; the target server is still
+!! PostgreSQL 14, so the restored database is unaffected.
+==> Restoring ... into target (schema is dropped/recreated via --clean --if-exists)
+pg_restore: error: could not execute query: ERROR:  must be owner of extension pgcrypto
+  ... (4 of these) ...
+pg_restore: warning: errors ignored on restore: 4
+==> pg_restore exited 1 with 4 ignorable error(s), all matching
+    the expected extension-ownership pattern (/must be owner of extension/).
+    Continuing to the post-restore steps.
+==> Re-applying kf_portal_prod_app's grants (privileges are not carried in a dump)
+ grants_for_app_role
+---------------------
+                 244
+==> Running ANALYZE on the restored database (statistics are not included in a dump)
+==> Setting jit=off on the restored database (a database-level setting is not carried in a dump)
+==> Restore command completed.
+
+pg-restore.sh exit code: 0
+
+--- THE ASSERTION THAT HAD NEVER PASSED --------------------------
+$ psql -d "postgresql://kf_portal_prod_app@127.0.0.1:55614/dr_fresh" -Atc "select count(*) from users"
+0
+psql exit code: 0   (0 rows is correct — the app role is RLS-scoped with no session context)
+------------------------------------------------------------------
+```
+
+Every measurement §11.2 recorded as broken, re-measured on that restore:
+
+| Measurement | §11.2 (broken) | Now |
+|---|---|---|
+| Grants for `kf_portal_prod_app` | **0** (`permission denied for table users`) | **244** — the same count production runs on (61 tables × 4 DML privileges) |
+| `pg-restore.sh` exit code | **1**, before its own last two steps | **0** |
+| Never-analyzed tables | **16 of 61** | **0 of 61** |
+| `show jit` | **on** | **off** |
+| `pg_db_role_setting` rows for the DB | **0** | **1** |
+| RLS policies restored | — | **196**, matching production |
+| Users restored | — | **13**, matching §11.5's production count |
+
+**(a) Missing grants — fixed in `pg-restore.sh`, not left to the runbook.** The script now
+reconstructs exactly what `~/portal-db-setup-prod.sh` grants — `USAGE` on schema `public`,
+`SELECT/INSERT/UPDATE/DELETE` on all tables, and `ALTER DEFAULT PRIVILEGES FOR ROLE <the
+connecting role>` for future tables — then verifies the result and **fails loudly if the app role
+does not exist or ends up with no grants**. Roles themselves are cluster-level and can never be in
+a dump, so the runbook now makes creating them an explicit part of step 2, and the script refuses
+to finish without them rather than leaving a silently-unusable database. `RESTORE_APP_ROLE=none`
+is the documented opt-out for an in-place restore that already has its privileges.
+
+**(b) Aborting before ANALYZE and `jit=off` — fixed, and more strictly than §11.2 asked.** The
+script captures `pg_restore`'s exit status and then **classifies the errors** rather than trusting
+the presence of an "errors ignored on restore: N" line — `pg_restore` prints that same summary for
+real failures too, since it continues past errors unless `--exit-on-error` is given. Only errors
+matching `must be owner of extension` (configurable via `RESTORE_IGNORABLE_ERROR_REGEX`) are
+treated as ignorable. Anything else prints a loud block naming the unclassified errors, **still
+runs the post-restore steps** (skipping them is the defect being fixed), and exits non-zero at the
+end. Verified both ways: the ignorable path above exits 0, and a deliberately-broken restore
+(`REVOKE CREATE ON SCHEMA public`) produced 705 errors, was correctly refused as unclassified, and
+exited non-zero.
+
+**(c) Tooling version mismatch — pinned and enforced at both ends.** `EXPECTED_PG_MAJOR` (default
+`14`) now drives `PG_IMAGE` in both scripts. `pg-backup.sh` queries the live server's
+`server_version_num` and **refuses to take a backup** if either the client image or the server
+disagrees with it; `pg-restore.sh` refuses to restore on the same mismatch. Proven: a dump taken
+with the pinned tooling is `Dump Version: 1.14-0`, `Dumped by pg_dump version: 14.24`, and
+PostgreSQL 14's own `pg_restore --list` reads it (exit 0) — the exact command that failed in
+§11.2(c).
+
+One consequence §11.2 did not anticipate, handled deliberately: **the seven dumps already on disk
+are format 1.15 and PostgreSQL 14 cannot read them.** Retention keeps monthly dumps for six
+months, so refusing them outright would have traded one broken restore path for another. Instead
+`pg-restore.sh` detects the case, prints a `LEGACY ARCHIVE` banner naming exactly what is
+happening, reads the archive with a container new enough for it, and still restores into the
+PostgreSQL 14 target. That is the path the transcript above took, and it is why today's real dump
+could be used for the acceptance test at all.
+
+**(d) The daily verification can now catch all of it.** `backup-portal-db.yml` restores into
+`postgres:14-alpine`, creates production's role names, restores **as the migrator role**, and
+asserts `kf_portal_prod_app` can read a table plus that its grant count is non-zero. Run end-to-end
+against the real production dump on the runner host: `users=13 policies=196 app_role_grants=244
+app_role_read=0`, exit 0. The old superuser-on-PG16 check could not have failed on any of (a), (b)
+or (c); this one fails on all three.
+
+**Negative tests** (the tooling must refuse, not just succeed) — all five verified live:
+
+| Case | Result |
+|---|---|
+| `PG_IMAGE` disagrees with `EXPECTED_PG_MAJOR` | Refused, exit 1 |
+| Target server major disagrees with `EXPECTED_PG_MAJOR` | Refused, exit 1 |
+| App role absent from the target cluster | Refused, exit non-zero, with the remedy in the message |
+| Truncated/corrupt archive | Refused, exit 1, with the underlying `pg_restore` errors |
+| `pg_restore` errors that are not the known-benign ones | Loud block, post-restore steps still run, exit non-zero |
+
+`test-restore-drill.sh` was rewritten to match: production's major version, production's role
+names, restored as the migrator role, and assertions on the marker row, RLS policies, **the app
+role's read**, the grant count, statistics and `jit=off`. It deliberately reproduces the
+ignorable-error condition (extensions created by the superuser) so the §11.2(b) path is exercised
+on every run. **DRILL PASSED**: 196 policies, 244 grants, 0 never-analyzed tables, `jit=off`
+applied, on PostgreSQL 14. The old drill restored as the superuser — which is why it passed for
+months against a procedure that produced a database the portal could not read.
+
+### 12.2 BLOCKER 2 (§11.3) — FIX LANDED. Seven-day clock starts 2026-09-06. **NOT YET MET.**
+
+All three causes are fixed. **None of that is the acceptance criterion**, which is seven
+consecutive unattended daily successes with seven dumps on disk. As of this session there are
+**zero** such days. Stated plainly so nobody reads a landed fix as a met criterion.
+
+- **The manual-approval gate is gone from the backup workflow** (`environment: production`
+  removed). This was the cause of the four days with no backup at all. **The reason it was there
+  was checked before removing it**, per §11.3's own instruction: `docs/BACKUP_RESTORE.md` recorded
+  it only as "same manual-approval gate as deploys", i.e. uniformity, and the GitHub API confirms
+  `PORTAL_DATABASE_URL_PROD` is a **repository** secret, not an environment secret — so nothing in
+  this workflow ever depended on the environment for access. **The gate is untouched on
+  `deploy-portal.yml` and `rollback-portal.yml`**, which is what §11.3 required.
+- **The `pg_isready` race is gone.** The verify step now waits for a successful query over the
+  container's **mapped TCP port**. The postgres image's temporary init server listens on a unix
+  socket only, so it cannot answer a TCP query — the race is closed by construction rather than by
+  a longer sleep. (The same fix is in `test-restore-drill.sh`, which had the same latent race.)
+- **Failures are routed somewhere a human sees.** A failed run opens a GitHub issue titled
+  "Portal DB backup failed", or comments on the existing open one so a week of failures is a single
+  thread. This reuses GitHub — the channel this repo already relies on — rather than standing up
+  the external alerting integration `PRODUCTION_HARDENING.md` correctly records as an open
+  decision. It uses only the built-in `GITHUB_TOKEN` with `issues: write`.
+
+**What the next session must actually check before amending this item** (do not accept a summary,
+including this one):
+
+```bash
+gh run list --workflow=backup-portal-db.yml --limit 15
+ls -lt /home/keen/backups/portal-db/*.dump | head -10
+```
+
+Seven consecutive dated successes on or after 2026-09-07, and seven dumps on disk with matching
+dates. A run in `waiting` counts as a failure of this criterion, not a pending result. If it holds
+on 2026-09-13 or later, this item flips to GO.
+
+**Not verified this session, and it cannot be**: the first unattended run under the new workflow
+happens at the first 02:17 UTC tick after these changes reach the repository's default branch —
+02:17 UTC on 2026-09-07 if they are pushed today. Everything above was proven by executing the
+workflow's own steps directly on the runner host against the real production dump, which proves
+the logic, not the schedule.
+
+> **Precondition on the clock, stated exactly.** As this section is written, Session 49's changes
+> are in the `keenafrica` working tree and **not yet committed or pushed** — GitHub Actions runs
+> the workflow from the default branch, so an unpushed fix changes nothing about tonight's run.
+> **The seven-day clock starts on the date of the first scheduled run that executes the new
+> workflow, not on the date this was written.** If the push happens on 2026-09-06 those are the
+> same thing and the count runs 09-07 → 09-13; if it slips, the whole window slips with it. Check
+> the actual run history, per the commands above, rather than counting forward from any date in
+> this document.
+
+### 12.3 BLOCKER 3 (§11.4) — CLOSED.
+
+§11.4's finding was independently re-derived rather than copied. `grep -rlE "SET NOT NULL|DROP
+COLUMN|DROP TABLE|RENAME (COLUMN|TO)" prisma/migrations/` over all 58 migrations returns **exactly
+the two migrations §11.4 named and nothing else** — no migration in this repo has ever dropped or
+renamed anything. The satisfying code and the migration ship in the same commit in both cases,
+confirmed with `git log -S`:
+
+| Floor-setting commit | Session | Constraint | What breaks below it |
+|---|---|---|---|
+| `9871a03` | 36 | `articles.author_name SET NOT NULL` | Every article creation fails |
+| `6b1c2b3` | 31 | `attempts.course_id SET NOT NULL` | Every new assessment attempt fails |
+
+**The stated floor is now `9871a03` (Session 36)**, the later of the two, in
+`rollback-portal.yml`'s header and in a new "Rollback compatibility floor" section of
+`docs/PRODUCTION_HARDENING.md`. The old "true of every migration in this repo to date" claim is
+gone from both, and from `PRODUCTION_HARDENING.md`'s migration-process paragraph.
+
+Two things beyond the documentation fix §11.4 asked for:
+
+- **The floor is enforced, not just written down.** `rollback-portal.yml` now checks the requested
+  `image_tag` against `ROLLBACK_FLOOR_SHA` with `git merge-base --is-ancestor` and refuses a target
+  below it, with an explicit `acknowledge_below_floor` checkbox as the deliberate override (an
+  incident must never be *blocked* by this check, only slowed by one decision). Verified against
+  real history: `ec4a40f`, `2d395a8`, `e2ee69b` and `9871a03` itself pass; `6b1c2b3` and `685296b`
+  are refused; refusal is lifted by the acknowledgement; an unresolvable SHA warns and continues.
+- **A maintained-note rule, with a re-derivation command.** Both places state that any future
+  migration adding a constraint older code cannot satisfy must raise the floor **in the same PR**,
+  and `PRODUCTION_HARDENING.md` carries the `grep` above so the list can be rebuilt from the repo
+  rather than trusted. That is what stops this going stale again the way it did for six sessions.
+
+One adjacent observation, recorded because it is the same shape and was not in §11.4: because
+`deploy-portal.yml` migrates *before* swapping the image, each of those two migrations also made
+writes to its table fail for the length of that rollout window (old image, new constraint). Seconds
+to a minute on a pre-launch system with no traffic — noted in `PRODUCTION_HARDENING.md` as an
+argument for expand/contract once there is real traffic to lose, not raised as a blocker.
+
+### 12.4 Regression cover
+
+No product code was touched, but the suite was re-run rather than assumed: **895/895 passing,
+67/67 files**, `tsc --noEmit` clean. Session 47's single failure was the documented
+fire-and-forget `notifications.test.ts` timing flake; it passed in this run, which makes it a
+flake rather than something this session fixed.
+
+### 12.5 What this session did NOT do
+
+- **It did not amend the Go/No-Go verdict.** §11 stands as written. Blocker 2 needs calendar time,
+  and blocker 4 (QA accounts, §11.5) was untouched and remains Session 48's.
+- **It did not take a fresh production backup.** Direct connections to `keenafrica_portal_prod` are
+  classifier-blocked in this sandbox, exactly as §11.1 documented; every result above is from the
+  real dump already on disk. The first dump written by the pinned tooling will be tonight's
+  scheduled run.
+- **It did not dispatch either workflow against production.** Both were validated by executing
+  their own steps on the runner host (backup verify) and against real git history (rollback floor
+  guard). Dispatching the rollback workflow would redeploy production; dispatching the backup
+  workflow requires the production credentials this session cannot use.
+- **It did not touch product code.** No `src/`, no `prisma/`, no migration, no permission, no test
+  outside `scripts/backup/`.
+
+### 12.6 Standing limitations this session did not change
+
+§11.8's N1 (no encryption at rest for dumps), N10 (no offsite copy, no PITR/WAL archiving) and N2
+(host-local plaintext credentials) all still stand and are all still the right follow-ups. N10 in
+particular is now the largest remaining DR gap: the restore path works, but every copy of the data
+still lives on two hosts in one building. One addition of this session's own: **the role passwords
+needed to reconnect the application to a restored database exist only on `postgres01` and in the
+GitHub secret** — if `postgres01` is lost and the secret is unavailable, the dumps restore fine but
+new roles and a new `PORTAL_DATABASE_URL_PROD` must be issued before the portal can serve from
+them. Recorded in `docs/BACKUP_RESTORE.md`.
+
 ## Required next-session actions
 
-> **Superseded in part by §11 (Session 47, 2026-09-06).** The current, authoritative action list
-> is §11's Go/No-Go statement — blockers 1–3 (disaster recovery, backups, rollback plan), scoped
-> as a single follow-up session. The items below are Session 30/45's originals, retained because
-> several are still open and none were re-closed by Session 47.
+> **Superseded in part by §11 (Session 47, 2026-09-06), then by §12 (Session 49, 2026-09-06).**
+> Of §11's blockers 1–3, **1 and 3 are closed by §12 with live evidence; 2's fix has landed and is
+> on a seven-day clock that started 2026-09-06** — the earliest honest re-check is 2026-09-13, and
+> §12.2 names the two commands to run. Blocker 4 (QA accounts) is unchanged and belongs to Session
+> 48. The items below are Session 30/45's originals, retained because several are still open and
+> none were re-closed by Sessions 47 or 49.
 
 
 - ~~**Whoever picks up the assessments P0**~~ — **resolved by Session 31; the follow-on

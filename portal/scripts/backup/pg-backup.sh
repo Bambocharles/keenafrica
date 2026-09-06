@@ -13,8 +13,13 @@
 #                   docs/BACKUP_RESTORE.md, "Why the migrator role".
 # Optional:
 #   BACKUP_DIR     Where dumps are written. Default: ./backups
-#   PG_IMAGE       Postgres image used to run pg_dump. Default: postgres:16-alpine
-#                   Keep this in sync with the server's major version.
+#   EXPECTED_PG_MAJOR  Production's Postgres major version. Default: 14.
+#                   Both the client image and the live server are checked
+#                   against it and the backup refuses to run on a mismatch
+#                   (Session 49; see docs/GO_LIVE_READINESS.md §11.2(c)).
+#   PG_IMAGE       Postgres image used to run pg_dump.
+#                   Default: postgres:$EXPECTED_PG_MAJOR-alpine
+#   ALLOW_PG_MAJOR_MISMATCH=yes  Escape hatch to dump anyway.
 #   RETENTION_DAILY_DAYS    Default: 14
 #   RETENTION_WEEKLY_WEEKS  Default: 8
 #   RETENTION_MONTHLY_MONTHS Default: 6
@@ -22,13 +27,45 @@ set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL must be set to a role that bypasses RLS (the migrator role)}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
-PG_IMAGE="${PG_IMAGE:-postgres:16-alpine}"
+EXPECTED_PG_MAJOR="${EXPECTED_PG_MAJOR:-14}"
+PG_IMAGE="${PG_IMAGE:-postgres:${EXPECTED_PG_MAJOR}-alpine}"
+ALLOW_PG_MAJOR_MISMATCH="${ALLOW_PG_MAJOR_MISMATCH:-no}"
 RETENTION_DAILY_DAYS="${RETENTION_DAILY_DAYS:-14}"
 RETENTION_WEEKLY_WEEKS="${RETENTION_WEEKLY_WEEKS:-8}"
 RETENTION_MONTHLY_MONTHS="${RETENTION_MONTHLY_MONTHS:-6}"
 
 mkdir -p "$BACKUP_DIR"
 BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
+
+# --- Version reconciliation (Session 49, docs/GO_LIVE_READINESS.md §11.2(c))
+# This script used to default to postgres:16-alpine while production runs
+# PostgreSQL 14.24 — directly against PG_IMAGE's own documented contract.
+# Every dump it took was therefore written in archive format 1.15, which
+# PostgreSQL 14's own pg_restore cannot read at all ("unsupported version
+# (1.15) in file header"). The backups looked fine; they were simply
+# unreadable by tooling matched to the server they came from, which is the
+# tooling an operator rebuilding postgres01 would have. Pin the image to the
+# server's major version, and verify both ends rather than trusting the
+# default to stay correct after the next Postgres upgrade.
+client_version="$(docker run --rm "$PG_IMAGE" pg_dump --version | awk '{print $NF}')"
+client_major="${client_version%%.*}"
+server_version_num="$(docker run --rm --network host -e PGDUMP_URL="$DATABASE_URL" "$PG_IMAGE" \
+  bash -c 'psql -X --quiet --no-psqlrc -tA -d "$PGDUMP_URL" -c "SHOW server_version_num"')"
+server_major="$(( server_version_num / 10000 ))"
+
+if { [ "$client_major" != "$EXPECTED_PG_MAJOR" ] || [ "$server_major" != "$EXPECTED_PG_MAJOR" ]; } \
+   && [ "$ALLOW_PG_MAJOR_MISMATCH" != "yes" ]; then
+  echo "!! VERSION MISMATCH — refusing to take a backup that cannot be restored by" >&2
+  echo "!! tooling matched to the server it came from." >&2
+  echo "!!   pg_dump (from PG_IMAGE=$PG_IMAGE): $client_version (major $client_major)" >&2
+  echo "!!   live server: major $server_major (server_version_num=$server_version_num)" >&2
+  echo "!!   EXPECTED_PG_MAJOR: $EXPECTED_PG_MAJOR" >&2
+  echo "!! If production was upgraded, update EXPECTED_PG_MAJOR here and in" >&2
+  echo "!! scripts/backup/pg-restore.sh, and say so in docs/BACKUP_RESTORE.md." >&2
+  echo "!! Set ALLOW_PG_MAJOR_MISMATCH=yes to override deliberately." >&2
+  exit 1
+fi
+echo "==> Version check OK: pg_dump $client_version against server major $server_major (expected $EXPECTED_PG_MAJOR)"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 dump_file="$BACKUP_DIR/portal-${timestamp}.dump"

@@ -177,9 +177,19 @@ gating philosophy, not assumed here).
 `kf_portal_prod_migrator` role) **before** swapping the running image —
 so for the brief rollout window, the *previous* code version runs against
 the *new* schema. This is why every migration in this repo to date is
-purely additive (new tables/columns/policies, never a rename or drop) —
-that discipline is what makes both the rollout window and the rollback
-path below safe. Keep it that way; a breaking (renaming/dropping) migration
+purely additive in the sense that matters for the rollout window (new
+tables/columns/policies, never a rename or drop — still true as of
+2026-09-06). **That is not the same as being rollback-safe**: two
+migrations tighten a *new* column to `NOT NULL` in the same commit as the
+code that fills it, which is fine going forward and breaks going backward.
+See "Rollback compatibility floor" below. It also means those two
+migrations make writes to the affected table fail for the length of the
+rollout window itself (the old image is still serving, against a schema
+that already enforces the constraint) — seconds to a minute, on a
+pre-launch system with no traffic, but the same shape is worth an
+expand/contract split once there is real traffic to lose.
+
+Keep the additive discipline; a breaking (renaming/dropping) migration
 needs an expand/contract split across two deploys, not a single-step
 migration alongside a code swap.
 
@@ -197,10 +207,66 @@ migration alongside a code swap.
 - **Rollback only rolls back code, never schema.** Prisma's `migrate
   deploy` has no automatic "down" migration. Rolling back to an older image
   is safe exactly when every migration between the rollback target and the
-  current `main` was additive (true of every migration to date — see
-  above); rolling back past a genuinely breaking migration needs a
+  current `main` was additive **and** the older image can still satisfy
+  every constraint the schema now enforces. That second condition is not
+  automatic, and it is no longer met for every image in this repo's
+  history — **see "Rollback compatibility floor" immediately below, which
+  supersedes this section's original "true of every migration to date"
+  claim.** Rolling back past a genuinely breaking migration needs a
   hand-written reverse migration first, evaluated on its own merits at
   that time.
+
+### Rollback compatibility floor
+
+> Corrected by **Session 49 (2026-09-06)**. This section, and
+> `rollback-portal.yml`'s header, both used to state that rollback was safe
+> "all the way back" because every migration in this repo was additive.
+> That stopped being true in Session 31 and went stale silently for six
+> sessions — `docs/GO_LIVE_READINESS.md` §11.4 has the full finding.
+
+**Current safe rollback floor: `9871a03` (Session 36).**
+
+`rollback-portal.yml` enforces this: it refuses a target below the floor
+unless the dispatcher explicitly ticks `acknowledge_below_floor`.
+
+Two migrations add a column, backfill it, then `SET NOT NULL`. The code
+that populates each column ships in the *same commit* as its migration, and
+`rollback-portal.yml` correctly does not touch the database — so an image
+from before that commit keeps writing `NULL` into a column the schema still
+forbids, and the write fails immediately:
+
+| Floor-setting commit | Session | Migration | What breaks below it |
+|---|---|---|---|
+| `9871a03` | 36 | `20260901130000_keen_africans_article_author_name` — `articles.author_name` `SET NOT NULL`, satisfied by `resolveAuthorName()` in `src/lib/articles.ts` | **Every article creation fails.** Keen Africans publishing is dead. |
+| `6b1c2b3` | 31 | `20260831100000_attempts_course_id_denormalization` — `attempts.course_id` `SET NOT NULL`, satisfied by `src/lib/attempts.ts` | **Every new assessment attempt fails** on a NOT NULL violation. |
+
+The floor is the **later** of these, `9871a03`. No data is at risk in either
+case — both columns are derived and reconstructible — but an operator who
+rolls back below the floor during an incident gets a deployment that looks
+healthy and silently cannot accept core writes, which is worse than not
+rolling back.
+
+**This floor is maintained, not discovered.** Any migration that adds a
+`NOT NULL` column, a new `CHECK`, a new unique index, or any other
+constraint that code older than the migration cannot satisfy **must raise
+the floor in the same PR**, in both places:
+
+1. `ROLLBACK_FLOOR_SHA` / `ROLLBACK_FLOOR_DESC` in
+   `.github/workflows/rollback-portal.yml`
+2. this table
+
+To re-derive the list from scratch (this is exactly how Session 49
+confirmed it, and it is cheap enough to re-run any time the floor is
+doubted):
+
+```bash
+grep -rlE "SET NOT NULL|DROP COLUMN|DROP TABLE|RENAME (COLUMN|TO)" prisma/migrations/
+```
+
+Every hit is a candidate; check whether the code that satisfies the new
+constraint shipped with it, and if so its commit is a floor candidate. As
+of 2026-09-06 that command returns exactly the two migrations above, and no
+migration in this repo has ever dropped or renamed anything.
 - **Not executed live against production** — dispatching it would
   redeploy real production traffic, which this session treated as a
   "confirm with the user first" action rather than something to do
