@@ -12,11 +12,12 @@
 > **Blocker status as of Session 49 (2026-09-06), which did not amend this verdict:** §11.2 and
 > §11.4 are **closed** with live evidence — see **[§12](#12-session-49--disaster-recovery-hardening-2026-09-06)**,
 > including the fresh-PG-14.24 restore in which `kf_portal_prod_app` reads a table for the first
-> time. §11.3's fix has landed but its criterion is **seven consecutive unattended daily backup
-> runs**, and that clock started **2026-09-06** — the earliest date this item can honestly be
-> re-judged is **2026-09-13**, and §12.2 names the two commands to check it with. §11.5 is
-> unchanged and belongs to Session 48. **The verdict stays NO-GO until §11.3's seven days have
-> actually elapsed and been verified.**
+> time. §11.3's fix is **merged and live on `main`** (`70414ac`, 2026-09-06), but its criterion is
+> **seven consecutive unattended daily backup runs**: the first one is 02:17 UTC on **2026-09-07**
+> and the seventh, if none fails, is **2026-09-13** — the earliest date this item can honestly be
+> re-judged. §12.2 names the two commands to check it with. §11.5 is unchanged and belongs to
+> Session 48. **The verdict stays NO-GO until §11.3's seven days have actually elapsed and been
+> verified.**
 >
 > Sections 1–10 below are Session 30's original report and the Session 31/32/45/46 updates to it,
 > preserved as historical record. Where §11 contradicts them, §11 is current; where §12 updates
@@ -1379,9 +1380,11 @@ changing to reach GO.
 > **The Go/No-Go verdict in §11 is NOT amended by this section.** Two of §11's three
 > disaster-recovery blockers are closed with live evidence below. The third (backups running
 > unattended) cannot be closed on the day its fix lands — §11 defines it as *seven consecutive
-> unattended daily runs succeeding, with seven dumps on disk*. **That clock starts 2026-09-06.**
-> The earliest date anyone can honestly amend the verdict on that item is **2026-09-13**, and only
-> after checking the real run history. Anything sooner is rounding down.
+> unattended daily runs succeeding, with seven dumps on disk*. **The clock started 2026-09-06**,
+> when this session merged as `70414ac`; the first unattended run under the fixed workflow is
+> 02:17 UTC on **2026-09-07**. The earliest date anyone can honestly amend the verdict on that
+> item is **2026-09-13**, and only after checking the real run history. Anything sooner is
+> rounding down.
 
 Scope: `scripts/backup/pg-backup.sh`, `scripts/backup/pg-restore.sh`,
 `scripts/backup/test-restore-drill.sh`, `.github/workflows/backup-portal-db.yml`,
@@ -1543,20 +1546,29 @@ Seven consecutive dated successes on or after 2026-09-07, and seven dumps on dis
 dates. A run in `waiting` counts as a failure of this criterion, not a pending result. If it holds
 on 2026-09-13 or later, this item flips to GO.
 
-**Not verified this session, and it cannot be**: the first unattended run under the new workflow
-happens at the first 02:17 UTC tick after these changes reach the repository's default branch —
-02:17 UTC on 2026-09-07 if they are pushed today. Everything above was proven by executing the
+**Not verified this session, and it cannot be**: everything above was proven by executing the
 workflow's own steps directly on the runner host against the real production dump, which proves
-the logic, not the schedule.
+the logic, not the schedule. No unattended run has happened yet.
 
-> **Precondition on the clock, stated exactly.** As this section is written, Session 49's changes
-> are in the `keenafrica` working tree and **not yet committed or pushed** — GitHub Actions runs
-> the workflow from the default branch, so an unpushed fix changes nothing about tonight's run.
-> **The seven-day clock starts on the date of the first scheduled run that executes the new
-> workflow, not on the date this was written.** If the push happens on 2026-09-06 those are the
-> same thing and the count runs 09-07 → 09-13; if it slips, the whole window slips with it. Check
-> the actual run history, per the commands above, rather than counting forward from any date in
-> this document.
+> **The clock's precondition is met — recorded after the fact, not predicted.** Session 49 merged
+> to `main` as **`70414ac`** on **2026-09-06** (PR #96, which also carried Session 47's
+> previously-unmerged `ec4a40f`). GitHub Actions runs scheduled workflows from the default branch,
+> so this is the event that starts the count. Verified on `main` after the merge: the backup
+> workflow has **no `environment:` key**, while `deploy-portal.yml` and `rollback-portal.yml` both
+> still carry `environment: production` — the deploy approval gates were not weakened, only the
+> backup workflow's unnecessary dependence on one.
+>
+> **First unattended run under the fixed workflow: 02:17 UTC on 2026-09-07. Seventh consecutive
+> success, if every one of them succeeds: 2026-09-13. That is the earliest date this item can be
+> re-judged.** Still check the real run history with the two commands above rather than counting
+> forward from these dates — **a run sitting in `waiting` is a failure of this criterion, not a
+> pending result**, and one failure anywhere in the window restarts it.
+>
+> The merge also triggered `deploy-portal.yml` (run `34033482382`, success), because it touched
+> `portal/**`. That rebuilt **identical product source** — production now runs
+> `ghcr.io/bambocharles/keenafrica-portal:70414ac…`, both replicas `1/1 Running`. No product
+> change shipped with this session; the deploy is recorded only so the image tag on the cluster
+> can be accounted for.
 
 ### 12.3 BLOCKER 3 (§11.4) — CLOSED.
 
@@ -1613,7 +1625,9 @@ flake rather than something this session fixed.
 - **It did not dispatch either workflow against production.** Both were validated by executing
   their own steps on the runner host (backup verify) and against real git history (rollback floor
   guard). Dispatching the rollback workflow would redeploy production; dispatching the backup
-  workflow requires the production credentials this session cannot use.
+  workflow requires the production credentials this session cannot use. (The merge did trigger
+  `deploy-portal.yml` as a side effect of touching `portal/**` — see §12.2. That is a rebuild of
+  unchanged product source, not a dispatch of either workflow this session edited.)
 - **It did not touch product code.** No `src/`, no `prisma/`, no migration, no permission, no test
   outside `scripts/backup/`.
 
